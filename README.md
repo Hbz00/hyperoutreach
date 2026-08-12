@@ -348,15 +348,11 @@ so tests cannot send through or mutate a configured live installation.
 
 The opt-in page-driven test uses only rendered forms, links, and buttons to encode
 the complete create/dedupe/research/evidence/resolve/campaign/enroll/review/send/
-follow-up/reply/stop/suppress/blocked-send lifecycle. On the verification host
-used for this checkout, managed macOS policy blocked graphical Chromium at its
-MachPort bootstrap before any selector could execute, the in-app browser exposed
-no installed browser, and extracting the official Playwright Docker image failed
-because Docker had no free storage. No unrelated Docker state was pruned. The
-Playwright request-context suite still exercised the authenticated production
-build and complete persisted mock workflow. A graphical click/render pass is
-therefore an explicit environment-specific verification step and is not claimed
-as completed on this host.
+follow-up/reply/stop/suppress/blocked-send lifecycle. A real Chromium run exposed
+and drove the fix for a cross-host authentication redirect (`127.0.0.1` cookie
+followed by `localhost`). UI redirects are now relative, the server is explicitly
+bound to `127.0.0.1`, and E2E credentials come from one forced shared fixture.
+The full post-fix rendered lifecycle passed in Chromium in 8.3 seconds.
 
 ## Architecture boundaries
 
@@ -380,14 +376,11 @@ suppression.
 ## Known deviations and live-service boundary
 
 - Initial work was performed without a Git worktree because the repository had
-  no commit from which a worktree could be created. This managed workspace also
-  exposes `.git` read-only, so an initial commit/archive and an installation test
-  from that immutable repository snapshot remain outside the evidence available
-  here. A separate filesystem export excluding `.git`, dependencies, build
-  output, local environment files, and test artifacts did pass fresh `npm ci`,
-  formatting, lint, typecheck, unit/integration tests, eval, migration-history
-  validation, Trigger task import, and production build; that is useful
-  reproducibility evidence but is not equivalent to `git archive HEAD`.
+  no commit at that time. It now has a `main` HEAD tracking `origin/main`; a fresh
+  filesystem export excluding dependencies, build output, local environment
+  files, and test artifacts passed `npm ci`, formatting, lint, typecheck,
+  unit/integration tests, eval, migration-history validation, Trigger task
+  import, and production build.
 - Live OpenAI, Microsoft Graph, and Trigger.dev behavior is not claimed as
   verified. The real OpenAI and Microsoft Graph adapters are contract-tested
   without network access; live checks still require explicitly supplied
@@ -395,8 +388,8 @@ suppression.
   Trigger.dev task module and dispatcher contract are tested locally, but cloud
   execution/deployment still needs a configured project. Mock mode keeps the
   entire application credential-free.
-- Graphical rendering is not claimed as verified on the current managed host;
-  the precise browser boundary and rerun commands are documented above.
+- The full credential-free critical lifecycle is verified through rendered
+  Chromium as documented above. Live provider smoke checks remain separate.
 - A full development-dependency `npm audit` retains five moderate findings in
   legacy `esbuild` versions pulled by the pinned current Trigger.dev and Drizzle
   CLIs; npm reports no compatible fix for those chains. They are not shipped in

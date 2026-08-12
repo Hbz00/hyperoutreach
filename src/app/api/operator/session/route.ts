@@ -36,8 +36,8 @@ function loginSource(request: Request): string {
   );
 }
 
-function redirectResponse(request: Request, path: string): Response {
-  return mutableRedirect(new URL(path, request.url), 303);
+function redirectResponse(path: string): Response {
+  return mutableRedirect(path, 303);
 }
 
 function setSessionCookie(
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
     ) {
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
-    const response = redirectResponse(request, "/login");
+    const response = redirectResponse("/login");
     setSessionCookie(response, request, "", 0);
     return response;
   }
@@ -107,10 +107,11 @@ export async function POST(request: Request) {
   ) {
     loginThrottle.recordFailure(source);
     globalLoginThrottle.recordFailure("all-sources");
-    const destination = new URL("/login", request.url);
-    destination.searchParams.set("error", "invalid_credentials");
-    destination.searchParams.set("next", next);
-    return mutableRedirect(destination, 303);
+    const query = new URLSearchParams({
+      error: "invalid_credentials",
+      next,
+    });
+    return mutableRedirect(`/login?${query.toString()}`, 303);
   }
   loginThrottle.recordSuccess(source);
   let token: string;
@@ -122,7 +123,7 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
-  const response = redirectResponse(request, next);
+  const response = redirectResponse(next);
   setSessionCookie(response, request, token, OPERATOR_SESSION_TTL_SECONDS);
   return response;
 }

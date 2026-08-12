@@ -1,5 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import {
+  E2E_OPERATOR_API_TOKEN,
+  E2E_OPERATOR_EMAIL,
+  E2E_OPERATOR_PASSWORD,
+  E2E_SESSION_SECRET,
+} from "./tests/e2e/support/environment";
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
@@ -11,7 +18,7 @@ export default defineConfig({
   },
   webServer: {
     command:
-      "tsx scripts/ensure-disposable-database.ts && tsx scripts/reset-disposable-database.ts && npm run db:migrate && npm run db:seed && npm run build && npm start",
+      "tsx scripts/ensure-disposable-database.ts && tsx scripts/reset-disposable-database.ts && npm run db:migrate && npm run db:seed && npm run build && npm start -- --hostname 127.0.0.1",
     url: "http://127.0.0.1:3000/api/health",
     reuseExistingServer: false,
     timeout: 120_000,
@@ -21,15 +28,12 @@ export default defineConfig({
       OPENAI_PROVIDER: "mock",
       MAIL_PROVIDER: "mock",
       WORKFLOW_PROVIDER: "mock",
-      OPERATOR_EMAIL: process.env.OPERATOR_EMAIL ?? "operator@example.com",
-      OPERATOR_PASSWORD:
-        process.env.OPERATOR_PASSWORD ?? "correct horse battery staple",
-      SESSION_SECRET:
-        process.env.SESSION_SECRET ??
-        "playwright-session-secret-with-at-least-32-bytes",
-      OPERATOR_API_TOKEN:
-        process.env.OPERATOR_API_TOKEN ??
-        "playwright-api-token-with-at-least-32-bytes",
+      // Never inherit an operator's real credentials into the disposable E2E
+      // installation. The browser and request tests import these same values.
+      OPERATOR_EMAIL: E2E_OPERATOR_EMAIL,
+      OPERATOR_PASSWORD: E2E_OPERATOR_PASSWORD,
+      SESSION_SECRET: E2E_SESSION_SECRET,
+      OPERATOR_API_TOKEN: E2E_OPERATOR_API_TOKEN,
       OPERATOR_COOKIE_SECURE: "false",
     },
   },

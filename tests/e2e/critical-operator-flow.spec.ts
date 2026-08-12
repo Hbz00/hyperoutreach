@@ -1,5 +1,10 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 
+import {
+  E2E_OPERATOR_EMAIL,
+  E2E_OPERATOR_PASSWORD,
+} from "./support/environment";
+
 function hidden(html: string, name: string): string {
   const pattern = new RegExp(`name=["']${name}["'][^>]*value=["']([^"']+)["']`);
   const match = html.match(pattern);
@@ -50,8 +55,8 @@ test("operates the mock outreach lifecycle through authenticated application end
   await browser.post("/api/operator/session", {
     form: {
       intent: "login",
-      email: "operator@example.com",
-      password: "correct horse battery staple",
+      email: E2E_OPERATOR_EMAIL,
+      password: E2E_OPERATOR_PASSWORD,
       next: "/prospects",
     },
   });

@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { getDatabase } from "@/lib/db/client";
+import { mutableRedirect } from "@/lib/http-response";
 import {
   cookieValue,
   OPERATOR_SESSION_COOKIE,
@@ -68,10 +69,14 @@ function value(formData: FormData, key: string): string | undefined {
   return typeof entry === "string" && entry.trim() ? entry.trim() : undefined;
 }
 
-function destination(request: Request, path: string, notice: string): Response {
-  const url = new URL(safeOperatorRedirect(path), request.url);
+function destination(
+  _request: Request,
+  path: string,
+  notice: string,
+): Response {
+  const url = new URL(safeOperatorRedirect(path), "http://operator.local");
   url.searchParams.set("notice", notice);
-  return Response.redirect(url, 303);
+  return mutableRedirect(`${url.pathname}${url.search}${url.hash}`, 303);
 }
 
 function integer(formData: FormData, key: string): number | undefined {

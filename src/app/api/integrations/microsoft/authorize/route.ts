@@ -36,10 +36,7 @@ export async function GET(request: Request) {
     return response;
   } catch {
     if (session) {
-      return mutableRedirect(
-        new URL("/settings?microsoft=unavailable", request.url),
-        303,
-      );
+      return mutableRedirect("/settings?microsoft=unavailable", 303);
     }
     return Response.json(
       { error: "Microsoft authorization is unavailable" },

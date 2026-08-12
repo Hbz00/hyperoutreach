@@ -1,5 +1,10 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 
+import {
+  E2E_OPERATOR_EMAIL,
+  E2E_OPERATOR_PASSWORD,
+} from "./support/environment";
+
 test("serves the authenticated product shell and public database health", async () => {
   const context = await playwrightRequest.newContext({
     baseURL: "http://127.0.0.1:3000",
@@ -17,8 +22,8 @@ test("serves the authenticated product shell and public database health", async 
   await context.post("/api/operator/session", {
     form: {
       intent: "login",
-      email: "operator@example.com",
-      password: "correct horse battery staple",
+      email: E2E_OPERATOR_EMAIL,
+      password: E2E_OPERATOR_PASSWORD,
       next: "/",
     },
   });

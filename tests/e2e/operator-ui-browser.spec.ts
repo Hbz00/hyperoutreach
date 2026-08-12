@@ -1,5 +1,10 @@
 import { expect, type Locator, test } from "@playwright/test";
 
+import {
+  E2E_OPERATOR_EMAIL,
+  E2E_OPERATOR_PASSWORD,
+} from "./support/environment";
+
 test.skip(
   process.env.RUN_BROWSER_E2E !== "1",
   "Set RUN_BROWSER_E2E=1 on a host where Chromium is permitted",
@@ -21,8 +26,8 @@ async function createCampaign(
   await page.getByRole("link", { name: "Campaigns", exact: true }).click();
   const form = page
     .locator('form[action$="create-campaign"]')
-    .filter({ has: page.getByLabel("Name") });
-  await form.getByLabel("Name").fill(input.name);
+    .filter({ has: page.getByLabel("Name", { exact: true }) });
+  await form.getByLabel("Name", { exact: true }).fill(input.name);
   await form.getByLabel("Precise ICP").fill(input.target);
   await form.getByLabel("Campaign daily cap").fill("100");
   await form.getByLabel("Delay in minutes").nth(0).fill("0");
@@ -92,8 +97,8 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
 
   await test.step("sign in and configure deterministic local sending policy", async () => {
     await page.goto("/login");
-    await page.getByLabel("Operator email").fill("operator@example.com");
-    await page.getByLabel("Password").fill("correct horse battery staple");
+    await page.getByLabel("Operator email").fill(E2E_OPERATOR_EMAIL);
+    await page.getByLabel("Password").fill(E2E_OPERATOR_PASSWORD);
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(
       page.getByRole("heading", { name: "Campaign state at a glance" }),
@@ -229,7 +234,7 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await replyForm.getByRole("button", { name: "Ingest reply" }).click();
     await expect(page.getByRole("status")).toContainText("Reply ingested");
     const reply = page.locator("article.reply-card").first();
-    await expect(reply.getByText("unsubscribe", { exact: true })).toBeVisible();
+    await expect(reply.locator(".badge-unsubscribe")).toHaveText("unsubscribe");
     await expect(reply.getByText("Yes", { exact: true })).toBeVisible();
     await expect(reply.getByText("opted_out", { exact: true })).toBeVisible();
     await expect(reply.getByText("unsubscribe", { exact: true })).toHaveCount(
@@ -288,7 +293,13 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     ).toBeVisible();
 
     await page.getByRole("link", { name: "Settings", exact: true }).click();
-    const audit = page
+    const failures = page.locator("details.panel").filter({
+      has: page.getByText("Workflow and provider failures", { exact: true }),
+    });
+    await failures
+      .getByText("Workflow and provider failures", { exact: true })
+      .click();
+    const audit = failures
       .locator("details.audit-row")
       .filter({ hasText: "send-approved-message" })
       .first();

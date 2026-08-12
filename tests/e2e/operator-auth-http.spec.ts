@@ -1,5 +1,10 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 
+import {
+  E2E_OPERATOR_EMAIL,
+  E2E_OPERATOR_PASSWORD,
+} from "./support/environment";
+
 test("protects the operator UI and issues a hardened session cookie", async () => {
   const anonymous = await playwrightRequest.newContext({
     baseURL: "http://127.0.0.1:3000",
@@ -13,26 +18,32 @@ test("protects the operator UI and issues a hardened session cookie", async () =
   const invalidLogin = await anonymous.post("/api/operator/session", {
     form: {
       intent: "login",
-      email: "operator@example.com",
+      email: E2E_OPERATOR_EMAIL,
       password: "wrong password",
       next: "/prospects",
     },
     maxRedirects: 0,
   });
   expect(invalidLogin.status()).toBe(303);
+  expect(invalidLogin.headers().location).toBe(
+    "/login?error=invalid_credentials&next=%2Fprospects",
+  );
   expect(invalidLogin.headers()["set-cookie"]).toBeUndefined();
 
   const login = await anonymous.post("/api/operator/session", {
     form: {
       intent: "login",
-      email: "operator@example.com",
-      password: "correct horse battery staple",
+      email: E2E_OPERATOR_EMAIL,
+      password: E2E_OPERATOR_PASSWORD,
       next: "/prospects",
     },
     maxRedirects: 0,
   });
   expect(login.status()).toBe(303);
-  expect(new URL(login.headers().location!).pathname).toBe("/prospects");
+  // A relative redirect is essential here. Next may expose the request URL as
+  // `localhost` even when the browser connected to `127.0.0.1`; an absolute
+  // redirect would change hosts and strand the host-only session cookie.
+  expect(login.headers().location).toBe("/prospects");
   expect(login.headers()["set-cookie"]).toContain("HttpOnly");
   expect(login.headers()["set-cookie"]).toContain("SameSite=Lax");
 
@@ -54,9 +65,8 @@ test("protects the operator UI and issues a hardened session cookie", async () =
       maxRedirects: 0,
     },
   );
-  expect(new URL(unsafeReturn.headers().location!).origin).toBe(
-    "http://localhost:3000",
-  );
+  expect(unsafeReturn.headers().location).toMatch(/^\/\?notice=/);
+  expect(unsafeReturn.headers().location).not.toContain("attacker.example");
 
   const csrfFailure = await anonymous.post(
     "/api/operator/commands/add-suppression",
@@ -73,8 +83,8 @@ test("lets the authenticated operator remove a manual suppression with an audit 
   await operator.post("/api/operator/session", {
     form: {
       intent: "login",
-      email: "operator@example.com",
-      password: "correct horse battery staple",
+      email: E2E_OPERATOR_EMAIL,
+      password: E2E_OPERATOR_PASSWORD,
       next: "/settings",
     },
   });

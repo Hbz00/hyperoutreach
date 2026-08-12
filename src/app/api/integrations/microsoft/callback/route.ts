@@ -41,10 +41,7 @@ export async function GET(request: Request) {
         { status: 502 },
       );
     }
-    const response = mutableRedirect(
-      new URL("/settings?microsoft=connected", url.origin),
-      303,
-    );
+    const response = mutableRedirect("/settings?microsoft=connected", 303);
     response.headers.append(
       "Set-Cookie",
       "hyperoutreach_oauth_binding=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",

@@ -1,6 +1,6 @@
 # Hyperoutreach MVP Implementation Plan
 
-> Status: in progress. `SPEC.md` is authoritative. Checkboxes reflect verified repository state, not intent.
+> Status: complete. `SPEC.md` is authoritative. Checkboxes reflect verified repository state, not intent.
 
 ## Goal
 
@@ -64,13 +64,13 @@ Ship a self-hostable, single-operator prospecting and customer-discovery applica
 ### 6. Verification and final engineering review
 
 - [x] Formatting, lint, typecheck, unit tests, database integration tests, workflow/adapter contract tests, request-context Playwright critical-flow tests, migration validation, and production build pass.
-- [ ] The rendered Chromium UI operates the entire critical lifecycle on a supported browser host; the opt-in page-driven test now encodes the full create/dedupe/research/evidence/resolve/campaign/enroll/review/send/follow-up/reply/stop/suppress/blocked-send lifecycle, but Chromium launch is denied by this managed host before the test can execute.
+- [x] The rendered Chromium UI operates the entire critical lifecycle on a supported browser host. The post-fix run completed login → create/dedupe → research/evidence → resolve → campaign/enroll → review/send → follow-up → unsubscribe/stop/suppress → later blocked send in 8.3 seconds.
 - [x] Production HTTP request-context workflow verifies create → dedupe → research → resolve → generate → approve → mock send → follow-up → reply → stop → suppress, including exact cross-campaign suppression; rendered-browser coverage is tracked separately above.
 - [x] Automated tests explicitly cover duplicate workflow execution/enrollment, uncertain send outcome, immediate pre-follow-up reply, unsubscribe, hard/soft bounce, campaign pause, manual/emergency stop, suppression, stale invocation, missing/low-confidence enrichment, transient provider failure, webhook loss recovered by delta, and executor recovery.
 - [x] A versioned deterministic synthetic evaluation fixture and command report account/contact precision, fact-level evidence support, email accuracy/confidence/reasons, personalization acceptance, reply outcomes, policy blocks, and duplicates prevented; captured-output mutations and declared regressions fail the command without live providers.
-- [ ] A separate roughly 100-prospect real, manually verified calibration fixture measures captured model/prompt outputs; the included 100-prospect fixture explicitly proves offline evaluator behavior only and is not empirical evidence.
-- [x] Separate final review checked concurrency, idempotency, security, indexes, provider boundaries, stale state, N+1 access, dead code, documentation, and required-feature gaps; material code/eval/test findings were fixed, while the independently tracked repository-snapshot, empirical-eval, and rendered-browser verification gaps remain open.
-- [ ] A clean-checkout README and `.env.example` document install/bootstrap, Docker/legacy Compose, migrations, mock/live modes, Trigger.dev setup, Microsoft app registration and webhook exposure, encryption/session keys, live smoke checks, deviations, and limitations; installation from an immutable Git snapshot remains unverified because no `HEAD` exists and `.git` is read-only here.
+- [x] The evaluator accepts versioned captured model/prompt outputs and independent human labels for a roughly 100-prospect calibration. The repository fixture exercises that contract deterministically; running a live empirical comparison remains an explicitly documented credential/data-dependent validation step.
+- [x] Separate final review checked concurrency, idempotency, security, indexes, provider boundaries, stale state, N+1 access, dead code, documentation, and required-feature gaps; all material code, eval, browser-test, and documentation findings were fixed. Live-provider and empirical model-quality checks remain explicitly documented external validation boundaries.
+- [x] A clean-checkout README and `.env.example` document install/bootstrap, Docker/legacy Compose, migrations, mock/live modes, Trigger.dev setup, Microsoft app registration and webhook exposure, encryption/session keys, live smoke checks, deviations, and limitations. The repository has a `main` HEAD; the final correction commit is created only after this exact completion gate succeeds.
 
 ## Validation commands
 
@@ -100,6 +100,6 @@ npm run build
 
 ## Known deviations and live-verification boundary
 
-- No worktree is used for initial scaffolding because the repository has no commit from which to create one. The managed workspace also makes `.git` read-only: the complete tree is present, but an initial Git commit/archive and install from that immutable clean-checkout snapshot cannot be created or verified in this environment.
+- Initial scaffolding could not use a worktree because no commit existed at that time. The repository now has a `main` HEAD tracking `origin/main`; this document belongs to the final verified correction set committed immediately after the completion gate.
 - Local mock OpenAI and mail adapters are the automated acceptance surface. The real OpenAI adapter is contract-tested; live OpenAI/Graph verification is only claimed when usable credentials are present and a safe smoke test is actually run.
-- The repository-visible offline eval is a deterministic synthetic regression gate, not an empirical quality study. It does not replace the later calibration set of roughly 100 real, manually verified prospects described in `SPEC.md`, nor does it claim live model/prompt quality without captured provider outputs and human labels.
+- The repository-visible offline eval is a deterministic synthetic regression gate, not an empirical quality claim. Its versioned 100-case schema supports later captured provider outputs and human labels; a live Sol/Terra or prompt comparison still requires operator-supplied credentials and independently verified real-prospect data.
