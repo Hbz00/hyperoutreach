@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ADD CONSTRAINT "messages_outbound_employment_binding_check" CHECK ("messages"."direction" <> 'outbound' or ("messages"."contact_account_id" is not null and "messages"."employment_version" is not null and "messages"."employment_version" > 0));

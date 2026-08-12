@@ -1,0 +1,2 @@
+CREATE TYPE "public"."email_resolution_reason" AS ENUM('missing_domain', 'domain_not_evidenced', 'insufficient_public_evidence', 'low_confidence', 'enrichment_no_result', 'provider_transient_error', 'mx_missing', 'mx_lookup_failure', 'candidate_conflict');--> statement-breakpoint
+ALTER TABLE "contacts" ADD COLUMN "email_resolution_reason" "email_resolution_reason";

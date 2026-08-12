@@ -1,0 +1,1 @@
+CREATE INDEX "inbound_records_outreach_id_idx" ON "inbound_records" USING btree ("outreach_id");

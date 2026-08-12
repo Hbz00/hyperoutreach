@@ -1,0 +1,66 @@
+{
+  "name": "hyperoutreach",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Self-hosted prospecting and customer-discovery system",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "trigger:dev": "trigger.dev dev",
+    "trigger:deploy": "trigger.dev deploy",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "eval": "tsx scripts/eval.ts",
+    "db:up": "docker-compose up -d --wait postgres && tsx scripts/ensure-test-database.ts",
+    "db:down": "docker-compose down",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:check": "drizzle-kit check",
+    "db:seed": "tsx scripts/seed.ts"
+  },
+  "dependencies": {
+    "@trigger.dev/sdk": "4.5.10",
+    "drizzle-orm": "0.45.2",
+    "next": "16.3.0",
+    "openai": "7.4.0",
+    "postgres": "3.4.9",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "0.0.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "dotenv": "17.4.2",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.2",
+    "eslint-config-next": "16.3.0",
+    "prettier": "3.9.6",
+    "trigger.dev": "4.5.10",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "@opentelemetry/core": "2.10.0",
+    "nanoid": "3.3.18",
+    "socket.io": "4.8.3",
+    "socket.io-client": "4.8.3",
+    "tar": "7.5.22"
+  }
+}

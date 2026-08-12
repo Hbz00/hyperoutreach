@@ -1,0 +1,2 @@
+ALTER TABLE "graph_notification_receipts" ADD COLUMN "requires_review" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "graph_notification_receipts" ADD COLUMN "review_resolved_at" timestamp with time zone;

@@ -1,0 +1,5504 @@
+{
+  "fixtureVersion": "v1",
+  "dataset": "synthetic-contract-baseline-2026-08",
+  "thresholds": {
+    "accountPrecision": 0.85,
+    "contactPrecision": 0.85,
+    "evidenceSupportRate": 0.9,
+    "emailAccuracy": 0.85,
+    "emailConfidenceAccuracy": 0.9,
+    "emailReasonAccuracy": 0.9,
+    "personalizationAcceptanceRate": 0.75,
+    "replyOutcomeAccuracy": 0.95,
+    "policyOutcomeAccuracy": 1,
+    "duplicatePreventionAccuracy": 1
+  },
+  "fixtureProvenance": {
+    "method": "synthetic_contract",
+    "description": "One hundred explicit synthetic captured-output cases for offline evaluator contract and mutation regression testing; not an empirical model benchmark.",
+    "independentlyVerified": false
+  },
+  "prospects": [
+    {
+      "id": "synthetic-prospect-001",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-001.example",
+        "personKey": "https://people.example/prospect-001",
+        "companyAccountKey": "company-001.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-001.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-001.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-001.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-001.example",
+        "personKey": "https://people.example/prospect-001",
+        "companyAccountKey": "company-001.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-001.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 1",
+          "sourceUrls": ["https://evidence-001.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-002",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-002.example",
+        "personKey": "https://people.example/prospect-002",
+        "companyAccountKey": "company-002.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-002.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-002.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-002.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-002.example",
+        "personKey": "https://people.example/prospect-002",
+        "companyAccountKey": "company-002.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-002.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 2",
+          "sourceUrls": ["https://evidence-002.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-003",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-003.example",
+        "personKey": "https://people.example/prospect-003",
+        "companyAccountKey": "company-003.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-003.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-003.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-003.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-003.example",
+        "personKey": "https://people.example/prospect-003",
+        "companyAccountKey": "company-003.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-003.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 3",
+          "sourceUrls": ["https://evidence-003.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-004",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-004.example",
+        "personKey": "https://people.example/prospect-004",
+        "companyAccountKey": "company-004.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-004.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-004.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-004.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-004.example",
+        "personKey": "https://people.example/prospect-004",
+        "companyAccountKey": "company-004.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-004.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 4",
+          "sourceUrls": ["https://evidence-004.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-005",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-005.example",
+        "personKey": "https://people.example/prospect-005",
+        "companyAccountKey": "company-005.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-005.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-005.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-005.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-005.example",
+        "personKey": "https://people.example/prospect-005",
+        "companyAccountKey": "company-005.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-005.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 5",
+          "sourceUrls": ["https://evidence-005.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-006",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-006.example",
+        "personKey": "https://people.example/prospect-006",
+        "companyAccountKey": "company-006.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-006.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-006.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-006.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-006.example",
+        "personKey": "https://people.example/prospect-006",
+        "companyAccountKey": "company-006.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-006.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 6",
+          "sourceUrls": ["https://evidence-006.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-007",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-007.example",
+        "personKey": "https://people.example/prospect-007",
+        "companyAccountKey": "company-007.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-007.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-007.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-007.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-007.example",
+        "personKey": "https://people.example/prospect-007",
+        "companyAccountKey": "company-007.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-007.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 7",
+          "sourceUrls": ["https://evidence-007.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-008",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-008.example",
+        "personKey": "https://people.example/prospect-008",
+        "companyAccountKey": "company-008.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-008.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-008.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-008.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-008.example",
+        "personKey": "https://people.example/prospect-008",
+        "companyAccountKey": "company-008.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-008.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 8",
+          "sourceUrls": ["https://evidence-008.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-009",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-009.example",
+        "personKey": "https://people.example/prospect-009",
+        "companyAccountKey": "company-009.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-009.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-009.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-009.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-009.example",
+        "personKey": "https://people.example/prospect-009",
+        "companyAccountKey": "company-009.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-009.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 9",
+          "sourceUrls": ["https://evidence-009.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-010",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-010.example",
+        "personKey": "https://people.example/prospect-010",
+        "companyAccountKey": "company-010.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-010.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-010.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-010.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-010.example",
+        "personKey": "https://people.example/prospect-010",
+        "companyAccountKey": "company-010.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-010.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 10",
+          "sourceUrls": ["https://evidence-010.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-011",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-011.example",
+        "personKey": "https://people.example/prospect-011",
+        "companyAccountKey": "company-011.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-011.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-011.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-011.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-011.example",
+        "personKey": "https://people.example/prospect-011",
+        "companyAccountKey": "company-011.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-011.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 11",
+          "sourceUrls": ["https://evidence-011.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-012",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-012.example",
+        "personKey": "https://people.example/prospect-012",
+        "companyAccountKey": "company-012.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-012.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-012.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-012.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-012.example",
+        "personKey": "https://people.example/prospect-012",
+        "companyAccountKey": "company-012.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-012.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 12",
+          "sourceUrls": ["https://evidence-012.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-013",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-013.example",
+        "personKey": "https://people.example/prospect-013",
+        "companyAccountKey": "company-013.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-013.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-013.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-013.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-013.example",
+        "personKey": "https://people.example/prospect-013",
+        "companyAccountKey": "company-013.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-013.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 13",
+          "sourceUrls": ["https://evidence-013.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-014",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-014.example",
+        "personKey": "https://people.example/prospect-014",
+        "companyAccountKey": "company-014.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-014.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-014.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-014.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-014.example",
+        "personKey": "https://people.example/prospect-014",
+        "companyAccountKey": "company-014.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-014.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 14",
+          "sourceUrls": ["https://evidence-014.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-015",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-015.example",
+        "personKey": "https://people.example/prospect-015",
+        "companyAccountKey": "company-015.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-015.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-015.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-015.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-015.example",
+        "personKey": "https://people.example/prospect-015",
+        "companyAccountKey": "company-015.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-015.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 15",
+          "sourceUrls": ["https://evidence-015.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-016",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-016.example",
+        "personKey": "https://people.example/prospect-016",
+        "companyAccountKey": "company-016.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-016.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-016.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-016.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-016.example",
+        "personKey": "https://people.example/prospect-016",
+        "companyAccountKey": "company-016.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-016.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 16",
+          "sourceUrls": ["https://evidence-016.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-017",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-017.example",
+        "personKey": "https://people.example/prospect-017",
+        "companyAccountKey": "company-017.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-017.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-017.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-017.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-017.example",
+        "personKey": "https://people.example/prospect-017",
+        "companyAccountKey": "company-017.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-017.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 17",
+          "sourceUrls": ["https://evidence-017.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-018",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-018.example",
+        "personKey": "https://people.example/prospect-018",
+        "companyAccountKey": "company-018.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-018.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-018.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-018.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-018.example",
+        "personKey": "https://people.example/prospect-018",
+        "companyAccountKey": "company-018.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-018.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 18",
+          "sourceUrls": ["https://evidence-018.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-019",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-019.example",
+        "personKey": "https://people.example/prospect-019",
+        "companyAccountKey": "company-019.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-019.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-019.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-019.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-019.example",
+        "personKey": "https://people.example/prospect-019",
+        "companyAccountKey": "company-019.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-019.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 19",
+          "sourceUrls": ["https://evidence-019.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-020",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-020.example",
+        "personKey": "https://people.example/prospect-020",
+        "companyAccountKey": "company-020.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-020.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-020.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-020.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-020.example",
+        "personKey": "https://people.example/prospect-020",
+        "companyAccountKey": "company-020.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-020.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 20",
+          "sourceUrls": ["https://evidence-020.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-021",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-021.example",
+        "personKey": "https://people.example/prospect-021",
+        "companyAccountKey": "company-021.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-021.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-021.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-021.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-021.example",
+        "personKey": "https://people.example/prospect-021",
+        "companyAccountKey": "company-021.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-021.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 21",
+          "sourceUrls": ["https://evidence-021.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-022",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-022.example",
+        "personKey": "https://people.example/prospect-022",
+        "companyAccountKey": "company-022.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-022.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-022.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-022.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-022.example",
+        "personKey": "https://people.example/prospect-022",
+        "companyAccountKey": "company-022.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-022.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 22",
+          "sourceUrls": ["https://evidence-022.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-023",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-023.example",
+        "personKey": "https://people.example/prospect-023",
+        "companyAccountKey": "company-023.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-023.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-023.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-023.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-023.example",
+        "personKey": "https://people.example/prospect-023",
+        "companyAccountKey": "company-023.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-023.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 23",
+          "sourceUrls": ["https://evidence-023.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-024",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-024.example",
+        "personKey": "https://people.example/prospect-024",
+        "companyAccountKey": "company-024.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-024.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-024.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-024.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-024.example",
+        "personKey": "https://people.example/prospect-024",
+        "companyAccountKey": "company-024.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-024.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 24",
+          "sourceUrls": ["https://evidence-024.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-025",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-025.example",
+        "personKey": "https://people.example/prospect-025",
+        "companyAccountKey": "company-025.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-025.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-025.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-025.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-025.example",
+        "personKey": "https://people.example/prospect-025",
+        "companyAccountKey": "company-025.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-025.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 25",
+          "sourceUrls": ["https://evidence-025.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-026",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-026.example",
+        "personKey": "https://people.example/prospect-026",
+        "companyAccountKey": "company-026.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-026.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-026.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-026.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-026.example",
+        "personKey": "https://people.example/prospect-026",
+        "companyAccountKey": "company-026.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-026.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 26",
+          "sourceUrls": ["https://evidence-026.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-027",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-027.example",
+        "personKey": "https://people.example/prospect-027",
+        "companyAccountKey": "company-027.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-027.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-027.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-027.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-027.example",
+        "personKey": "https://people.example/prospect-027",
+        "companyAccountKey": "company-027.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-027.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 27",
+          "sourceUrls": ["https://evidence-027.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-028",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-028.example",
+        "personKey": "https://people.example/prospect-028",
+        "companyAccountKey": "company-028.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-028.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-028.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-028.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-028.example",
+        "personKey": "https://people.example/prospect-028",
+        "companyAccountKey": "company-028.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-028.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 28",
+          "sourceUrls": ["https://evidence-028.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-029",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-029.example",
+        "personKey": "https://people.example/prospect-029",
+        "companyAccountKey": "company-029.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-029.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-029.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-029.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-029.example",
+        "personKey": "https://people.example/prospect-029",
+        "companyAccountKey": "company-029.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-029.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 29",
+          "sourceUrls": ["https://evidence-029.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-030",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-030.example",
+        "personKey": "https://people.example/prospect-030",
+        "companyAccountKey": "company-030.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-030.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-030.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-030.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-030.example",
+        "personKey": "https://people.example/prospect-030",
+        "companyAccountKey": "company-030.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-030.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 30",
+          "sourceUrls": ["https://evidence-030.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-031",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-031.example",
+        "personKey": "https://people.example/prospect-031",
+        "companyAccountKey": "company-031.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-031.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-031.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-031.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-031.example",
+        "personKey": "https://people.example/prospect-031",
+        "companyAccountKey": "company-031.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-031.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 31",
+          "sourceUrls": ["https://evidence-031.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-032",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-032.example",
+        "personKey": "https://people.example/prospect-032",
+        "companyAccountKey": "company-032.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-032.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-032.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-032.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-032.example",
+        "personKey": "https://people.example/prospect-032",
+        "companyAccountKey": "company-032.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-032.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 32",
+          "sourceUrls": ["https://evidence-032.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-033",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-033.example",
+        "personKey": "https://people.example/prospect-033",
+        "companyAccountKey": "company-033.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-033.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-033.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-033.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-033.example",
+        "personKey": "https://people.example/prospect-033",
+        "companyAccountKey": "company-033.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-033.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 33",
+          "sourceUrls": ["https://evidence-033.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-034",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-034.example",
+        "personKey": "https://people.example/prospect-034",
+        "companyAccountKey": "company-034.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-034.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-034.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-034.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-034.example",
+        "personKey": "https://people.example/prospect-034",
+        "companyAccountKey": "company-034.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-034.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 34",
+          "sourceUrls": ["https://evidence-034.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-035",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-035.example",
+        "personKey": "https://people.example/prospect-035",
+        "companyAccountKey": "company-035.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-035.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-035.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-035.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-035.example",
+        "personKey": "https://people.example/prospect-035",
+        "companyAccountKey": "company-035.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-035.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 35",
+          "sourceUrls": ["https://evidence-035.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-036",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-036.example",
+        "personKey": "https://people.example/prospect-036",
+        "companyAccountKey": "company-036.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-036.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-036.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-036.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-036.example",
+        "personKey": "https://people.example/prospect-036",
+        "companyAccountKey": "company-036.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-036.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 36",
+          "sourceUrls": ["https://evidence-036.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-037",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-037.example",
+        "personKey": "https://people.example/prospect-037",
+        "companyAccountKey": "company-037.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-037.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-037.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-037.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-037.example",
+        "personKey": "https://people.example/prospect-037",
+        "companyAccountKey": "company-037.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-037.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 37",
+          "sourceUrls": ["https://evidence-037.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-038",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-038.example",
+        "personKey": "https://people.example/prospect-038",
+        "companyAccountKey": "company-038.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-038.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-038.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-038.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-038.example",
+        "personKey": "https://people.example/prospect-038",
+        "companyAccountKey": "company-038.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-038.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 38",
+          "sourceUrls": ["https://evidence-038.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-039",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-039.example",
+        "personKey": "https://people.example/prospect-039",
+        "companyAccountKey": "company-039.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-039.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-039.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-039.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-039.example",
+        "personKey": "https://people.example/prospect-039",
+        "companyAccountKey": "company-039.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-039.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 39",
+          "sourceUrls": ["https://evidence-039.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-040",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-040.example",
+        "personKey": "https://people.example/prospect-040",
+        "companyAccountKey": "company-040.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-040.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-040.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-040.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-040.example",
+        "personKey": "https://people.example/prospect-040",
+        "companyAccountKey": "company-040.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-040.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 40",
+          "sourceUrls": ["https://evidence-040.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-041",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-041.example",
+        "personKey": "https://people.example/prospect-041",
+        "companyAccountKey": "company-041.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-041.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-041.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-041.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-041.example",
+        "personKey": "https://people.example/prospect-041",
+        "companyAccountKey": "company-041.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-041.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 41",
+          "sourceUrls": ["https://evidence-041.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-042",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-042.example",
+        "personKey": "https://people.example/prospect-042",
+        "companyAccountKey": "company-042.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-042.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-042.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-042.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-042.example",
+        "personKey": "https://people.example/prospect-042",
+        "companyAccountKey": "company-042.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-042.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 42",
+          "sourceUrls": ["https://evidence-042.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-043",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-043.example",
+        "personKey": "https://people.example/prospect-043",
+        "companyAccountKey": "company-043.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-043.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-043.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-043.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-043.example",
+        "personKey": "https://people.example/prospect-043",
+        "companyAccountKey": "company-043.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-043.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 43",
+          "sourceUrls": ["https://evidence-043.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-044",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-044.example",
+        "personKey": "https://people.example/prospect-044",
+        "companyAccountKey": "company-044.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-044.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-044.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-044.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-044.example",
+        "personKey": "https://people.example/prospect-044",
+        "companyAccountKey": "company-044.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-044.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 44",
+          "sourceUrls": ["https://evidence-044.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-045",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-045.example",
+        "personKey": "https://people.example/prospect-045",
+        "companyAccountKey": "company-045.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-045.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-045.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-045.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-045.example",
+        "personKey": "https://people.example/prospect-045",
+        "companyAccountKey": "company-045.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-045.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 45",
+          "sourceUrls": ["https://evidence-045.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-046",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-046.example",
+        "personKey": "https://people.example/prospect-046",
+        "companyAccountKey": "company-046.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-046.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-046.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-046.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-046.example",
+        "personKey": "https://people.example/prospect-046",
+        "companyAccountKey": "company-046.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-046.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 46",
+          "sourceUrls": ["https://evidence-046.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-047",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-047.example",
+        "personKey": "https://people.example/prospect-047",
+        "companyAccountKey": "company-047.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-047.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-047.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-047.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-047.example",
+        "personKey": "https://people.example/prospect-047",
+        "companyAccountKey": "company-047.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-047.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 47",
+          "sourceUrls": ["https://evidence-047.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-048",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-048.example",
+        "personKey": "https://people.example/prospect-048",
+        "companyAccountKey": "company-048.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-048.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-048.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-048.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-048.example",
+        "personKey": "https://people.example/prospect-048",
+        "companyAccountKey": "company-048.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-048.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 48",
+          "sourceUrls": ["https://evidence-048.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-049",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-049.example",
+        "personKey": "https://people.example/prospect-049",
+        "companyAccountKey": "company-049.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-049.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-049.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-049.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-049.example",
+        "personKey": "https://people.example/prospect-049",
+        "companyAccountKey": "company-049.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-049.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 49",
+          "sourceUrls": ["https://evidence-049.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-050",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-050.example",
+        "personKey": "https://people.example/prospect-050",
+        "companyAccountKey": "company-050.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-050.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-050.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-050.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-050.example",
+        "personKey": "https://people.example/prospect-050",
+        "companyAccountKey": "company-050.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-050.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 50",
+          "sourceUrls": ["https://evidence-050.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-051",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-051.example",
+        "personKey": "https://people.example/prospect-051",
+        "companyAccountKey": "company-051.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-051.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-051.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-051.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-051.example",
+        "personKey": "https://people.example/prospect-051",
+        "companyAccountKey": "company-051.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-051.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 51",
+          "sourceUrls": ["https://evidence-051.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-052",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-052.example",
+        "personKey": "https://people.example/prospect-052",
+        "companyAccountKey": "company-052.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-052.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-052.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-052.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-052.example",
+        "personKey": "https://people.example/prospect-052",
+        "companyAccountKey": "company-052.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-052.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 52",
+          "sourceUrls": ["https://evidence-052.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-053",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-053.example",
+        "personKey": "https://people.example/prospect-053",
+        "companyAccountKey": "company-053.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-053.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-053.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-053.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-053.example",
+        "personKey": "https://people.example/prospect-053",
+        "companyAccountKey": "company-053.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-053.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 53",
+          "sourceUrls": ["https://evidence-053.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-054",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-054.example",
+        "personKey": "https://people.example/prospect-054",
+        "companyAccountKey": "company-054.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-054.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-054.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-054.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-054.example",
+        "personKey": "https://people.example/prospect-054",
+        "companyAccountKey": "company-054.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-054.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 54",
+          "sourceUrls": ["https://evidence-054.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-055",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-055.example",
+        "personKey": "https://people.example/prospect-055",
+        "companyAccountKey": "company-055.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-055.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-055.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-055.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-055.example",
+        "personKey": "https://people.example/prospect-055",
+        "companyAccountKey": "company-055.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-055.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 55",
+          "sourceUrls": ["https://evidence-055.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-056",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-056.example",
+        "personKey": "https://people.example/prospect-056",
+        "companyAccountKey": "company-056.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-056.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-056.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-056.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-056.example",
+        "personKey": "https://people.example/prospect-056",
+        "companyAccountKey": "company-056.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-056.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 56",
+          "sourceUrls": ["https://evidence-056.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-057",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-057.example",
+        "personKey": "https://people.example/prospect-057",
+        "companyAccountKey": "company-057.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-057.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-057.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-057.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-057.example",
+        "personKey": "https://people.example/prospect-057",
+        "companyAccountKey": "company-057.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-057.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 57",
+          "sourceUrls": ["https://evidence-057.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-058",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-058.example",
+        "personKey": "https://people.example/prospect-058",
+        "companyAccountKey": "company-058.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-058.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-058.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-058.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-058.example",
+        "personKey": "https://people.example/prospect-058",
+        "companyAccountKey": "company-058.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-058.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 58",
+          "sourceUrls": ["https://evidence-058.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-059",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-059.example",
+        "personKey": "https://people.example/prospect-059",
+        "companyAccountKey": "company-059.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-059.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-059.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-059.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-059.example",
+        "personKey": "https://people.example/prospect-059",
+        "companyAccountKey": "company-059.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-059.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 59",
+          "sourceUrls": ["https://evidence-059.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-060",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-060.example",
+        "personKey": "https://people.example/prospect-060",
+        "companyAccountKey": "company-060.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-060.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-060.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-060.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-060.example",
+        "personKey": "https://people.example/prospect-060",
+        "companyAccountKey": "company-060.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-060.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 60",
+          "sourceUrls": ["https://evidence-060.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-061",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-061.example",
+        "personKey": "https://people.example/prospect-061",
+        "companyAccountKey": "company-061.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-061.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-061.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-061.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-061.example",
+        "personKey": "https://people.example/prospect-061",
+        "companyAccountKey": "company-061.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-061.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 61",
+          "sourceUrls": ["https://evidence-061.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-062",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-062.example",
+        "personKey": "https://people.example/prospect-062",
+        "companyAccountKey": "company-062.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-062.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-062.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-062.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-062.example",
+        "personKey": "https://people.example/prospect-062",
+        "companyAccountKey": "company-062.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-062.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 62",
+          "sourceUrls": ["https://evidence-062.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-063",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-063.example",
+        "personKey": "https://people.example/prospect-063",
+        "companyAccountKey": "company-063.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-063.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-063.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-063.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-063.example",
+        "personKey": "https://people.example/prospect-063",
+        "companyAccountKey": "company-063.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-063.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 63",
+          "sourceUrls": ["https://evidence-063.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-064",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-064.example",
+        "personKey": "https://people.example/prospect-064",
+        "companyAccountKey": "company-064.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-064.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-064.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-064.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-064.example",
+        "personKey": "https://people.example/prospect-064",
+        "companyAccountKey": "company-064.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-064.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 64",
+          "sourceUrls": ["https://evidence-064.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-065",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-065.example",
+        "personKey": "https://people.example/prospect-065",
+        "companyAccountKey": "company-065.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-065.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-065.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-065.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-065.example",
+        "personKey": "https://people.example/prospect-065",
+        "companyAccountKey": "company-065.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-065.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 65",
+          "sourceUrls": ["https://evidence-065.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-066",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-066.example",
+        "personKey": "https://people.example/prospect-066",
+        "companyAccountKey": "company-066.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-066.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-066.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-066.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-066.example",
+        "personKey": "https://people.example/prospect-066",
+        "companyAccountKey": "company-066.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-066.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 66",
+          "sourceUrls": ["https://evidence-066.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-067",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-067.example",
+        "personKey": "https://people.example/prospect-067",
+        "companyAccountKey": "company-067.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-067.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-067.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-067.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-067.example",
+        "personKey": "https://people.example/prospect-067",
+        "companyAccountKey": "company-067.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-067.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 67",
+          "sourceUrls": ["https://evidence-067.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-068",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-068.example",
+        "personKey": "https://people.example/prospect-068",
+        "companyAccountKey": "company-068.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-068.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-068.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-068.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-068.example",
+        "personKey": "https://people.example/prospect-068",
+        "companyAccountKey": "company-068.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-068.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 68",
+          "sourceUrls": ["https://evidence-068.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-069",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-069.example",
+        "personKey": "https://people.example/prospect-069",
+        "companyAccountKey": "company-069.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-069.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-069.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-069.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-069.example",
+        "personKey": "https://people.example/prospect-069",
+        "companyAccountKey": "company-069.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-069.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 69",
+          "sourceUrls": ["https://evidence-069.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-070",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-070.example",
+        "personKey": "https://people.example/prospect-070",
+        "companyAccountKey": "company-070.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-070.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-070.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-070.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-070.example",
+        "personKey": "https://people.example/prospect-070",
+        "companyAccountKey": "company-070.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-070.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 70",
+          "sourceUrls": ["https://evidence-070.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-071",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-071.example",
+        "personKey": "https://people.example/prospect-071",
+        "companyAccountKey": "company-071.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-071.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-071.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-071.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-071.example",
+        "personKey": "https://people.example/prospect-071",
+        "companyAccountKey": "company-071.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-071.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 71",
+          "sourceUrls": ["https://evidence-071.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-072",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-072.example",
+        "personKey": "https://people.example/prospect-072",
+        "companyAccountKey": "company-072.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-072.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-072.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-072.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-072.example",
+        "personKey": "https://people.example/prospect-072",
+        "companyAccountKey": "company-072.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-072.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 72",
+          "sourceUrls": ["https://evidence-072.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-073",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-073.example",
+        "personKey": "https://people.example/prospect-073",
+        "companyAccountKey": "company-073.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-073.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-073.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-073.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-073.example",
+        "personKey": "https://people.example/prospect-073",
+        "companyAccountKey": "company-073.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-073.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 73",
+          "sourceUrls": ["https://evidence-073.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-074",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-074.example",
+        "personKey": "https://people.example/prospect-074",
+        "companyAccountKey": "company-074.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-074.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-074.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-074.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-074.example",
+        "personKey": "https://people.example/prospect-074",
+        "companyAccountKey": "company-074.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-074.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 74",
+          "sourceUrls": ["https://evidence-074.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-075",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-075.example",
+        "personKey": "https://people.example/prospect-075",
+        "companyAccountKey": "company-075.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-075.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-075.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-075.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-075.example",
+        "personKey": "https://people.example/prospect-075",
+        "companyAccountKey": "company-075.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-075.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 75",
+          "sourceUrls": ["https://evidence-075.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-076",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-076.example",
+        "personKey": "https://people.example/prospect-076",
+        "companyAccountKey": "company-076.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-076.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-076.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-076.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-076.example",
+        "personKey": "https://people.example/prospect-076",
+        "companyAccountKey": "company-076.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-076.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 76",
+          "sourceUrls": ["https://evidence-076.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-077",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-077.example",
+        "personKey": "https://people.example/prospect-077",
+        "companyAccountKey": "company-077.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-077.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-077.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-077.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-077.example",
+        "personKey": "https://people.example/prospect-077",
+        "companyAccountKey": "company-077.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-077.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 77",
+          "sourceUrls": ["https://evidence-077.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-078",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-078.example",
+        "personKey": "https://people.example/prospect-078",
+        "companyAccountKey": "company-078.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-078.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-078.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-078.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-078.example",
+        "personKey": "https://people.example/prospect-078",
+        "companyAccountKey": "company-078.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-078.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 78",
+          "sourceUrls": ["https://evidence-078.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-079",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-079.example",
+        "personKey": "https://people.example/prospect-079",
+        "companyAccountKey": "company-079.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-079.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-079.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-079.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-079.example",
+        "personKey": "https://people.example/prospect-079",
+        "companyAccountKey": "company-079.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-079.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 79",
+          "sourceUrls": ["https://evidence-079.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-080",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-080.example",
+        "personKey": "https://people.example/prospect-080",
+        "companyAccountKey": "company-080.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-080.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-080.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-080.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-080.example",
+        "personKey": "https://people.example/prospect-080",
+        "companyAccountKey": "company-080.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-080.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 80",
+          "sourceUrls": ["https://evidence-080.example/profile"],
+          "accepted": true
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-081",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-081.example",
+        "personKey": "https://people.example/prospect-081",
+        "companyAccountKey": "company-081.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-081.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-081.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-081.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-081.example",
+        "personKey": "https://people.example/prospect-081",
+        "companyAccountKey": "company-081.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-081.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 81",
+          "sourceUrls": ["https://evidence-081.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-082",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-082.example",
+        "personKey": "https://people.example/prospect-082",
+        "companyAccountKey": "company-082.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-082.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-082.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-082.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-082.example",
+        "personKey": "https://people.example/prospect-082",
+        "companyAccountKey": "company-082.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-082.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 82",
+          "sourceUrls": ["https://evidence-082.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-083",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-083.example",
+        "personKey": "https://people.example/prospect-083",
+        "companyAccountKey": "company-083.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-083.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-083.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-083.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-083.example",
+        "personKey": "https://people.example/prospect-083",
+        "companyAccountKey": "company-083.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-083.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 83",
+          "sourceUrls": ["https://evidence-083.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-084",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-084.example",
+        "personKey": "https://people.example/prospect-084",
+        "companyAccountKey": "company-084.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-084.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-084.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-084.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-084.example",
+        "personKey": "https://people.example/prospect-084",
+        "companyAccountKey": "company-084.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-084.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 84",
+          "sourceUrls": ["https://evidence-084.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-085",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-085.example",
+        "personKey": "https://people.example/prospect-085",
+        "companyAccountKey": "company-085.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-085.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-085.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-085.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-085.example",
+        "personKey": "https://people.example/prospect-085",
+        "companyAccountKey": "company-085.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-085.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 85",
+          "sourceUrls": ["https://evidence-085.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-086",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-086.example",
+        "personKey": "https://people.example/prospect-086",
+        "companyAccountKey": "company-086.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-086.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-086.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-086.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-086.example",
+        "personKey": "https://people.example/prospect-086",
+        "companyAccountKey": "company-086.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-086.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 86",
+          "sourceUrls": ["https://evidence-086.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-087",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-087.example",
+        "personKey": "https://people.example/prospect-087",
+        "companyAccountKey": "company-087.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-087.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-087.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-087.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-087.example",
+        "personKey": "https://people.example/prospect-087",
+        "companyAccountKey": "company-087.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-087.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 87",
+          "sourceUrls": ["https://evidence-087.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-088",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-088.example",
+        "personKey": "https://people.example/prospect-088",
+        "companyAccountKey": "company-088.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-088.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-088.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-088.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-088.example",
+        "personKey": "https://people.example/prospect-088",
+        "companyAccountKey": "company-088.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-088.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 88",
+          "sourceUrls": ["https://evidence-088.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-089",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-089.example",
+        "personKey": "https://people.example/prospect-089",
+        "companyAccountKey": "company-089.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-089.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-089.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-089.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-089.example",
+        "personKey": "https://people.example/prospect-089",
+        "companyAccountKey": "company-089.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-089.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 89",
+          "sourceUrls": ["https://evidence-089.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-090",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-090.example",
+        "personKey": "https://people.example/prospect-090",
+        "companyAccountKey": "company-090.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-090.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-090.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-090.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-090.example",
+        "personKey": "https://people.example/prospect-090",
+        "companyAccountKey": "company-090.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-090.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 90",
+          "sourceUrls": ["https://evidence-090.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-091",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-091.example",
+        "personKey": "https://people.example/prospect-091",
+        "companyAccountKey": "company-091.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-091.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-091.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-091.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-091.example",
+        "personKey": "https://people.example/prospect-091",
+        "companyAccountKey": "company-091.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-091.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 91",
+          "sourceUrls": ["https://evidence-091.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-092",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-092.example",
+        "personKey": "https://people.example/prospect-092",
+        "companyAccountKey": "company-092.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-092.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-092.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-092.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-092.example",
+        "personKey": "https://people.example/prospect-092",
+        "companyAccountKey": "company-092.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-092.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 92",
+          "sourceUrls": ["https://evidence-092.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-093",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-093.example",
+        "personKey": "https://people.example/prospect-093",
+        "companyAccountKey": "company-093.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-093.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-093.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-093.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-093.example",
+        "personKey": "https://people.example/prospect-093",
+        "companyAccountKey": "company-093.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-093.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 93",
+          "sourceUrls": ["https://evidence-093.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-094",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-094.example",
+        "personKey": "https://people.example/prospect-094",
+        "companyAccountKey": "company-094.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-094.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-094.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-094.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-094.example",
+        "personKey": "https://people.example/prospect-094",
+        "companyAccountKey": "company-094.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-094.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 94",
+          "sourceUrls": ["https://evidence-094.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-095",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-095.example",
+        "personKey": "https://people.example/prospect-095",
+        "companyAccountKey": "company-095.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-095.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-095.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-095.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-095.example",
+        "personKey": "https://people.example/prospect-095",
+        "companyAccountKey": "company-095.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-095.example/profile",
+            "supports": ["identity", "employment", "job_title"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 95",
+          "sourceUrls": ["https://evidence-095.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-096",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-096.example",
+        "personKey": "https://people.example/prospect-096",
+        "companyAccountKey": "company-096.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-096.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-096.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-096.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-096.example",
+        "personKey": "https://people.example/prospect-096",
+        "companyAccountKey": "company-096.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-096.example/profile",
+            "supports": ["identity"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 96",
+          "sourceUrls": ["https://evidence-096.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-097",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-097.example",
+        "personKey": "https://people.example/prospect-097",
+        "companyAccountKey": "company-097.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-097.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-097.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-097.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-097.example",
+        "personKey": "https://people.example/prospect-097",
+        "companyAccountKey": "company-097.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-097.example/profile",
+            "supports": ["identity"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 97",
+          "sourceUrls": ["https://evidence-097.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-098",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-098.example",
+        "personKey": "https://people.example/prospect-098",
+        "companyAccountKey": "company-098.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-098.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-098.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-098.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-098.example",
+        "personKey": "https://people.example/prospect-098",
+        "companyAccountKey": "company-098.example",
+        "jobTitle": "VP Sales",
+        "evidence": [
+          {
+            "url": "https://evidence-098.example/profile",
+            "supports": ["identity"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 98",
+          "sourceUrls": ["https://evidence-098.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-099",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-099.example",
+        "personKey": "https://people.example/prospect-099",
+        "companyAccountKey": "company-099.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-099.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-099.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-099.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "company-099.example",
+        "personKey": "https://people.example/wrong-99",
+        "companyAccountKey": "company-099.example",
+        "jobTitle": "Former Sales Intern",
+        "evidence": [
+          {
+            "url": "https://evidence-099.example/profile",
+            "supports": ["identity"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 99",
+          "sourceUrls": ["https://evidence-099.example/profile"],
+          "accepted": false
+        }
+      }
+    },
+    {
+      "id": "synthetic-prospect-100",
+      "capture": {
+        "provider": "synthetic",
+        "model": "offline-contract-v1",
+        "promptVersion": "synthetic-capture-v1",
+        "schemaVersion": "prospect-eval-v1"
+      },
+      "expected": {
+        "accountKey": "company-100.example",
+        "personKey": "https://people.example/prospect-100",
+        "companyAccountKey": "company-100.example",
+        "jobTitle": "VP Sales",
+        "requiredEvidenceSupports": ["identity", "employment", "job_title"],
+        "acceptedEvidence": [
+          {
+            "support": "identity",
+            "sourceUrl": "https://evidence-100.example/profile"
+          },
+          {
+            "support": "employment",
+            "sourceUrl": "https://evidence-100.example/profile"
+          },
+          {
+            "support": "job_title",
+            "sourceUrl": "https://evidence-100.example/profile"
+          }
+        ]
+      },
+      "observed": {
+        "accountKey": "false-positive.example",
+        "personKey": "https://people.example/wrong-100",
+        "companyAccountKey": "company-100.example",
+        "jobTitle": "Former Sales Intern",
+        "evidence": [
+          {
+            "url": "https://evidence-100.example/profile",
+            "supports": ["identity"]
+          }
+        ],
+        "personalization": {
+          "value": "Synthetic evidence-bound opening for prospect 100",
+          "sourceUrls": ["https://evidence-100.example/profile"],
+          "accepted": false
+        }
+      }
+    }
+  ],
+  "emails": [
+    {
+      "id": "first-last-two-samples",
+      "firstName": "Alice",
+      "lastName": "Martin",
+      "domain": "acme.example",
+      "publicSamples": [
+        {
+          "firstName": "Marie",
+          "lastName": "Dupont",
+          "email": "marie.dupont@acme.example",
+          "sourceUrl": "https://acme.example/team/marie"
+        },
+        {
+          "firstName": "John",
+          "lastName": "Smith",
+          "email": "john.smith@acme.example",
+          "sourceUrl": "https://acme.example/team/john"
+        }
+      ],
+      "mxValid": true,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": "alice.martin@acme.example",
+      "expectedConfidence": {
+        "min": 0.9,
+        "max": 0.9
+      },
+      "expectedReason": null
+    },
+    {
+      "id": "firstlast-one-sample",
+      "firstName": "Bob",
+      "lastName": "Smith",
+      "domain": "globex.example",
+      "publicSamples": [
+        {
+          "firstName": "Mary",
+          "lastName": "Jones",
+          "email": "maryjones@globex.example",
+          "sourceUrl": "https://globex.example/team/mary"
+        }
+      ],
+      "mxValid": true,
+      "confidenceThreshold": 0.7,
+      "expectedEmail": "bobsmith@globex.example",
+      "expectedConfidence": {
+        "min": 0.75,
+        "max": 0.75
+      },
+      "expectedReason": null
+    },
+    {
+      "id": "initial-last-three-samples",
+      "firstName": "Carol",
+      "lastName": "Jones",
+      "domain": "initech.example",
+      "publicSamples": [
+        {
+          "firstName": "Peter",
+          "lastName": "Gibbons",
+          "email": "p.gibbons@initech.example",
+          "sourceUrl": "https://initech.example/team/peter"
+        },
+        {
+          "firstName": "Joanna",
+          "lastName": "Smith",
+          "email": "j.smith@initech.example",
+          "sourceUrl": "https://initech.example/team/joanna"
+        },
+        {
+          "firstName": "Milton",
+          "lastName": "Waddams",
+          "email": "m.waddams@initech.example",
+          "sourceUrl": "https://initech.example/team/milton"
+        }
+      ],
+      "mxValid": true,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": "c.jones@initech.example",
+      "expectedConfidence": {
+        "min": 0.97,
+        "max": 0.97
+      },
+      "expectedReason": null
+    },
+    {
+      "id": "last-first-two-samples",
+      "firstName": "David",
+      "lastName": "Lee",
+      "domain": "umbrella.example",
+      "publicSamples": [
+        {
+          "firstName": "Ada",
+          "lastName": "Wong",
+          "email": "wong.ada@umbrella.example",
+          "sourceUrl": "https://umbrella.example/team/ada"
+        },
+        {
+          "firstName": "Carlos",
+          "lastName": "Oliveira",
+          "email": "oliveira.carlos@umbrella.example",
+          "sourceUrl": "https://umbrella.example/team/carlos"
+        }
+      ],
+      "mxValid": true,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": "lee.david@umbrella.example",
+      "expectedConfidence": {
+        "min": 0.9,
+        "max": 0.9
+      },
+      "expectedReason": null
+    },
+    {
+      "id": "underscore-low-confidence",
+      "firstName": "Eva",
+      "lastName": "Garcia",
+      "domain": "soylent.example",
+      "publicSamples": [
+        {
+          "firstName": "Anna",
+          "lastName": "Brown",
+          "email": "anna_brown@soylent.example",
+          "sourceUrl": "https://soylent.example/team/anna"
+        }
+      ],
+      "mxValid": true,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": "eva_garcia@soylent.example",
+      "expectedConfidence": {
+        "min": 0.75,
+        "max": 0.75
+      },
+      "expectedReason": "low_confidence"
+    },
+    {
+      "id": "hyphen-no-mx",
+      "firstName": "Farid",
+      "lastName": "Khan",
+      "domain": "hooli.example",
+      "publicSamples": [
+        {
+          "firstName": "Gavin",
+          "lastName": "Belson",
+          "email": "gavin-belson@hooli.example",
+          "sourceUrl": "https://hooli.example/team/gavin"
+        }
+      ],
+      "mxValid": false,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": "farid-khan@hooli.example",
+      "expectedConfidence": {
+        "min": 0.4,
+        "max": 0.4
+      },
+      "expectedReason": "mx_missing"
+    },
+    {
+      "id": "missing-public-evidence",
+      "firstName": "Grace",
+      "lastName": "Kim",
+      "domain": "massive-dynamic.example",
+      "publicSamples": [],
+      "mxValid": true,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": null,
+      "expectedConfidence": {
+        "min": 0,
+        "max": 0
+      },
+      "expectedReason": "insufficient_public_evidence"
+    },
+    {
+      "id": "ambiguous-initial-samples",
+      "firstName": "Henry",
+      "lastName": "Brown",
+      "domain": "wonka.example",
+      "publicSamples": [
+        {
+          "firstName": "W",
+          "lastName": "Wonka",
+          "email": "w.wonka@wonka.example",
+          "sourceUrl": "https://wonka.example/team/willy"
+        }
+      ],
+      "mxValid": true,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": null,
+      "expectedConfidence": {
+        "min": 0,
+        "max": 0
+      },
+      "expectedReason": "insufficient_public_evidence"
+    },
+    {
+      "id": "initiallast-two-samples",
+      "firstName": "Ines",
+      "lastName": "Dubois",
+      "domain": "stark.example",
+      "publicSamples": [
+        {
+          "firstName": "Tony",
+          "lastName": "Stark",
+          "email": "tstark@stark.example",
+          "sourceUrl": "https://stark.example/team/tony"
+        },
+        {
+          "firstName": "Pepper",
+          "lastName": "Potts",
+          "email": "ppotts@stark.example",
+          "sourceUrl": "https://stark.example/team/pepper"
+        }
+      ],
+      "mxValid": true,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": "idubois@stark.example",
+      "expectedConfidence": {
+        "min": 0.9,
+        "max": 0.9
+      },
+      "expectedReason": null
+    },
+    {
+      "id": "known-address-disagrees-with-pattern",
+      "firstName": "Lucy",
+      "lastName": "Smith",
+      "domain": "wayne.example",
+      "publicSamples": [
+        {
+          "firstName": "Bruce",
+          "lastName": "Wayne",
+          "email": "bwayne@wayne.example",
+          "sourceUrl": "https://wayne.example/team/bruce"
+        },
+        {
+          "firstName": "Lucius",
+          "lastName": "Fox",
+          "email": "lfox@wayne.example",
+          "sourceUrl": "https://wayne.example/team/lucius"
+        }
+      ],
+      "mxValid": true,
+      "confidenceThreshold": 0.85,
+      "expectedEmail": "lucy.smith@wayne.example",
+      "expectedConfidence": {
+        "min": 0.9,
+        "max": 0.9
+      },
+      "expectedReason": null
+    }
+  ],
+  "replies": [
+    {
+      "id": "positive",
+      "input": {
+        "subject": "Re: discovery",
+        "body": "Yes, interested. Let's schedule.",
+        "sender": "alice@acme.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "positive",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "positive_reply"
+    },
+    {
+      "id": "negative",
+      "input": {
+        "subject": "Re: discovery",
+        "body": "No thanks, not interested.",
+        "sender": "bob@globex.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "negative",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "negative_reply"
+    },
+    {
+      "id": "question",
+      "input": {
+        "subject": "Re: discovery",
+        "body": "What does this cost?",
+        "sender": "carol@initech.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "question",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "question"
+    },
+    {
+      "id": "referral",
+      "input": {
+        "subject": "Re: discovery",
+        "body": "Please contact Maria instead.",
+        "sender": "david@umbrella.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "referral",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "referral"
+    },
+    {
+      "id": "out-of-office",
+      "input": {
+        "subject": "Automatic reply",
+        "body": "I am out of office until Monday.",
+        "sender": "eva@soylent.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "out_of_office",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
+    },
+    {
+      "id": "unsubscribe",
+      "input": {
+        "subject": "Re: discovery",
+        "body": "Please unsubscribe and stop emailing me.",
+        "sender": "farid@hooli.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "unsubscribe",
+      "expectedTerminal": true,
+      "expectedSuppression": true,
+      "expectedState": "opted_out",
+      "expectedStopReason": "unsubscribe"
+    },
+    {
+      "id": "automated",
+      "input": {
+        "subject": "Automated message",
+        "body": "This is an automated message; do not reply.",
+        "sender": "noreply@stark.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": false,
+      "expectedCategory": "automated",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": null,
+      "expectedStopReason": null
+    },
+    {
+      "id": "unknown",
+      "input": {
+        "subject": "Re: discovery",
+        "body": "Acknowledged.",
+        "sender": "ines@stark.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "unknown",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
+    },
+    {
+      "id": "hard-bounce",
+      "input": {
+        "subject": "Delivery failed",
+        "body": "550 recipient does not exist",
+        "sender": "postmaster@wayne.example"
+      },
+      "observedCategory": "bounce",
+      "bounceKind": "hard",
+      "holdNonTerminal": true,
+      "expectedCategory": "bounce",
+      "expectedTerminal": true,
+      "expectedSuppression": true,
+      "expectedState": "bounced",
+      "expectedStopReason": "hard_bounce"
+    },
+    {
+      "id": "soft-bounce",
+      "input": {
+        "subject": "Delivery delayed",
+        "body": "Mailbox temporarily unavailable",
+        "sender": "postmaster@wayne.example"
+      },
+      "observedCategory": "bounce",
+      "bounceKind": "soft",
+      "holdNonTerminal": true,
+      "expectedCategory": "bounce",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
+    }
+  ],
+  "policies": [
+    {
+      "id": "eligible",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "providerMatches": true,
+        "stepAlreadySent": false,
+        "expectedStepMatches": true,
+        "withinWorkingHours": true,
+        "mailboxDailySent": 0,
+        "mailboxDailyCap": 25,
+        "campaignDailySent": 0,
+        "campaignDailyCap": 100,
+        "mailboxMinimumDelaySatisfied": true,
+        "contactMinimumDelaySatisfied": true,
+        "recentContactCooldownSatisfied": true,
+        "professionalRelevanceRequired": true,
+        "professionallyRelevant": true
+      },
+      "expected": "ALLOW"
+    },
+    {
+      "id": "campaign-paused",
+      "input": {
+        "campaignStatus": "paused",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false
+      },
+      "expected": "CAMPAIGN_INACTIVE"
+    },
+    {
+      "id": "enrollment-stopped",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "stopped",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false
+      },
+      "expected": "ENROLLMENT_INACTIVE"
+    },
+    {
+      "id": "reply-pending",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "replyPending": true
+      },
+      "expected": "REPLY_PENDING"
+    },
+    {
+      "id": "not-approved",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "proposed",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false
+      },
+      "expected": "MESSAGE_NOT_APPROVED"
+    },
+    {
+      "id": "stale-step",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "expectedStepMatches": false
+      },
+      "expected": "STALE_SEQUENCE_STEP"
+    },
+    {
+      "id": "terminal-reply",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "terminalReply": true
+      },
+      "expected": "TERMINAL_REPLY"
+    },
+    {
+      "id": "unsubscribe",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "unsubscribed": true
+      },
+      "expected": "UNSUBSCRIBED"
+    },
+    {
+      "id": "hard-bounce",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "hardBounced": true
+      },
+      "expected": "HARD_BOUNCE"
+    },
+    {
+      "id": "manual-stop",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "manuallyStopped": true
+      },
+      "expected": "MANUAL_STOP"
+    },
+    {
+      "id": "recipient-suppressed",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": true,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false
+      },
+      "expected": "RECIPIENT_SUPPRESSED"
+    },
+    {
+      "id": "company-suppressed",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "accountDomainSuppressed": true,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false
+      },
+      "expected": "COMPANY_SUPPRESSED"
+    },
+    {
+      "id": "mailbox-unavailable",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "degraded",
+        "stepAlreadySent": false
+      },
+      "expected": "MAILBOX_UNAVAILABLE"
+    },
+    {
+      "id": "provider-mismatch",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "providerMatches": false,
+        "stepAlreadySent": false
+      },
+      "expected": "MAILBOX_PROVIDER_MISMATCH"
+    },
+    {
+      "id": "step-already-sent",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": true
+      },
+      "expected": "STEP_ALREADY_SENT"
+    },
+    {
+      "id": "emergency-pause",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "emergencyPaused": true
+      },
+      "expected": "EMERGENCY_PAUSED"
+    },
+    {
+      "id": "outside-hours",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "withinWorkingHours": false
+      },
+      "expected": "OUTSIDE_WORKING_HOURS"
+    },
+    {
+      "id": "mailbox-cap",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "mailboxDailySent": 25,
+        "mailboxDailyCap": 25
+      },
+      "expected": "MAILBOX_DAILY_CAP_REACHED"
+    },
+    {
+      "id": "campaign-cap",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "campaignDailySent": 100,
+        "campaignDailyCap": 100
+      },
+      "expected": "CAMPAIGN_DAILY_CAP_REACHED"
+    },
+    {
+      "id": "mailbox-delay",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "mailboxMinimumDelaySatisfied": false
+      },
+      "expected": "MAILBOX_MINIMUM_DELAY"
+    },
+    {
+      "id": "contact-delay",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "contactMinimumDelaySatisfied": false
+      },
+      "expected": "CONTACT_MINIMUM_DELAY"
+    },
+    {
+      "id": "contact-cooldown",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "recentContactCooldownSatisfied": false
+      },
+      "expected": "RECENT_CONTACT_COOLDOWN"
+    },
+    {
+      "id": "professional-relevance",
+      "input": {
+        "campaignStatus": "active",
+        "enrollmentState": "approved",
+        "messageStatus": "approved",
+        "recipientSuppressed": false,
+        "mailboxRequired": true,
+        "mailboxStatus": "available",
+        "stepAlreadySent": false,
+        "professionalRelevanceRequired": true,
+        "professionallyRelevant": false
+      },
+      "expected": "PROFESSIONAL_RELEVANCE_REQUIRED"
+    }
+  ],
+  "duplicates": [
+    {
+      "id": "company-domains",
+      "kind": "company_domain",
+      "values": [
+        "acme.example",
+        "https://www.acme.example/about",
+        "globex.example"
+      ],
+      "expectedUniqueCount": 2
+    },
+    {
+      "id": "company-names",
+      "kind": "company_name",
+      "values": ["Acme Robotics", " ACME   ROBOTICS ", "Globex"],
+      "expectedUniqueCount": 2
+    },
+    {
+      "id": "contact-urls",
+      "kind": "contact_url",
+      "values": [
+        "https://www.linkedin.com/in/alice-martin",
+        "https://www.linkedin.com/in/alice-martin/?trk=public",
+        "https://www.linkedin.com/in/bob-smith"
+      ],
+      "expectedUniqueCount": 2
+    },
+    {
+      "id": "emails",
+      "kind": "email",
+      "values": [
+        "Alice@Acme.example",
+        " alice@acme.example ",
+        "bob@acme.example"
+      ],
+      "expectedUniqueCount": 2
+    },
+    {
+      "id": "person-names",
+      "kind": "person_name",
+      "values": ["José Martin", "Jose Martin", "Alice Martin"],
+      "expectedUniqueCount": 2
+    }
+  ]
+}

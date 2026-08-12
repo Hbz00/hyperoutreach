@@ -1,0 +1,9 @@
+.next
+node_modules
+coverage
+playwright-report
+test-results
+package-lock.json
+SPEC.md
+AGENTS.md
+CLAUDE.md
