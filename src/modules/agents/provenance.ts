@@ -49,7 +49,7 @@ function requireActualSources(
   for (const url of urls) {
     if (!actual.has(normalizeProvenanceUrl(url))) {
       throw new AgentProvenanceError(
-        "Structured evidence URL was absent from provider web-search sources",
+        "Structured evidence URL was absent from provider-declared sources",
       );
     }
   }

@@ -137,7 +137,7 @@ export class OpenAIPublicEmailEvidenceProvider implements ObservablePublicEmailE
     for (const sample of output.samples) {
       if (!actualSources.has(normalizeProvenanceUrl(sample.sourceUrl))) {
         throw new PublicEmailEvidenceError(
-          "Public email sample was absent from provider web-search sources",
+          "Public email sample was absent from provider-declared sources",
         );
       }
     }

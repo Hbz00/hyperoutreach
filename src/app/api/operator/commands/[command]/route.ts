@@ -34,6 +34,11 @@ import {
 } from "@/modules/campaigns/service";
 import { acceptManualEmail } from "@/modules/email-resolution/manual-service";
 import { disconnectMicrosoftMailbox } from "@/modules/mailboxes/microsoft-oauth-service";
+import {
+  connectSmtpImapMailbox,
+  disconnectSmtpImapMailbox,
+  type ConnectSmtpImapMailboxResult,
+} from "@/modules/mailboxes/smtp-imap-connection-service";
 import { reviewMessage } from "@/modules/messages/review-service";
 import { createReplyClassifier } from "@/modules/replies/classifier-factory";
 import { ingestInboundMessage } from "@/modules/replies/inbound-service";
@@ -96,6 +101,38 @@ function list(formData: FormData, key: string): string[] {
     .map((item) => item.trim())
     .filter(Boolean);
 }
+
+/**
+ * Operator-facing text for every `connectSmtpImapMailbox` failure code,
+ * shown verbatim in the `/settings` redirect notice. `IMAP_FOLDERS_NOT_FOUND`
+ * deliberately gets its own sentence, distinct from the two auth codes: a
+ * mailbox that authenticated fine over IMAP but whose Drafts/Sent folders
+ * could not be identified (e.g. a French Zimbra naming them "Brouillons"/
+ * "Envoyés" instead of a recognized special-use or conventional name) is not
+ * a wrong-password problem, and an operator who only sees "authentication
+ * failed" here will waste time re-typing a password that was never broken.
+ */
+const CONNECT_SMTP_MAILBOX_NOTICES: Record<
+  Extract<ConnectSmtpImapMailboxResult, { ok: false }>["code"],
+  string
+> = {
+  INVALID_INPUT:
+    "Mailbox connection failed: check that every field (host, port, username, password) is filled in and valid. (INVALID_INPUT)",
+  IMAP_AUTH_FAILED:
+    "Mailbox connection failed: IMAP rejected the username or password. (IMAP_AUTH_FAILED)",
+  IMAP_CONNECTION_FAILED:
+    "Mailbox connection failed: the IMAP endpoint could not be reached or negotiated. Check the host, port, TLS mode, certificate, and network. (IMAP_CONNECTION_FAILED)",
+  IMAP_FOLDERS_NOT_FOUND:
+    'Mailbox connection failed: IMAP login succeeded, but the Drafts/Sent folders could not be identified — this is not a password problem. Some providers use localized folder names (e.g. "Brouillons"/"Envoyés"); check the mailbox\'s folder configuration. (IMAP_FOLDERS_NOT_FOUND)',
+  SMTP_AUTH_FAILED:
+    "Mailbox connection failed: SMTP rejected the username or password. (SMTP_AUTH_FAILED)",
+  SMTP_CONNECTION_FAILED:
+    "Mailbox connection failed: the SMTP endpoint could not be reached or negotiated. Check the host, port, TLS mode, certificate, and network. (SMTP_CONNECTION_FAILED)",
+  CONFIGURATION_ERROR:
+    "Mailbox connection failed: server misconfiguration — contact an administrator. (CONFIGURATION_ERROR)",
+  DATABASE_ERROR:
+    "Mailbox connection failed: the mailbox could not be saved — try again. (DATABASE_ERROR)",
+};
 
 function campaignSteps(formData: FormData) {
   const steps = [];
@@ -633,9 +670,9 @@ export async function POST(
       return destination(request, "/settings", "Invalid mailbox");
     try {
       await createWorkflowDispatcher().dispatch({
-        task: "reconcile-graph-delta",
+        task: "reconcile-inbound-mailbox",
         payload: { mailboxId: mailboxId! },
-        idempotencyKey: `ui:graph-delta:${mailboxId}:${randomUUID()}`,
+        idempotencyKey: `ui:inbound-sync:${mailboxId}:${randomUUID()}`,
       });
       return destination(request, "/settings", "Mailbox sync executed");
     } catch {
@@ -648,7 +685,19 @@ export async function POST(
     if (!uuidSchema.safeParse(mailboxId).success)
       return destination(request, "/settings", "Invalid mailbox");
     try {
-      const result = await disconnectMicrosoftMailbox(db, mailboxId!);
+      // Dispatched by the row's own provider — `disconnectMicrosoftMailbox`
+      // and `disconnectSmtpImapMailbox` each only accept their own provider
+      // (returning `NOT_FOUND` otherwise), so a single lookup here decides
+      // which one to call rather than trying both.
+      const [mailbox] = await db
+        .select({ provider: mailboxConnections.provider })
+        .from(mailboxConnections)
+        .where(eq(mailboxConnections.id, mailboxId!))
+        .limit(1);
+      const result =
+        mailbox?.provider === "smtp_imap"
+          ? await disconnectSmtpImapMailbox(db, mailboxId!)
+          : await disconnectMicrosoftMailbox(db, mailboxId!);
       return destination(
         request,
         "/settings",
@@ -661,6 +710,52 @@ export async function POST(
         "Mailbox disconnect failed safely",
       );
     }
+  }
+
+  // The single command that ever writes `status: "available"` for an
+  // `smtp_imap` mailbox — both for a brand-new address and, because
+  // `connectSmtpImapMailbox` updates any existing row for the same
+  // `(provider, normalized_email)` rather than inserting blindly, for
+  // resurrecting one the auto-revocation guard (Task 10 bis) put into
+  // `revoked`. Verification (IMAP auth + folder discovery, then SMTP
+  // auth — never a real send) happens before any write; a failure never
+  // touches the row and reports its cause via the redirect notice, same as
+  // every command below.
+  if (command === "connect-smtp-mailbox") {
+    const result = await connectSmtpImapMailbox(db, {
+      email: value(formData, "email"),
+      password: value(formData, "password"),
+      // No `?? value(formData, "email")` fallback: on the target Zimbra
+      // server (and most non-Gmail-style IMAP/SMTP setups) the login
+      // username is *not* the email address (the settings form's own
+      // placeholder shows "corentin.sacazes", not an address) — silently
+      // substituting the email for a blank `username` (a direct POST that
+      // bypasses the HTML `required` attribute, or any future caller of
+      // this command) would authenticate with the wrong identity, fail with
+      // a confusing IMAP/SMTP error, and — for a mailbox being *reconnected*
+      // rather than connected fresh — risk tripping the auto-revocation
+      // guard on the next send. An empty/missing `username` is rejected
+      // explicitly by `connectionInputSchema`'s own `min(1)` instead, same
+      // as `email`/`password` already are.
+      username: value(formData, "username"),
+      imap: {
+        host: value(formData, "imapHost"),
+        port: integer(formData, "imapPort"),
+        security: value(formData, "imapSecurity"),
+      },
+      smtp: {
+        host: value(formData, "smtpHost"),
+        port: integer(formData, "smtpPort"),
+        security: value(formData, "smtpSecurity"),
+      },
+    });
+    return destination(
+      request,
+      "/settings",
+      result.ok
+        ? "Mailbox connected"
+        : CONNECT_SMTP_MAILBOX_NOTICES[result.code],
+    );
   }
 
   if (command === "add-suppression") {

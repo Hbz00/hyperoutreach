@@ -46,9 +46,13 @@ export const WORKFLOW_TASKS = {
     maxDuration: 300,
     retry: { maxAttempts: 4, minTimeoutInMs: 2_000, maxTimeoutInMs: 60_000 },
   },
-  "reconcile-graph-delta": {
+  "reconcile-inbound-mailbox": {
     maxDuration: 300,
     retry: { maxAttempts: 4, minTimeoutInMs: 2_000, maxTimeoutInMs: 60_000 },
+  },
+  "reconcile-inbound-mailboxes": {
+    maxDuration: 300,
+    retry: { maxAttempts: 3, minTimeoutInMs: 2_000, maxTimeoutInMs: 30_000 },
   },
   "maintain-graph-subscriptions": {
     maxDuration: 300,
@@ -102,7 +106,8 @@ export type WorkflowPayloads = {
   };
   "reconcile-due-follow-ups": { observedAt?: string; limit?: number };
   "drain-graph-webhooks": { observedAt?: string; limit?: number };
-  "reconcile-graph-delta": { mailboxId: string };
+  "reconcile-inbound-mailbox": { mailboxId: string };
+  "reconcile-inbound-mailboxes": { observedAt?: string; limit?: number };
   "maintain-graph-subscriptions": { observedAt?: string };
   "recover-stale-work": { observedAt?: string; limit?: number };
 };
@@ -163,7 +168,13 @@ export const WORKFLOW_PAYLOAD_SCHEMAS = {
       limit: z.number().int().min(1).max(200).optional(),
     })
     .strict(),
-  "reconcile-graph-delta": z.object({ mailboxId: z.uuid() }).strict(),
+  "reconcile-inbound-mailbox": z.object({ mailboxId: z.uuid() }).strict(),
+  "reconcile-inbound-mailboxes": z
+    .object({
+      observedAt: observedAtSchema,
+      limit: z.number().int().min(1).max(200).optional(),
+    })
+    .strict(),
   "maintain-graph-subscriptions": z
     .object({ observedAt: observedAtSchema })
     .strict(),

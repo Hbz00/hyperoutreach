@@ -18,6 +18,7 @@ import {
 } from "@/lib/microsoft/graph-client";
 import { MicrosoftGraphMailProvider } from "@/modules/mailboxes/microsoft-graph-mail-provider";
 import { graphMessageToInbound } from "@/modules/mailboxes/microsoft-graph-message";
+import { createMicrosoftGraphInboundSource } from "@/modules/mailboxes/microsoft-graph-inbound-source";
 import {
   parseGraphNotifications,
   validateWebhookClientState,
@@ -232,6 +233,43 @@ describe("Microsoft Graph HTTP and mail contracts", () => {
 });
 
 describe("Graph inbound and webhook validation", () => {
+  it("skips one malformed delta item and still advances the page cursor", async () => {
+    const graph = {
+      get: async () => ({
+        value: [
+          { id: "poison", subject: 42 },
+          {
+            id: "valid",
+            internetMessageId: "<valid@example.com>",
+            conversationId: "conversation-1",
+            subject: "Re: hello",
+            receivedDateTime: "2026-08-13T10:00:00.000Z",
+            from: { emailAddress: { address: "prospect@example.com" } },
+            toRecipients: [
+              { emailAddress: { address: "mailbox@example.com" } },
+            ],
+            body: { contentType: "text", content: "Interested" },
+            internetMessageHeaders: [],
+          },
+        ],
+        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta-final",
+      }),
+    };
+    const source = createMicrosoftGraphInboundSource(graph as never, {
+      id: "mailbox-id",
+      since: new Date("2026-08-13T09:00:00.000Z"),
+    });
+    const pages: unknown[][] = [];
+    const result = await source.fetchSince(null, async (messages) => {
+      pages.push(messages);
+      return messages.length;
+    });
+    expect(pages.flat()).toHaveLength(1);
+    expect(result.nextCursor).toBe(
+      "https://graph.microsoft.com/v1.0/delta-final",
+    );
+  });
+
   it("converts Graph headers and mailbox identity into the shared inbound contract", () => {
     expect(
       graphMessageToInbound("mailbox-id", "notification-key", {

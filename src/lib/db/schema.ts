@@ -83,6 +83,7 @@ export const campaignStatus = pgEnum("campaign_status", [
 export const mailboxProvider = pgEnum("mailbox_provider", [
   "mock",
   "microsoft_graph",
+  "smtp_imap",
 ]);
 export const mailboxStatus = pgEnum("mailbox_status", [
   "pending",
@@ -448,7 +449,8 @@ export const mailboxConnections = pgTable(
     tenantId: text("tenant_id"),
     providerUserId: text("provider_user_id"),
     status: mailboxStatus("status").default("pending").notNull(),
-    deltaLink: text("delta_link"),
+    syncCursor: text("sync_cursor"),
+    encryptedPassword: text("encrypted_password"),
     subscriptionId: text("subscription_id"),
     subscriptionExpiresAt: timestamp("subscription_expires_at", {
       withTimezone: true,

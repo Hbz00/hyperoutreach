@@ -1,10 +1,7 @@
 import { desc } from "drizzle-orm";
 
+import { getCodexCliStatus } from "@/lib/codex/status";
 import { getDatabase } from "@/lib/db/client";
-import {
-  DEFAULT_OPENAI_FAST_MODEL,
-  DEFAULT_OPENAI_RESEARCH_MODEL,
-} from "@/lib/openai/config";
 import {
   agentRuns,
   graphNotificationReceipts,
@@ -12,6 +9,7 @@ import {
   workflowEvents,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { resolveProviderPresentation } from "@/modules/settings/provider-presentation";
 import { getOperatorSendingSettings } from "@/modules/settings/service";
 import { listSuppressions } from "@/modules/suppression/service";
 
@@ -23,8 +21,8 @@ export default async function SettingsPage({
   const session = await requireOperatorSession();
   const query = await searchParams;
   const db = getDatabase();
-  const openAIEnabled = process.env.OPENAI_PROVIDER === "openai";
   const [
+    aiProvider,
     settings,
     suppressions,
     mailboxes,
@@ -32,6 +30,7 @@ export default async function SettingsPage({
     runs,
     notificationFailures,
   ] = await Promise.all([
+    resolveProviderPresentation(process.env, getCodexCliStatus),
     getOperatorSendingSettings(db),
     listSuppressions(db, {}),
     db
@@ -85,39 +84,50 @@ export default async function SettingsPage({
         <dl className="facts">
           <div>
             <dt>AI provider</dt>
-            <dd>{process.env.OPENAI_PROVIDER ?? "mock"}</dd>
+            <dd>{aiProvider.provider}</dd>
           </div>
           <div>
             <dt>Research model</dt>
-            <dd>
-              {openAIEnabled
-                ? (process.env.OPENAI_RESEARCH_MODEL ??
-                  DEFAULT_OPENAI_RESEARCH_MODEL)
-                : "deterministic-mock"}
-            </dd>
+            <dd>{aiProvider.researchModel}</dd>
           </div>
           <div>
-            <dt>Fast model</dt>
-            <dd>
-              {openAIEnabled
-                ? (process.env.OPENAI_FAST_MODEL ?? DEFAULT_OPENAI_FAST_MODEL)
-                : "deterministic-mock"}
-            </dd>
+            <dt>Non-web model</dt>
+            <dd>{aiProvider.nonWebModel}</dd>
           </div>
+          {aiProvider.codexStatus ? (
+            <div>
+              <dt>Codex CLI status</dt>
+              <dd>{aiProvider.codexStatus}</dd>
+            </div>
+          ) : null}
           <div>
-            <dt>Mail provider</dt>
-            <dd>{process.env.MAIL_PROVIDER ?? "mock"}</dd>
+            <dt>Mail provider fallback</dt>
+            <dd>
+              {process.env.MAIL_PROVIDER ?? "mock"} (connected mailboxes are
+              resolved individually)
+            </dd>
           </div>
           <div>
             <dt>Workflow provider</dt>
-            <dd>{process.env.WORKFLOW_PROVIDER ?? "mock"}</dd>
+            <dd>{aiProvider.workflowProvider}</dd>
           </div>
         </dl>
+        {aiProvider.configurationNotice ? (
+          <p className="alert" role="status">
+            {aiProvider.configurationNotice}
+          </p>
+        ) : null}
+        {aiProvider.codexStatusNote ? (
+          <p className="muted">{aiProvider.codexStatusNote}</p>
+        ) : null}
+        {aiProvider.sourceProvenanceNote ? (
+          <p className="muted">{aiProvider.sourceProvenanceNote}</p>
+        ) : null}
         <p className="muted">Secret values are never rendered.</p>
       </section>
       <section className="panel">
         <div className="panel-heading">
-          <h2>Microsoft & mailbox connections</h2>
+          <h2>Mailbox connections</h2>
           <a
             className="button-link"
             href="/api/integrations/microsoft/authorize"
@@ -149,7 +159,7 @@ export default async function SettingsPage({
                   <td>{mailbox.lastSyncedAt?.toLocaleString() ?? "Never"}</td>
                   <td>
                     <div className="header-actions">
-                      {mailbox.provider === "microsoft_graph" ? (
+                      {mailbox.provider !== "mock" ? (
                         <>
                           <form
                             action="/api/operator/commands/sync-mailbox"
@@ -198,6 +208,104 @@ export default async function SettingsPage({
             </tbody>
           </table>
         </div>
+        <h3>Connect an SMTP/IMAP mailbox</h3>
+        <p className="muted">
+          For mailboxes without Microsoft 365 OAuth (university or company
+          webmail, Zimbra, etc.). We verify IMAP login, the Drafts and Sent
+          folders, then SMTP login before saving anything — nothing is ever sent
+          as part of this check. Submitting this form again with working
+          credentials is also how a revoked mailbox gets reconnected.
+        </p>
+        <form
+          action="/api/operator/commands/connect-smtp-mailbox"
+          method="post"
+          className="form-grid"
+        >
+          <input type="hidden" name="csrf" value={session.csrfToken} />
+          <label>
+            Email address
+            <input
+              name="email"
+              type="email"
+              required
+              placeholder="you@example.edu"
+            />
+          </label>
+          <label>
+            Login username
+            <input
+              name="username"
+              required
+              placeholder="e.g. corentin.sacazes"
+            />
+            <small>
+              The login your mail server expects — it may differ from the email
+              address above.
+            </small>
+          </label>
+          <label>
+            IMAP host
+            <input
+              name="imapHost"
+              required
+              placeholder="e.g. webmail.example.edu"
+            />
+          </label>
+          <label>
+            IMAP port
+            <input
+              name="imapPort"
+              type="number"
+              min={1}
+              max={65535}
+              defaultValue={993}
+              required
+            />
+          </label>
+          <label>
+            IMAP security
+            <select name="imapSecurity" defaultValue="tls">
+              <option value="tls">TLS (implicit — typically port 993)</option>
+              <option value="starttls">STARTTLS (typically port 143)</option>
+            </select>
+          </label>
+          <label>
+            SMTP host
+            <input
+              name="smtpHost"
+              required
+              placeholder="e.g. webmail.example.edu"
+            />
+          </label>
+          <label>
+            SMTP port
+            <input
+              name="smtpPort"
+              type="number"
+              min={1}
+              max={65535}
+              defaultValue={587}
+              required
+            />
+          </label>
+          <label>
+            SMTP security
+            <select name="smtpSecurity" defaultValue="starttls">
+              <option value="starttls">STARTTLS (typically port 587)</option>
+              <option value="tls">TLS (implicit — typically port 465)</option>
+            </select>
+          </label>
+          <label>
+            Password
+            <input
+              name="password"
+              type="password"
+              required
+              autoComplete="off"
+            />
+          </label>
+          <button>Connect mailbox</button>
+        </form>
       </section>
       <section className="panel">
         <h2>Sending policy</h2>

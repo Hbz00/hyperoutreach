@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-import type { EncryptionKeyring } from "@/lib/microsoft/token-crypto";
+import {
+  parseEncryptionKeyring,
+  type EncryptionKeyring,
+} from "@/lib/microsoft/token-crypto";
 
 export const MICROSOFT_DELEGATED_SCOPES = [
   "openid",
@@ -41,31 +44,23 @@ export class MicrosoftConfigurationError extends Error {
   override readonly name = "MicrosoftConfigurationError";
 }
 
+/** Delegates the actual parsing to the shared `parseEncryptionKeyring`
+ * (`token-crypto.ts`) — this wrapper exists only to keep every failure
+ * surfaced by `requireMicrosoftConfig` a `MicrosoftConfigurationError`,
+ * matching its other validation failures, rather than a bare `Error`. */
 function parseKeyring(
   serialized: string,
   activeKeyId: string,
 ): EncryptionKeyring {
-  const keys: Record<string, Buffer> = {};
-  for (const entry of serialized.split(",")) {
-    const separator = entry.indexOf(":");
-    if (separator <= 0)
-      throw new MicrosoftConfigurationError("Invalid token encryption keyring");
-    const id = entry.slice(0, separator).trim();
-    const encoded = entry.slice(separator + 1).trim();
-    const key = Buffer.from(encoded, "base64");
-    if (!id || key.length !== 32) {
-      throw new MicrosoftConfigurationError(
-        "Every token encryption key must be 32 bytes",
-      );
-    }
-    keys[id] = key;
-  }
-  if (!keys[activeKeyId]) {
+  try {
+    return parseEncryptionKeyring(serialized, activeKeyId);
+  } catch (error) {
     throw new MicrosoftConfigurationError(
-      "Active token encryption key is missing from keyring",
+      error instanceof Error
+        ? error.message
+        : "Invalid token encryption keyring",
     );
   }
-  return { activeKeyId, keys };
 }
 
 export function requireMicrosoftConfig(

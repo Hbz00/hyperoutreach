@@ -9,7 +9,7 @@ export type MailDraftInput = {
   signal?: AbortSignal;
 };
 
-export type MailProviderKind = "mock" | "microsoft_graph";
+export type MailProviderKind = "mock" | "microsoft_graph" | "smtp_imap";
 
 export type MailDraft = { draftId: string };
 
@@ -25,6 +25,14 @@ export type MailReconciliation =
   | ({ status: "drafted" } & MailDraft)
   | ({ status: "accepted" } & MailDraft)
   | ({ status: "sent"; draftId: string } & SentMail)
+  | {
+      status: "rejected";
+      draftId: string;
+      responseCode: number;
+      response?: string;
+      smtpErrorCode?: string;
+      hardBounce: boolean;
+    }
   | null;
 
 export interface MailProvider {

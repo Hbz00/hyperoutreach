@@ -26,7 +26,8 @@ describe("workflow dispatcher contracts", () => {
       "maintainGraphSubscriptionsTask",
       "personalizeMessageTask",
       "reconcileDueFollowUpsTask",
-      "reconcileGraphDeltaTask",
+      "reconcileInboundMailboxTask",
+      "reconcileInboundMailboxesTask",
       "recoverStaleWorkTask",
       "sendApprovedMessageTask",
     ]);
@@ -44,7 +45,8 @@ describe("workflow dispatcher contracts", () => {
       "advance-sequence",
       "reconcile-due-follow-ups",
       "drain-graph-webhooks",
-      "reconcile-graph-delta",
+      "reconcile-inbound-mailbox",
+      "reconcile-inbound-mailboxes",
       "maintain-graph-subscriptions",
       "recover-stale-work",
     ]);
@@ -86,22 +88,22 @@ describe("workflow dispatcher contracts", () => {
 
     await expect(
       dispatcher.dispatch({
-        task: "reconcile-graph-delta",
+        task: "reconcile-inbound-mailbox",
         payload: { mailboxId: "0260a999-4faa-4590-aadc-fd65c27c0ce7" },
         idempotencyKey:
           "delta:0260a999-4faa-4590-aadc-fd65c27c0ce7:2026-08-12T10:00",
       }),
     ).resolves.toEqual({ runId: "run_trigger_1", duplicate: false });
     expect(createIdempotencyKey).toHaveBeenCalledWith(
-      "reconcile-graph-delta:delta:0260a999-4faa-4590-aadc-fd65c27c0ce7:2026-08-12T10:00",
+      "reconcile-inbound-mailbox:delta:0260a999-4faa-4590-aadc-fd65c27c0ce7:2026-08-12T10:00",
       { scope: "global" },
     );
     expect(trigger).toHaveBeenCalledWith(
-      "reconcile-graph-delta",
+      "reconcile-inbound-mailbox",
       { mailboxId: "0260a999-4faa-4590-aadc-fd65c27c0ce7" },
       {
         idempotencyKey:
-          "hash:reconcile-graph-delta:delta:0260a999-4faa-4590-aadc-fd65c27c0ce7:2026-08-12T10:00",
+          "hash:reconcile-inbound-mailbox:delta:0260a999-4faa-4590-aadc-fd65c27c0ce7:2026-08-12T10:00",
       },
     );
   });

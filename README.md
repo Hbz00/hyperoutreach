@@ -119,19 +119,72 @@ operational state and mailbox assignment remain updateable. Tables with an
 
 Narrow account-discovery, account-research, contact-discovery,
 personalization, and reply-classification agents share a strict structured-output
-boundary. The real implementation uses OpenAI's Responses API, current
-`web_search`, and Zod-derived strict JSON schemas. It never falls back silently
-when `OPENAI_PROVIDER=openai`: `OPENAI_API_KEY` is then required. Research and
-fast-model defaults are `gpt-5.6-terra` and `gpt-5.6-luna`; both are configurable.
+boundary. `OPENAI_PROVIDER=openai` sends every AI task through OpenAI's Responses
+API, current `web_search`, and Zod-derived strict JSON schemas.
+
+`OPENAI_PROVIDER=codex` is an optional mode for a local, single-operator
+installation. One locally installed Codex CLI provider uses the operator's
+authenticated ChatGPT account for every AI task. Research requests enable live
+web search with `--search`; personalization and reply classification keep web
+search disabled. Codex mode does not construct an OpenAI API client and does not
+require `OPENAI_API_KEY`. A Codex failure fails the current task and never
+silently falls back to the API.
+
+Before enabling the mode, install Codex locally and authenticate it with
+`codex login`. A successful `codex login status` confirms authentication only;
+it does not prove that the installed CLI supports Hyperoutreach's hardened
+invocation. That invocation is tested with Codex CLI 0.147.0 and fails closed if
+required flags or isolation settings are incompatible. Then configure the
+server-only environment and restart the application:
+
+```bash
+OPENAI_PROVIDER=codex
+WORKFLOW_PROVIDER=local
+CODEX_EXECUTABLE=codex
+CODEX_RESEARCH_MODEL=gpt-5.6-terra
+CODEX_FAST_MODEL=gpt-5.6-luna
+CODEX_TIMEOUT_MS=120000
+CODEX_MAX_CONCURRENCY=1
+```
+
+Codex mode requires local workflow execution and is rejected with
+`WORKFLOW_PROVIDER=trigger`; a hosted Trigger worker cannot use the operator
+machine's CLI installation or ChatGPT login.
+
+Codex JSONL proves that a web search occurred and records its query, but Codex
+CLI 0.147.0 does not expose the result URLs in the completed `web_search` event.
+Its validated HTTP(S) citations are therefore persisted as
+`model_declared_after_search`: the model declared them after an observed search,
+but Hyperoutreach cannot prove that each URL appeared in the hidden result set.
+Responses API sources are persisted separately as `tool_observed`, because they
+come directly from `web_search_call.action.sources`. The UI and audit data do
+not present these two provenance strengths as equivalent.
+
+This mode is not a hosted multi-user authentication mechanism and must not be
+used to expose one operator's Codex session to remote users. Hyperoutreach does
+not extract ChatGPT tokens or invoke the ChatGPT desktop app; it launches the
+authenticated Codex CLI as a constrained local subprocess. `/settings` reports
+only a sanitized installed/authenticated status and never displays account
+identity or secrets. Codex token usage is recorded when the CLI reports it, but
+dollar cost remains unavailable because ChatGPT-plan consumption is not API
+metering.
+
+`OPENAI_PROVIDER=mock` keeps all AI tasks deterministic and credential-free.
+OpenAI model names use `OPENAI_RESEARCH_MODEL` and `OPENAI_FAST_MODEL`; Codex
+uses `CODEX_RESEARCH_MODEL` and `CODEX_FAST_MODEL`. Their defaults are
+`gpt-5.6-terra` and `gpt-5.6-luna`. All live modes fail closed on missing or
+invalid configuration and never silently fall back to another provider.
 
 Credential-free development uses deterministic mock agents through the same
 interfaces. Each persisted operation records agent/model/prompt/schema versions,
-structured input/output, Responses ID, sources, detailed token/cache/reasoning
-usage, web-search call count, cost availability/value, completion state, and
-sanitized failures in `agent_runs`. Only HTTP(S) URLs observed in the actual
-Responses web-search source payload can support model claims. Account research
-has a configurable freshness TTL, a crash-recoverable ownership claim that avoids
-duplicate concurrent calls, and one snapshot reused by every contact. A global
+structured input/output, provider response/thread ID, sources, detailed
+token/cache/reasoning usage, web-search call count, cost availability/value,
+completion state, and sanitized failures in `agent_runs`. Provider sources carry
+their provenance strength: Responses URLs are tool-observed, while Codex URLs
+are model-declared after an observed search. Account research has a configurable
+freshness TTL, a crash-recoverable
+ownership claim that avoids duplicate concurrent calls, and one snapshot reused
+by every contact. A global
 LinkedIn identity only changes employers when current-employment evidence is
 validated; otherwise the result remains an explicit manual conflict. Evidence
 retrieval time is server-observed and repeated source URLs refresh provenance.
@@ -146,8 +199,9 @@ the explicit trusted-source allowlist supplied with persisted account research;
 provider output cannot introduce a new URL.
 
 Email resolution obtains public examples through a provenance-bearing
-`PublicEmailEvidenceProvider`; the real adapter uses Responses web search and
-binds every structured sample to an observed HTTP(S) source. It ignores examples
+`PublicEmailEvidenceProvider`; the selected live AI provider performs web search
+and binds every structured sample to a validated HTTP(S) source with its provider
+provenance marker. It ignores examples
 from other domains, excludes samples ambiguous across multiple conventions,
 deterministically infers supported address conventions, normalizes international
 names, and performs replaceable real/mock MX checks. RFC null MX means the domain
@@ -230,9 +284,39 @@ mailbox through a public HTTPS callback, create and renew its subscription, send
 one approved message to a controlled recipient, confirm its immutable Sent Items
 identity, reply, and verify both webhook and delta ingestion.
 
+## SMTP/IMAP mailboxes
+
+Mail delivery is selected per mailbox. In `/settings`, use **Connect an
+SMTP/IMAP mailbox** for providers that expose standard protocols (Zimbra,
+university/company webmail, Fastmail, and similar services). Enter the mailbox
+address, provider username, IMAP and SMTP endpoints, and preferably an
+app-specific password. The connection is saved only after IMAP authentication,
+Drafts/Sent folder discovery, and SMTP authentication all succeed.
+
+Only encrypted transports are accepted: implicit TLS or mandatory STARTTLS.
+`TOKEN_ENCRYPTION_ACTIVE_KEY_ID` and `TOKEN_ENCRYPTION_KEYS` are required because
+the password is stored as an AES-256-GCM envelope and is never rendered back to
+the operator. Disconnect waits for any in-flight mailbox action, then clears the
+password envelope, transport configuration, and inbound cursor.
+
+Trigger.dev reconciles every available SMTP/IMAP inbox once per minute through
+the shared durable inbound path. **Sync now** is an additional operator action,
+not a correctness requirement. Before classification or body persistence, mail
+must match an outbound identity; unrelated private mailbox traffic is ignored.
+Standard delivery-status reports become hard/soft bounce signals. Verified hard
+bounces stop the enrollment and suppress the recipient. Definite SMTP 5xx
+recipient refusals are terminal failures, while ambiguous socket failures remain
+quarantined to prevent duplicate sends.
+
+For local verification, `npm run db:up` starts loopback-only GreenMail and
+`npm run test:integration` executes the real TLS IMAP/SMTP round trip. The suite
+never uses production mailbox credentials.
+
 ## Durable workflows
 
-`WORKFLOW_PROVIDER=mock` is the credential-free default. It uses the same strict
+`WORKFLOW_PROVIDER=local` is the credential-free default. The legacy value
+`mock` remains a compatibility alias for this same local executor; it does not
+select mock AI. The local executor uses the same strict
 task payloads and application services as production, records dispatch and every
 executor attempt in PostgreSQL, and relies on database constraints, claims, and
 expected schedule tokens for idempotency. It does not make in-memory workflow
@@ -260,8 +344,9 @@ npm run trigger:deploy
 
 The pinned SDK/CLI version is 4.5.10. `trigger.config.ts` uses the Node 22 runtime
 and the checked-in `trigger/` directory. Declarative schedules scan due
-follow-ups every minute and run Graph/subscription and stale-work recovery every
-five minutes. Account discovery/research, contact discovery, email resolution,
+follow-ups and SMTP/IMAP inboxes every minute, and run Graph/subscription and
+stale-work recovery every five minutes. Account discovery/research, contact
+discovery, email resolution,
 personalization, deterministic generation, approved sending, sequence advance,
 webhook drain, and delta reconciliation also have narrow task entrypoints.
 

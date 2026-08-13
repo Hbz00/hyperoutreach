@@ -15,5 +15,37 @@ services:
     volumes:
       - hyperoutreach_postgres_data:/var/lib/postgresql/data
 
+  # Task 14: a real IMAP/SMTP server for tests/integration/smtp-imap-round-trip.test.ts
+  # -- the only place in this codebase's tests that actually opens a socket to a
+  # mail server, everything else doubles ImapPort/SmtpPort. GreenMail's default
+  # image already ships with `-Dgreenmail.setup.test.all` (every protocol variant
+  # listening, including the TLS-wrapped ones our transport schema requires --
+  # there is no plaintext path) and `-Dgreenmail.auth.disabled` (any username/
+  # password is accepted and the mailbox is auto-provisioned on first use) baked
+  # into its own `GREENMAIL_OPTS` default -- verified by inspecting the published
+  # image, not assumed from its docs. Host ports chosen to be distinct from every
+  # port already claimed in this repo (postgres 55432, Next.js dev server 3000):
+  # 3993 for IMAPS (mirrors the brief's own number) and 3587 for SMTPS (587 is the
+  # conventional SMTP submission port; GreenMail's own "+3000" numbering scheme
+  # would normally put its TLS SMTP variant at 3465, so this is a deliberate
+  # host-side remap onto the brief's requested 3587, not GreenMail's native port).
+  # Both map onto GreenMail's *implicit*-TLS ports (imaps 3993, smtps 3465)
+  # rather than its plaintext+STARTTLS ports, so `security: "tls"` -- not
+  # "starttls" -- is what `tests/integration/smtp-imap-round-trip.test.ts` must
+  # configure.
+  greenmail:
+    image: greenmail/standalone:2.1.6
+    ports:
+      - "127.0.0.1:3993:3993"
+      - "127.0.0.1:3587:3465"
+    healthcheck:
+      # The image has neither `curl` nor `wget` (bare Ubuntu + a JRE) -- `bash`
+      # is present, so `/dev/tcp` is the cheapest "is IMAPS actually accepting
+      # connections yet" probe available inside the container.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/3993' || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
 volumes:
   hyperoutreach_postgres_data:

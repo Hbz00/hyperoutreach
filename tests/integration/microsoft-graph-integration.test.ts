@@ -18,6 +18,7 @@ import {
   disconnectMicrosoftMailbox,
   getMicrosoftAccessToken,
 } from "@/modules/mailboxes/microsoft-oauth-service";
+import { GRAPH_DELTA_HEALTH_WORKFLOW_NAME } from "@/modules/mailboxes/microsoft-graph-inbound-naming";
 import {
   processGraphWebhook,
   reconcileGraphDelta,
@@ -32,6 +33,7 @@ import {
   renewDueGraphSubscriptions,
 } from "@/modules/mailboxes/microsoft-graph-subscription-service";
 import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
+import { createWorkflowTaskServices } from "@/modules/workflows/service-factory";
 
 const { testUrl } = resolveDatabaseUrls(process.env);
 const client = postgres(testUrl, { max: 6 });
@@ -193,7 +195,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
       .where(eq(schema.mailboxConnections.id, mailbox.id));
     expect(stored).toMatchObject({
       subscriptionId: "initial-subscription",
-      deltaLink: "https://graph.microsoft.com/v1.0/initial-delta",
+      syncCursor: "https://graph.microsoft.com/v1.0/initial-delta",
     });
   });
 
@@ -202,7 +204,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
     const mailbox = await insertMailbox({
       email: "reconnect@example.com",
       normalizedEmail: "reconnect@example.com",
-      deltaLink: "https://graph.microsoft.com/v1.0/existing-cursor",
+      syncCursor: "https://graph.microsoft.com/v1.0/existing-cursor",
       lastSyncedAt: anchor,
       status: "revoked",
     });
@@ -232,7 +234,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
       .from(schema.mailboxConnections)
       .where(eq(schema.mailboxConnections.id, mailbox.id));
     expect(stored).toMatchObject({
-      deltaLink: "https://graph.microsoft.com/v1.0/existing-cursor",
+      syncCursor: "https://graph.microsoft.com/v1.0/existing-cursor",
       lastSyncedAt: anchor,
     });
   });
@@ -481,7 +483,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
       status: "disconnected",
       encryptedRefreshToken: null,
       subscriptionId: null,
-      deltaLink: null,
+      syncCursor: null,
     });
   });
 
@@ -690,14 +692,14 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
       .select()
       .from(schema.mailboxConnections)
       .where(eq(schema.mailboxConnections.id, mailbox.id));
-    expect(stored?.deltaLink).toBe(
+    expect(stored?.syncCursor).toBe(
       "https://graph.microsoft.com/v1.0/delta-token",
     );
     const inbound = await db
       .select()
       .from(schema.inboundRecords)
       .where(eq(schema.inboundRecords.mailboxId, mailbox.id));
-    expect(inbound).toHaveLength(2);
+    expect(inbound).toHaveLength(0);
   });
 
   it("stages a webhook without Graph or classifier work and claims it once", async () => {
@@ -856,7 +858,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
     expect(quarantine).toMatchObject({ status: "scheduled" });
   });
 
-  it("does not advance delta state when inbound ingestion is not durable", async () => {
+  it("advances delta state when unrelated mail is ignored before a failing classifier", async () => {
     const anchor = new Date("2026-08-12T09:50:00.000Z");
     const mailbox = await insertMailbox({ lastSyncedAt: anchor });
     let requestedUrl = "";
@@ -893,13 +895,15 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
         },
         mailbox.id,
       ),
-    ).rejects.toThrow("Inbound delta processing not completed");
+    ).resolves.toMatchObject({ processed: 1, rebaselined: false });
     expect(decodeURIComponent(requestedUrl)).toContain(anchor.toISOString());
     const [stored] = await db
       .select()
       .from(schema.mailboxConnections)
       .where(eq(schema.mailboxConnections.id, mailbox.id));
-    expect(stored?.deltaLink).toBeNull();
+    expect(stored?.syncCursor).toBe(
+      "https://graph.microsoft.com/v1.0/must-not-advance",
+    );
     const [health] = await db
       .select()
       .from(schema.workflowEvents)
@@ -909,10 +913,70 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
           `graph:delta-health:${mailbox.id}`,
         ),
       );
-    expect(health).toMatchObject({
-      status: "failed",
-      error: "Microsoft Graph delta reconciliation failed",
+    expect(health).toMatchObject({ status: "succeeded", error: null });
+  });
+
+  it("agrees with the generic task dispatcher on the health workflow name — both producers read one constants module", async () => {
+    // Producer 1: reconcileGraphDelta, called directly — the path
+    // webhook/lifecycle/stale recovery still use, unchanged by Task 4.
+    const anchor = new Date("2026-08-12T09:50:00.000Z");
+    const directMailbox = await insertMailbox({ lastSyncedAt: anchor });
+    const graph = new MicrosoftGraphClient({
+      accessToken: async () => "access",
+      fetcher: async () => {
+        throw new Error("Graph unavailable");
+      },
     });
+    await expect(
+      reconcileGraphDelta(
+        db,
+        graph,
+        {
+          name: "failing-test-classifier",
+          classify: async () => {
+            throw new Error("offline");
+          },
+        },
+        directMailbox.id,
+      ),
+    ).rejects.toThrow();
+    const [directHealth] = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(
+        eq(
+          schema.workflowEvents.idempotencyKey,
+          `graph:delta-health:${directMailbox.id}`,
+        ),
+      );
+
+    // Producer 2: the generic "reconcile-inbound-mailbox" task, routed
+    // through inbound-source-bootstrap.ts's registry entry for
+    // microsoft_graph. No Microsoft env vars here, so requireMicrosoftConfig
+    // throws inside the health wrapper before any network call.
+    const dispatchMailbox = await insertMailbox({ lastSyncedAt: anchor });
+    const services = createWorkflowTaskServices(db, {});
+    await expect(
+      services["reconcile-inbound-mailbox"]({
+        mailboxId: dispatchMailbox.id,
+      }),
+    ).rejects.toThrow();
+    const [dispatchHealth] = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(
+        eq(
+          schema.workflowEvents.idempotencyKey,
+          `graph:delta-health:${dispatchMailbox.id}`,
+        ),
+      );
+
+    // Both real execution paths must land on the exact value the send gate
+    // in send-service.ts checks for. If either producer's literal (or the
+    // shared constant) drifted, one of these three equalities would break.
+    expect(directHealth?.workflowName).toBe(GRAPH_DELTA_HEALTH_WORKFLOW_NAME);
+    expect(dispatchHealth?.workflowName).toBe(GRAPH_DELTA_HEALTH_WORKFLOW_NAME);
+    expect(GRAPH_DELTA_HEALTH_WORKFLOW_NAME).toBe("graph_delta_health");
   });
 
   it("validates lifecycle notifications and marks missed-delivery recovery durably", async () => {
@@ -1066,7 +1130,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
 
   it("rebaselines an expired delta token and persists only the replacement deltaLink", async () => {
     const mailbox = await insertMailbox({
-      deltaLink: "https://graph.microsoft.com/v1.0/expired-token",
+      syncCursor: "https://graph.microsoft.com/v1.0/expired-token",
     });
     let calls = 0;
     const graph = new MicrosoftGraphClient({
@@ -1100,7 +1164,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
         and(
           eq(schema.mailboxConnections.id, mailbox.id),
           eq(
-            schema.mailboxConnections.deltaLink,
+            schema.mailboxConnections.syncCursor,
             "https://graph.microsoft.com/v1.0/rebased-token",
           ),
         ),

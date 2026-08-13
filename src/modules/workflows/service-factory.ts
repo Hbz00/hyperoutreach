@@ -1,39 +1,45 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
-import { enrollments, messages } from "@/lib/db/schema";
+import { enrollments, mailboxConnections, messages } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import { requireMicrosoftConfig } from "@/lib/microsoft/config";
-import { MicrosoftGraphClient } from "@/lib/microsoft/graph-client";
-import { requireOpenAIConfig } from "@/lib/openai/config";
-import OpenAI from "openai";
-import {
-  OpenAIResponsesProvider,
-  type ResponsesClient,
-} from "@/lib/openai/providers/responses-provider";
-import { createAgentSet } from "@/modules/agents/factory";
+import { createProductionAIProviderBundle } from "@/lib/openai/production-provider-bundle";
+import type { AIProviderBundle } from "@/lib/openai/provider-bundle";
+import { createAgentSetFromBundle } from "@/modules/agents/factory";
 import {
   MockDnsMxResolver,
   NodeDnsMxResolver,
+  type DnsMxResolver,
 } from "@/modules/email-resolution/dns";
 import { NoResultEmailEnrichmentProvider } from "@/modules/email-resolution/providers";
 import {
   OpenAIPublicEmailEvidenceProvider,
   StaticPublicEmailEvidenceProvider,
+  type PublicEmailEvidenceProvider,
 } from "@/modules/email-resolution/public-evidence-provider";
 import { resolveContactEmail } from "@/modules/email-resolution/service";
+import {
+  createCountingIngest,
+  createInboundCursorWriter,
+  reconcileInboundMailbox,
+  withInboundReconciliationHealth,
+} from "@/modules/mailboxes/inbound-reconciliation";
+import "@/modules/mailboxes/inbound-source-bootstrap";
+import { resolveInboundProvider } from "@/modules/mailboxes/inbound-source-registry";
 import { createMailProviderForMailbox } from "@/modules/mailboxes/provider-factory";
 import {
-  reconcileGraphDelta,
   reconcilePendingGraphLifecycleEvents,
   reconcilePendingGraphNotifications,
   runMicrosoftGraphMaintenance,
 } from "@/modules/mailboxes/microsoft-graph-sync-service";
-import { getMicrosoftAccessToken } from "@/modules/mailboxes/microsoft-oauth-service";
+import { createMailboxGraphClient } from "@/modules/mailboxes/microsoft-oauth-service";
 import { generateOutreachProposal } from "@/modules/messages/generation-service";
 import { sendApprovedMessage } from "@/modules/messages/send-service";
-import { OpenAIReplyClassifier } from "@/modules/agents/openai-agents";
-import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
-import { reconcilePendingInboundRecords } from "@/modules/replies/inbound-service";
+import { createReplyClassifierFromBundle } from "@/modules/replies/classifier-factory";
+import {
+  ingestMatchedInboundMessage,
+  reconcilePendingInboundRecords,
+} from "@/modules/replies/inbound-service";
 import { discoverAccounts } from "@/modules/research/account-discovery-service";
 import { researchAccount } from "@/modules/research/account-research-service";
 import { discoverContacts } from "@/modules/research/contact-discovery-service";
@@ -81,10 +87,7 @@ async function mailProvider(
   environment: Record<string, string | undefined>,
 ) {
   return createMailProviderForMailbox(db, mailboxId, {
-    microsoftConfig:
-      environment.MAIL_PROVIDER === "microsoft_graph"
-        ? requireMicrosoftConfig(environment)
-        : undefined,
+    environment,
   });
 }
 
@@ -94,48 +97,118 @@ function microsoftDependencies(
 ) {
   const config = requireMicrosoftConfig(environment);
   const graphForMailbox = (mailboxId: string) =>
-    new MicrosoftGraphClient({
-      accessToken: () => getMicrosoftAccessToken(db, config, mailboxId),
-    });
+    createMailboxGraphClient(db, config, mailboxId);
   return { db, config, graphForMailbox };
+}
+
+export type WorkflowProviderDependencies = {
+  createBundle(
+    environment: Record<string, string | undefined>,
+  ): AIProviderBundle;
+  createRealDns(): DnsMxResolver;
+  createMockDns(): DnsMxResolver;
+};
+
+const productionProviderDependencies: WorkflowProviderDependencies = {
+  createBundle: createProductionAIProviderBundle,
+  createRealDns: () => new NodeDnsMxResolver(),
+  createMockDns: () => new MockDnsMxResolver(true),
+};
+
+export function composeEmailResolutionProviders(
+  bundle: AIProviderBundle,
+  dependencies: Pick<
+    WorkflowProviderDependencies,
+    "createRealDns" | "createMockDns"
+  >,
+): { dns: DnsMxResolver; publicEvidence: PublicEmailEvidenceProvider } {
+  if (!bundle.usesRealInfrastructure) {
+    return {
+      dns: dependencies.createMockDns(),
+      publicEvidence: new StaticPublicEmailEvidenceProvider([]),
+    };
+  }
+  return {
+    dns: dependencies.createRealDns(),
+    publicEvidence: new OpenAIPublicEmailEvidenceProvider(
+      bundle.research.provider,
+      bundle.research.model,
+    ),
+  };
 }
 
 export function createWorkflowTaskServices(
   db: AppDatabase,
   environment: Record<string, string | undefined> = process.env,
+  providerDependencies: WorkflowProviderDependencies = productionProviderDependencies,
 ): WorkflowTaskServices {
-  const agents = createAgentSet(environment);
-  const openAIConfig =
-    environment.OPENAI_PROVIDER === "openai"
-      ? requireOpenAIConfig(environment)
-      : null;
-  const openAIProvider = openAIConfig
-    ? new OpenAIResponsesProvider(
-        new OpenAI({
-          apiKey: openAIConfig.apiKey,
-        }) as unknown as ResponsesClient,
-      )
-    : null;
-  const classifier = openAIConfig
-    ? new OpenAIReplyClassifier(openAIProvider!, openAIConfig.fastModel)
-    : new DeterministicReplyClassifier();
+  const providerBundle = providerDependencies.createBundle(environment);
+  const agents = createAgentSetFromBundle(providerBundle);
+  const classifier = createReplyClassifierFromBundle(providerBundle);
   const runEmailResolution = (payload: {
     contactId: string;
     confidenceThreshold?: number;
   }) => {
-    const openai = environment.OPENAI_PROVIDER === "openai";
+    const emailProviders = composeEmailResolutionProviders(
+      providerBundle,
+      providerDependencies,
+    );
     return resolveContactEmail(
       db,
-      openai ? new NodeDnsMxResolver() : new MockDnsMxResolver(true),
+      emailProviders.dns,
       new NoResultEmailEnrichmentProvider(),
       payload,
       {
-        publicEvidenceProvider: openai
-          ? new OpenAIPublicEmailEvidenceProvider(
-              openAIProvider!,
-              openAIConfig!.researchModel,
-            )
-          : new StaticPublicEmailEvidenceProvider([]),
+        publicEvidenceProvider: emailProviders.publicEvidence,
+      },
+    );
+  };
+  const reconcileOneInboundMailbox = async (mailboxId: string) => {
+    const [mailbox] = await db
+      .select()
+      .from(mailboxConnections)
+      .where(eq(mailboxConnections.id, mailboxId))
+      .limit(1);
+    if (!mailbox) throw new Error("Mailbox not found");
+    const entry = resolveInboundProvider(mailbox.provider);
+    if (entry.skipReason) {
+      return { skipped: true, reason: entry.skipReason };
+    }
+    return withInboundReconciliationHealth(
+      db,
+      mailbox.id,
+      entry.naming(mailbox.id),
+      async () => {
+        const roundStartedAt = new Date();
+        const [current] = await db
+          .select()
+          .from(mailboxConnections)
+          .where(eq(mailboxConnections.id, mailbox.id))
+          .limit(1);
+        if (!current) throw new Error("Mailbox not found");
+        const source = await entry.createSource(db, current, { environment });
+        const counted = createCountingIngest((message) =>
+          ingestMatchedInboundMessage(db, classifier, message),
+        );
+        const result = await reconcileInboundMailbox(
+          { source, mailboxId: current.id },
+          {
+            loadCursor: async () => current.syncCursor,
+            saveCursor: createInboundCursorWriter(db, {
+              events: entry.cursorEvents(),
+              startedAt: roundStartedAt,
+              payload: (round) => ({
+                processed: counted.processed(),
+                rebaselined: round.rebaselined,
+              }),
+            }),
+            ingest: counted.ingest,
+          },
+        );
+        return {
+          processed: result.processed,
+          rebaselined: result.rebaselined,
+        };
       },
     );
   };
@@ -207,17 +280,37 @@ export function createWorkflowTaskServices(
       );
       return { notifications, lifecycle };
     },
-    "reconcile-graph-delta": async (payload) => {
-      if (environment.MAIL_PROVIDER !== "microsoft_graph") {
-        return { skipped: true, reason: "microsoft_graph_disabled" };
+    "reconcile-inbound-mailbox": (payload) =>
+      reconcileOneInboundMailbox(payload.mailboxId),
+    "reconcile-inbound-mailboxes": async (payload) => {
+      const rows = await db
+        .select({ id: mailboxConnections.id })
+        .from(mailboxConnections)
+        .where(
+          and(
+            eq(mailboxConnections.provider, "smtp_imap"),
+            eq(mailboxConnections.status, "available"),
+          ),
+        )
+        .limit(payload.limit ?? 50);
+      const results = [];
+      for (const row of rows) {
+        try {
+          results.push({
+            mailboxId: row.id,
+            result: await reconcileOneInboundMailbox(row.id),
+          });
+        } catch (error) {
+          results.push({
+            mailboxId: row.id,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Inbound reconciliation failed",
+          });
+        }
       }
-      const { graphForMailbox } = microsoftDependencies(environment, db);
-      return reconcileGraphDelta(
-        db,
-        graphForMailbox(payload.mailboxId),
-        classifier,
-        payload.mailboxId,
-      );
+      return { observedAt: payload.observedAt, results };
     },
     "maintain-graph-subscriptions": async (payload) => {
       if (environment.MAIL_PROVIDER !== "microsoft_graph") {

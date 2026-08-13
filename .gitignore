@@ -12,4 +12,9 @@ drizzle/meta/_journal.json.tmp
 *.tsbuildinfo
 next-env.d.ts
 
+# Scratch de l'execution pilotee par sous-agents : ledger, briefs, rapports,
+# paquets de revue et instantanes d'arbre. Ne doit jamais entrer dans un commit.
+.superpowers/
+.claude/worktrees/
+
 # Local PostgreSQL data is stored in a named Docker volume.

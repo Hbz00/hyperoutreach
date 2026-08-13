@@ -62,6 +62,22 @@ test("operates the mock outreach lifecycle through authenticated application end
   });
   const prospects = await browser.get("/prospects");
   const csrf = hidden(await prospects.text(), "csrf");
+  const settingsForm = new FormData();
+  settingsForm.set("csrf", csrf);
+  settingsForm.set("timezone", "UTC");
+  for (const day of ["0", "1", "2", "3", "4", "5", "6"]) {
+    settingsForm.append("workingDays", day);
+  }
+  settingsForm.set("workingStartMinute", "0");
+  settingsForm.set("workingEndMinute", "1440");
+  settingsForm.set("mailboxDailyCap", "10000");
+  settingsForm.set("campaignDailyCap", "100000");
+  settingsForm.set("mailboxMinimumDelaySeconds", "0");
+  settingsForm.set("contactMinimumDelayMinutes", "0");
+  settingsForm.set("crossCampaignCooldownDays", "0");
+  await browser.post("/api/operator/commands/update-settings", {
+    form: settingsForm,
+  });
   const unique = crypto.randomUUID().slice(0, 8);
   const prospectForm = {
     csrf,

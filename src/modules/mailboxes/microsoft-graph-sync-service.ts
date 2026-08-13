@@ -15,15 +15,23 @@ import {
   GraphApiError,
   type MicrosoftGraphClient,
 } from "@/lib/microsoft/graph-client";
+import { graphMessageToInbound } from "@/modules/mailboxes/microsoft-graph-message";
+import { createMicrosoftGraphInboundSource } from "@/modules/mailboxes/microsoft-graph-inbound-source";
 import {
-  graphMessageSchema,
-  graphMessageToInbound,
-} from "@/modules/mailboxes/microsoft-graph-message";
+  graphDeltaCursorEvents,
+  graphDeltaHealthOptions,
+} from "@/modules/mailboxes/microsoft-graph-inbound-naming";
+import {
+  createCountingIngest,
+  createInboundCursorWriter,
+  reconcileInboundMailbox,
+  withInboundReconciliationHealth,
+} from "@/modules/mailboxes/inbound-reconciliation";
 import {
   parseGraphNotifications,
   validateWebhookClientState,
 } from "@/modules/mailboxes/microsoft-graph-webhook";
-import { ingestInboundMessage } from "@/modules/replies/inbound-service";
+import { ingestMatchedInboundMessage } from "@/modules/replies/inbound-service";
 import type { ReplyClassifier } from "@/modules/replies/reply-classifier";
 import {
   ensureGraphSubscription,
@@ -31,17 +39,6 @@ import {
   recoverGraphSubscription,
   renewDueGraphSubscriptions,
 } from "@/modules/mailboxes/microsoft-graph-subscription-service";
-
-const deltaPageSchema = z.object({
-  value: z.array(
-    z.union([
-      graphMessageSchema,
-      z.object({ id: z.string(), "@removed": z.unknown() }),
-    ]),
-  ),
-  "@odata.nextLink": z.url().optional(),
-  "@odata.deltaLink": z.url().optional(),
-});
 
 function notificationKey(input: {
   notificationId?: string;
@@ -366,7 +363,11 @@ export async function reconcilePendingGraphNotifications(
               .onConflictDoNothing();
           }
           if (inbound) {
-            const result = await ingestInboundMessage(db, classifier, inbound);
+            const result = await ingestMatchedInboundMessage(
+              db,
+              classifier,
+              inbound,
+            );
             if (
               !result.ok &&
               (result.code === "DATABASE_ERROR" ||
@@ -575,168 +576,55 @@ export async function reconcileGraphDelta(
   classifier: ReplyClassifier,
   mailboxId: string,
 ) {
-  return withActionLocks(
+  return withInboundReconciliationHealth(
     db,
-    [`microsoft-graph-delta:${mailboxId}`],
+    mailboxId,
+    // Graph predates the shared naming and keeps its own keys and events: the
+    // send gate reads the `graph_delta_health` workflow and operators watch
+    // these event names. Sourced from microsoft-graph-inbound-naming.ts so
+    // this literal set has exactly one place of truth, shared with the
+    // generic "reconcile-inbound-mailbox" task's registry entry.
+    graphDeltaHealthOptions(mailboxId),
     async () => {
-      const startedAt = new Date();
-      const key = `graph:delta-health:${mailboxId}`;
-      await withActionLocks(
-        db,
-        [actionLockKey.mailbox(mailboxId)],
-        async (lockedDb) => {
-          await lockedDb
-            .insert(workflowEvents)
-            .values({
-              entityType: "mailbox",
-              entityId: mailboxId,
-              event: "graph.delta_failed",
-              workflowName: "graph_delta_health",
-              idempotencyKey: key,
-              status: "started",
-              startedAt,
-            })
-            .onConflictDoNothing();
-          await lockedDb
-            .update(workflowEvents)
-            .set({
-              status: "started",
-              startedAt,
-              completedAt: null,
-              scheduledAt: null,
-              error: null,
-            })
-            .where(eq(workflowEvents.idempotencyKey, key));
+      const roundStartedAt = new Date();
+      const [mailbox] = await db
+        .select()
+        .from(mailboxConnections)
+        .where(eq(mailboxConnections.id, mailboxId))
+        .limit(1);
+      if (!mailbox || mailbox.provider !== "microsoft_graph") {
+        throw new Error("Microsoft mailbox not found");
+      }
+      if (!mailbox.lastSyncedAt && !mailbox.syncCursor) {
+        throw new Error("Microsoft mailbox sync anchor is missing");
+      }
+      // The audit payload needs the count while the round is still running,
+      // because `saveCursor` is only told about the cursor.
+      const counted = createCountingIngest((message) =>
+        ingestMatchedInboundMessage(db, classifier, message),
+      );
+      const result = await reconcileInboundMailbox(
+        {
+          source: createMicrosoftGraphInboundSource(graph, {
+            id: mailbox.id,
+            since: mailbox.lastSyncedAt ?? new Date(0),
+          }),
+          mailboxId: mailbox.id,
+        },
+        {
+          loadCursor: async () => mailbox.syncCursor,
+          saveCursor: createInboundCursorWriter(db, {
+            events: graphDeltaCursorEvents(),
+            startedAt: roundStartedAt,
+            payload: (round) => ({
+              processed: counted.processed(),
+              rebaselined: round.rebaselined,
+            }),
+          }),
+          ingest: counted.ingest,
         },
       );
-      try {
-        const result = await reconcileGraphDeltaLocked(
-          db,
-          graph,
-          classifier,
-          mailboxId,
-        );
-        const completedAt = new Date();
-        await withActionLocks(
-          db,
-          [actionLockKey.mailbox(mailboxId)],
-          (lockedDb) =>
-            lockedDb
-              .update(workflowEvents)
-              .set({
-                status: "succeeded",
-                completedAt,
-                scheduledAt: null,
-                error: null,
-              })
-              .where(eq(workflowEvents.idempotencyKey, key)),
-        );
-        return result;
-      } catch (error) {
-        const failedAt = new Date();
-        await withActionLocks(
-          db,
-          [actionLockKey.mailbox(mailboxId)],
-          (lockedDb) =>
-            lockedDb
-              .update(workflowEvents)
-              .set({
-                status: "failed",
-                scheduledAt: new Date(failedAt.getTime() + 60_000),
-                completedAt: failedAt,
-                error: "Microsoft Graph delta reconciliation failed",
-              })
-              .where(eq(workflowEvents.idempotencyKey, key)),
-        );
-        throw error;
-      }
+      return { processed: result.processed, rebaselined: result.rebaselined };
     },
   );
-}
-
-async function reconcileGraphDeltaLocked(
-  db: AppDatabase,
-  graph: MicrosoftGraphClient,
-  classifier: ReplyClassifier,
-  mailboxId: string,
-) {
-  const roundStartedAt = new Date();
-  const [mailbox] = await db
-    .select()
-    .from(mailboxConnections)
-    .where(eq(mailboxConnections.id, mailboxId))
-    .limit(1);
-  if (!mailbox || mailbox.provider !== "microsoft_graph") {
-    throw new Error("Microsoft mailbox not found");
-  }
-  const select =
-    "id,internetMessageId,conversationId,subject,receivedDateTime,from,toRecipients,body,internetMessageHeaders";
-  if (!mailbox.lastSyncedAt && !mailbox.deltaLink) {
-    throw new Error("Microsoft mailbox sync anchor is missing");
-  }
-  const initialSince = mailbox.lastSyncedAt ?? new Date(0);
-  const filter = encodeURIComponent(
-    `receivedDateTime ge ${initialSince.toISOString()}`,
-  );
-  const initial = `/me/mailFolders/Inbox/messages/delta?changeType=created&$select=${select}&$filter=${filter}`;
-  let url = mailbox.deltaLink ?? initial;
-  let processed = 0;
-  let rebaselined = false;
-  let finalDeltaLink: string | undefined;
-  for (;;) {
-    let page;
-    try {
-      page = deltaPageSchema.parse(await graph.get<unknown>(url));
-    } catch (error) {
-      if (
-        !rebaselined &&
-        error instanceof GraphApiError &&
-        (error.status === 410 || error.code === "syncStateNotFound")
-      ) {
-        rebaselined = true;
-        url = initial;
-        continue;
-      }
-      throw error;
-    }
-    for (const raw of page.value) {
-      if ("@removed" in raw) continue;
-      const result = await ingestInboundMessage(
-        db,
-        classifier,
-        graphMessageToInbound(mailbox.id, `delta:${raw.id}`, raw),
-      );
-      if (!result.ok && result.code !== "IN_PROGRESS") {
-        throw new Error("Inbound delta processing not completed");
-      }
-      if (result.ok && result.disposition !== "existing") processed += 1;
-    }
-    const next = page["@odata.nextLink"];
-    if (next) {
-      url = next;
-      continue;
-    }
-    finalDeltaLink = page["@odata.deltaLink"];
-    break;
-  }
-  if (!finalDeltaLink)
-    throw new Error("Microsoft Graph delta did not return a deltaLink");
-  const now = new Date();
-  const safeRebaselineAnchor = new Date(roundStartedAt.getTime() - 5 * 60_000);
-  await db.transaction(async (tx) => {
-    await tx
-      .update(mailboxConnections)
-      .set({ deltaLink: finalDeltaLink, lastSyncedAt: safeRebaselineAnchor })
-      .where(eq(mailboxConnections.id, mailbox.id));
-    await tx.insert(workflowEvents).values({
-      entityType: "mailbox",
-      entityId: mailbox.id,
-      event: rebaselined ? "graph.delta_rebaselined" : "graph.delta_synced",
-      workflowName: "graph_delta_reconciliation",
-      status: "succeeded",
-      completedAt: now,
-      payload: { processed, rebaselined },
-    });
-  });
-  return { processed, rebaselined };
 }

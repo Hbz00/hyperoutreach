@@ -160,6 +160,41 @@ function validateMatchedIdentity(
   return valid ? match : { message: null, ambiguous: true };
 }
 
+/**
+ * Privacy boundary for mailbox sweeps. A general IMAP/Graph mailbox contains
+ * unrelated personal mail; only messages that can be tied to one of this
+ * application's outbound messages may cross into persistence/classification.
+ */
+export async function ingestMatchedInboundMessage(
+  db: AppDatabase,
+  classifier: ReplyClassifier,
+  rawInput: unknown,
+  options: { now?: Date; classificationClaimTtlMs?: number } = {},
+) {
+  const parsed = inboundSchema.safeParse(rawInput);
+  if (!parsed.success) return { ok: false, code: "INVALID_INPUT" } as const;
+  let sender: string;
+  let bouncedRecipient: string | undefined;
+  try {
+    sender = normalizeEmail(parsed.data.sender);
+    bouncedRecipient = parsed.data.bouncedRecipient
+      ? normalizeEmail(parsed.data.bouncedRecipient)
+      : undefined;
+  } catch {
+    return { ok: false, code: "INVALID_INPUT" } as const;
+  }
+  const match = validateMatchedIdentity(
+    await findMatchedMessage(db, parsed.data),
+    parsed.data,
+    sender,
+    bouncedRecipient,
+  );
+  if (!match.message) {
+    return { ok: true, disposition: "ignored" } as const;
+  }
+  return ingestInboundMessage(db, classifier, parsed.data, options);
+}
+
 export async function ingestInboundMessage(
   db: AppDatabase,
   classifier: ReplyClassifier,

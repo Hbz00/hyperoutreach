@@ -37,7 +37,7 @@ describe("agent web-search provenance", () => {
     );
   });
 
-  it("rejects account evidence absent from actual web-search sources", () => {
+  it("rejects account evidence absent from provider-declared sources", () => {
     const output: AccountDiscoveryOutput = {
       candidates: [
         {
@@ -63,7 +63,9 @@ describe("agent web-search provenance", () => {
       validateAccountDiscoveryProvenance(
         result(output, [{ url: "https://search.example/unrelated" }]),
       ),
-    ).toThrow(AgentProvenanceError);
+    ).toThrow(
+      "Structured evidence URL was absent from provider-declared sources",
+    );
     expect(() =>
       validateAccountDiscoveryProvenance(
         result(output, [{ url: "https://acme.example/about#result" }]),
@@ -241,7 +243,7 @@ describe("agent web-search provenance", () => {
     );
   });
 
-  it("rejects contact URLs absent from provider web-search sources", () => {
+  it("rejects contact URLs absent from provider-declared sources", () => {
     const contacts: ContactDiscoveryOutput = {
       contacts: [
         {

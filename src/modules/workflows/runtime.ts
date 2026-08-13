@@ -88,18 +88,19 @@ function entityContext<T extends WorkflowTaskName>(
         logicalKey: `followup:${value.enrollmentId}:${value.expectedToken}`,
       };
     }
-    case "reconcile-graph-delta": {
-      const value = payload as WorkflowPayloads["reconcile-graph-delta"];
+    case "reconcile-inbound-mailbox": {
+      const value = payload as WorkflowPayloads["reconcile-inbound-mailbox"];
       return {
         entityType: "mailbox",
         entityId: value.mailboxId,
-        logicalKey: `graph-delta:${value.mailboxId}:${new Date().toISOString().slice(0, 16)}`,
+        logicalKey: `inbound-mailbox:${value.mailboxId}:${new Date().toISOString().slice(0, 16)}`,
       };
     }
     case "personalize-message":
     case "account-discovery":
     case "reconcile-due-follow-ups":
     case "drain-graph-webhooks":
+    case "reconcile-inbound-mailboxes":
     case "maintain-graph-subscriptions":
     case "recover-stale-work": {
       const observedAt =

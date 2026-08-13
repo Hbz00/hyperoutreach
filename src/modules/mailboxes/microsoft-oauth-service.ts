@@ -15,6 +15,7 @@ import {
   MICROSOFT_DELEGATED_SCOPES,
   type MicrosoftConfig,
 } from "@/lib/microsoft/config";
+import { MicrosoftGraphClient } from "@/lib/microsoft/graph-client";
 import { decryptSecret, encryptSecret } from "@/lib/microsoft/token-crypto";
 import { normalizeEmail } from "@/modules/prospects/normalization";
 
@@ -275,7 +276,7 @@ export async function completeMicrosoftConnection(
         tenantId: config.tenantId,
         providerUserId: me.id,
         status: "available" as const,
-        deltaLink: existing?.deltaLink ?? null,
+        syncCursor: existing?.syncCursor ?? null,
         lastSyncedAt:
           existing?.lastSyncedAt ?? new Date(now.getTime() - 5 * 60_000),
       };
@@ -319,6 +320,22 @@ export async function getMicrosoftAccessToken(
   ).finally(() => inFlightRefreshes.delete(mailboxId));
   inFlightRefreshes.set(mailboxId, operation);
   return operation;
+}
+
+/**
+ * The one place a `MicrosoftGraphClient` is wired to a mailbox's token
+ * lifecycle. Every caller that needs a Graph client for a specific mailbox
+ * (outbound provider, inbound source, webhook/maintenance flows) composes
+ * it from here instead of re-deriving the same two lines.
+ */
+export function createMailboxGraphClient(
+  db: AppDatabase,
+  config: MicrosoftConfig,
+  mailboxId: string,
+): MicrosoftGraphClient {
+  return new MicrosoftGraphClient({
+    accessToken: () => getMicrosoftAccessToken(db, config, mailboxId),
+  });
 }
 
 async function refreshAccessToken(
@@ -472,7 +489,7 @@ export async function disconnectMicrosoftMailbox(
         accessTokenCiphertext: null,
         tokenExpiresAt: null,
         grantedScopes: [],
-        deltaLink: null,
+        syncCursor: null,
         subscriptionId: null,
         subscriptionExpiresAt: null,
         subscriptionClientStateHash: null,

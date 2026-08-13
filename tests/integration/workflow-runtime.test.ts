@@ -6,12 +6,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import * as schema from "@/lib/db/schema";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
+import { createMailProviderForMailbox } from "@/modules/mailboxes/provider-factory";
 import { executeAuditedWorkflow } from "@/modules/workflows/execution-audit";
 import { LocalWorkflowDispatcher } from "@/modules/workflows/dispatcher";
 import { dispatchDueFollowUps } from "@/modules/workflows/recovery-service";
 import { findStaleRecoveryCandidates } from "@/modules/workflows/recovery-service";
 import { WorkflowRuntime } from "@/modules/workflows/runtime";
 import type { WorkflowTaskServices } from "@/modules/workflows/runtime";
+import { createWorkflowTaskServices } from "@/modules/workflows/service-factory";
 import { WORKFLOW_TASKS } from "@/modules/workflows/task-contracts";
 
 const { testUrl } = resolveDatabaseUrls(process.env);
@@ -492,5 +494,279 @@ describe("durable workflow execution audit", () => {
       runId: "recovered-worker-run",
       attempt: 2,
     });
+  });
+
+  // I2 : la fabrique smtp_imap levait à la CONSTRUCTION, hors de tout
+  // try/catch. `service-factory.ts` builds providers in argument expressions
+  // (`sendApprovedMessage(db, await providerForMessage(...), payload)`), and
+  // `recover-stale-work` handles messages *first* — so one mailbox an
+  // operator had just disconnected (to retype a password) aborted the entire
+  // tick, silently starving stale research recovery, email resolution and
+  // follow-ups of every tick that followed, with nothing visibly tied to the
+  // gesture. `microsoft_graph` never had this: its client is lazy.
+  it("completes a recover-stale-work round when a disconnected smtp_imap mailbox still owns an unfinished message", async () => {
+    const staleAt = new Date("2026-08-12T09:00:00.000Z");
+    const now = new Date("2026-08-12T10:00:00.000Z");
+    const address = `disconnected-${crypto.randomUUID()}@example.com`;
+    // Exactly what `disconnectSmtpImapMailbox` leaves behind: no password,
+    // no `transport` key in `settings`, status `disconnected`.
+    const [mailbox] = await db
+      .insert(schema.mailboxConnections)
+      .values({
+        provider: "smtp_imap",
+        email: address,
+        normalizedEmail: address,
+        status: "disconnected",
+        encryptedPassword: null,
+        settings: {},
+      })
+      .returning();
+    const [account] = await db
+      .insert(schema.accounts)
+      .values({
+        name: "Disconnected recovery",
+        normalizedName: `disconnected-recovery-${crypto.randomUUID()}`,
+      })
+      .returning();
+    if (!mailbox || !account) throw new Error("fixture missing");
+    const [contact] = await db
+      .insert(schema.contacts)
+      .values({
+        accountId: account.id,
+        firstName: "Stale",
+        lastName: "Contact",
+        fullName: "Stale Contact",
+        normalizedFullName: `disconnected-contact-${crypto.randomUUID()}`,
+      })
+      .returning();
+    const [campaign] = await db
+      .insert(schema.campaigns)
+      .values({
+        name: "Disconnected recovery campaign",
+        type: "commercial_outreach",
+        status: "active",
+        targetDescription: "Recover after the operator disconnected a mailbox",
+      })
+      .returning();
+    if (!contact || !campaign) throw new Error("fixture missing");
+    const [version] = await db
+      .insert(schema.campaignVersions)
+      .values({ campaignId: campaign.id, version: 1, publishedAt: now })
+      .returning();
+    if (!version) throw new Error("fixture missing");
+    const [enrollment] = await db
+      .insert(schema.enrollments)
+      .values({
+        campaignId: campaign.id,
+        campaignVersionId: version.id,
+        contactId: contact.id,
+        mailboxId: mailbox.id,
+        state: "approved",
+      })
+      .returning();
+    if (!enrollment) throw new Error("fixture missing");
+    const [message] = await db
+      .insert(schema.messages)
+      .values({
+        enrollmentId: enrollment.id,
+        mailboxId: mailbox.id,
+        stepIndex: 0,
+        direction: "outbound",
+        outreachId: `out_${crypto.randomUUID()}`,
+        subject: "Stale",
+        body: "Stale",
+        recipient: "stale@example.com",
+        contactAccountId: account.id,
+        employmentVersion: contact.employmentVersion,
+        status: "delivery_uncertain",
+        sendAttemptToken: crypto.randomUUID(),
+        sendClaimedAt: staleAt,
+        attemptCount: 1,
+        // The uncertain quota is served `order by updated_at asc` and this
+        // suite's earlier fixtures share the database, so this pins *this*
+        // message as the one the round below actually picks up.
+        updatedAt: new Date("2020-01-01T00:00:00.000Z"),
+      })
+      .returning();
+    if (!message) throw new Error("fixture missing");
+
+    // The defect in one line: this is the expression `service-factory.ts`
+    // evaluates as an argument, outside every `try`. Before the fix it
+    // rejected with "smtp_imap mailbox has no stored password".
+    await expect(
+      createMailProviderForMailbox(db, mailbox.id, {}),
+    ).resolves.toMatchObject({ kind: "smtp_imap" });
+
+    const services = createWorkflowTaskServices(db, {});
+    const round = (await services["recover-stale-work"]({
+      observedAt: now.toISOString(),
+      limit: 1,
+    })) as Record<string, unknown>;
+
+    // Every class of the round ran to completion: these keys are only
+    // assembled by the final `return`, which the throw used to skip — taking
+    // research recovery, email resolution and follow-ups with it.
+    expect(Object.keys(round).sort()).toEqual([
+      "followUpsRecovered",
+      "inbound",
+      "messagesRecovered",
+      "researchRecovered",
+      "resolutionsRecovered",
+    ]);
+    // The message loop itself ran and reported per-message outcomes instead
+    // of throwing out of the round.
+    expect(Array.isArray(round.messagesRecovered)).toBe(true);
+    expect(round.messagesRecovered).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ok: false })]),
+    );
+  });
+
+  it("fails safe: an unresolvable smtp_imap inbound source still marks health failed, not silently skipped", async () => {
+    const address = `imap-${crypto.randomUUID()}@example.com`;
+    const [mailbox] = await db
+      .insert(schema.mailboxConnections)
+      .values({
+        provider: "smtp_imap",
+        email: address,
+        normalizedEmail: address,
+        status: "available",
+        // A sync anchor (otherwise a *different* fail-safe path fires first
+        // — see the dedicated "sync anchor is missing" test below): this
+        // fixture is specifically about the password/transport failure.
+        lastSyncedAt: new Date("2026-08-01T00:00:00.000Z"),
+      })
+      .returning();
+    if (!mailbox) throw new Error("mailbox fixture missing");
+    const services = createWorkflowTaskServices(db, {});
+
+    // The fixture mailbox has no stored password (and no transport config):
+    // `createSource` must throw *inside* the health wrapper, not before it —
+    // otherwise the send gate never sees a failed event and outbound sends
+    // proceed as if inbound sync were healthy.
+    await expect(
+      services["reconcile-inbound-mailbox"]({ mailboxId: mailbox.id }),
+    ).rejects.toThrow("smtp_imap mailbox has no stored password");
+
+    const [health] = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(
+        eq(
+          schema.workflowEvents.idempotencyKey,
+          `smtp_imap:inbound-health:${mailbox.id}`,
+        ),
+      );
+    expect(health).toMatchObject({
+      entityType: "mailbox",
+      entityId: mailbox.id,
+      workflowName: "inbound_reconciliation",
+      status: "failed",
+      error: "Inbound reconciliation failed",
+    });
+  });
+
+  it("fails safe: an smtp_imap mailbox with no sync anchor also marks health failed, mirroring Graph's own guard", async () => {
+    const address = `imap-noanchor-${crypto.randomUUID()}@example.com`;
+    const [mailbox] = await db
+      .insert(schema.mailboxConnections)
+      .values({
+        provider: "smtp_imap",
+        email: address,
+        normalizedEmail: address,
+        status: "available",
+      })
+      .returning();
+    if (!mailbox) throw new Error("mailbox fixture missing");
+    const services = createWorkflowTaskServices(db, {});
+
+    // Neither `lastSyncedAt` nor `syncCursor` set: the mailbox has not
+    // finished connecting, so `createSource` must refuse rather than default
+    // to an unbounded (uid 1) first walk — see `inbound-source-bootstrap.ts`.
+    await expect(
+      services["reconcile-inbound-mailbox"]({ mailboxId: mailbox.id }),
+    ).rejects.toThrow("smtp_imap mailbox sync anchor is missing");
+
+    const [health] = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(
+        eq(
+          schema.workflowEvents.idempotencyKey,
+          `smtp_imap:inbound-health:${mailbox.id}`,
+        ),
+      );
+    expect(health).toMatchObject({
+      entityType: "mailbox",
+      entityId: mailbox.id,
+      workflowName: "inbound_reconciliation",
+      status: "failed",
+      error: "Inbound reconciliation failed",
+    });
+  });
+
+  it("fails safe: a microsoft_graph mailbox with no Microsoft config also marks health failed, using Graph's own literals", async () => {
+    const address = `graph-${crypto.randomUUID()}@example.com`;
+    const [mailbox] = await db
+      .insert(schema.mailboxConnections)
+      .values({
+        provider: "microsoft_graph",
+        email: address,
+        normalizedEmail: address,
+        status: "available",
+        lastSyncedAt: new Date("2026-08-12T08:55:00.000Z"),
+      })
+      .returning();
+    if (!mailbox) throw new Error("mailbox fixture missing");
+    // No Microsoft env vars: requireMicrosoftConfig throws. The dispatcher
+    // no longer resolves Graph config eagerly (outside any wrapper) — it
+    // goes through the same registry-entry path as every other provider, so
+    // this failure must land inside the health wrapper too.
+    const services = createWorkflowTaskServices(db, {});
+
+    await expect(
+      services["reconcile-inbound-mailbox"]({ mailboxId: mailbox.id }),
+    ).rejects.toThrow();
+
+    const [health] = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(
+        eq(
+          schema.workflowEvents.idempotencyKey,
+          `graph:delta-health:${mailbox.id}`,
+        ),
+      );
+    expect(health).toMatchObject({
+      entityType: "mailbox",
+      entityId: mailbox.id,
+      workflowName: "graph_delta_health",
+      status: "failed",
+      error: "Microsoft Graph delta reconciliation failed",
+    });
+  });
+
+  it("reports a mock mailbox as skipped without writing a misleading synced/failed audit event", async () => {
+    const address = `mock-${crypto.randomUUID()}@example.com`;
+    const [mailbox] = await db
+      .insert(schema.mailboxConnections)
+      .values({
+        provider: "mock",
+        email: address,
+        normalizedEmail: address,
+        status: "available",
+      })
+      .returning();
+    if (!mailbox) throw new Error("mailbox fixture missing");
+    const services = createWorkflowTaskServices(db, {});
+
+    await expect(
+      services["reconcile-inbound-mailbox"]({ mailboxId: mailbox.id }),
+    ).resolves.toEqual({ skipped: true, reason: "mock_has_no_inbox" });
+
+    const events = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(eq(schema.workflowEvents.entityId, mailbox.id));
+    expect(events).toHaveLength(0);
   });
 });

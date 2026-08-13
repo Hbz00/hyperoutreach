@@ -1,10 +1,5 @@
-import OpenAI from "openai";
-
-import { requireOpenAIConfig } from "@/lib/openai/config";
-import {
-  OpenAIResponsesProvider,
-  type ResponsesClient,
-} from "@/lib/openai/providers/responses-provider";
+import { createProductionAIProviderBundle } from "@/lib/openai/production-provider-bundle";
+import type { AIProviderBundle } from "@/lib/openai/provider-bundle";
 import type {
   AccountDiscoveryAgent,
   AccountResearchAgent,
@@ -75,30 +70,24 @@ export type AgentSet = {
   personalization: PersonalizationAgent;
 };
 
-export function createAgentSet(
-  environment: Record<string, string | undefined> = process.env,
-): AgentSet {
-  if (environment.OPENAI_PROVIDER === "openai") {
-    const config = requireOpenAIConfig(environment);
-    const provider = new OpenAIResponsesProvider(
-      new OpenAI({ apiKey: config.apiKey }) as unknown as ResponsesClient,
-    );
+export function createAgentSetFromBundle(bundle: AIProviderBundle): AgentSet {
+  if (bundle.usesRealInfrastructure) {
     return {
       accountDiscovery: new OpenAIAccountDiscoveryAgent(
-        provider,
-        config.researchModel,
+        bundle.research.provider,
+        bundle.research.model,
       ),
       accountResearch: new OpenAIAccountResearchAgent(
-        provider,
-        config.researchModel,
+        bundle.research.provider,
+        bundle.research.model,
       ),
       contactDiscovery: new OpenAIContactDiscoveryAgent(
-        provider,
-        config.researchModel,
+        bundle.research.provider,
+        bundle.research.model,
       ),
       personalization: new OpenAIPersonalizationAgent(
-        provider,
-        config.fastModel,
+        bundle.nonWeb.provider,
+        bundle.nonWeb.model,
       ),
     };
   }
@@ -128,4 +117,12 @@ export function createAgentSet(
     contactDiscovery: new MockContactDiscoveryAgent({ contacts: [] }),
     personalization: new DeterministicPersonalizationAgent(),
   };
+}
+
+export function createAgentSet(
+  environment: Record<string, string | undefined> = process.env,
+): AgentSet {
+  return createAgentSetFromBundle(
+    createProductionAIProviderBundle(environment),
+  );
 }

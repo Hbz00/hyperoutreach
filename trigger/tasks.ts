@@ -37,7 +37,27 @@ export const generateMessageTask = regularTask("generate-message");
 export const sendApprovedMessageTask = regularTask("send-approved-message");
 export const advanceSequenceTask = regularTask("advance-sequence");
 export const drainGraphWebhooksTask = regularTask("drain-graph-webhooks");
-export const reconcileGraphDeltaTask = regularTask("reconcile-graph-delta");
+export const reconcileInboundMailboxTask = regularTask(
+  "reconcile-inbound-mailbox",
+);
+
+export const reconcileInboundMailboxesTask = schedules.task({
+  id: "reconcile-inbound-mailboxes",
+  cron: "* * * * *",
+  ttl: "5m",
+  retry: {
+    ...WORKFLOW_TASKS["reconcile-inbound-mailboxes"].retry,
+    factor: 2,
+    randomize: true,
+  },
+  maxDuration: WORKFLOW_TASKS["reconcile-inbound-mailboxes"].maxDuration,
+  run: (payload, { ctx }) =>
+    runtime().execute(
+      "reconcile-inbound-mailboxes",
+      { observedAt: payload.timestamp.toISOString(), limit: 50 },
+      { runId: ctx.run.id, attempt: ctx.attempt.number },
+    ),
+});
 
 export const reconcileDueFollowUpsTask = schedules.task({
   id: "reconcile-due-follow-ups",

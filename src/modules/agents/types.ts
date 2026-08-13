@@ -1,4 +1,10 @@
-export type AgentSource = { url: string; title?: string };
+import type { LiveSourceProvenance } from "@/lib/openai/providers/types";
+
+export type AgentSource = {
+  url: string;
+  title?: string;
+  provenance?: LiveSourceProvenance;
+};
 
 export type AgentUsage = {
   inputTokens: number;

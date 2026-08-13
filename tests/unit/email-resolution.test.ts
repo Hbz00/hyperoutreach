@@ -18,7 +18,6 @@ import {
 } from "@/modules/email-resolution/dns";
 import {
   OpenAIPublicEmailEvidenceProvider,
-  PublicEmailEvidenceError,
   StaticPublicEmailEvidenceProvider,
 } from "@/modules/email-resolution/public-evidence-provider";
 
@@ -208,7 +207,7 @@ describe("public email evidence providers", () => {
     ).toThrow();
   });
 
-  it("binds OpenAI structured samples to actual web-search sources", async () => {
+  it("binds structured samples to provider-declared sources", async () => {
     const provider = new OpenAIPublicEmailEvidenceProvider(
       {
         run: async () => ({
@@ -235,7 +234,9 @@ describe("public email evidence providers", () => {
     );
     await expect(
       provider.find({ companyDomain: "acme.example" }),
-    ).rejects.toBeInstanceOf(PublicEmailEvidenceError);
+    ).rejects.toThrow(
+      "Public email sample was absent from provider-declared sources",
+    );
   });
 
   it("requests web search through the real structured provider contract", async () => {

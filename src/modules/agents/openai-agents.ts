@@ -1,9 +1,10 @@
 import type { z } from "zod";
 
 import type {
-  StructuredResponseRequest,
+  StructuredAIProvider,
   StructuredResponseResult,
-} from "@/lib/openai/providers/responses-provider";
+} from "@/lib/openai/providers/types";
+export type { StructuredAIProvider } from "@/lib/openai/providers/types";
 import type {
   AccountDiscoveryAgent,
   AccountResearchAgent,
@@ -42,12 +43,6 @@ import {
   type ReplyClassifier,
   type ReplyClassifierInput,
 } from "@/modules/replies/reply-classifier";
-
-export interface StructuredAIProvider {
-  run<T>(
-    request: StructuredResponseRequest<T>,
-  ): Promise<StructuredResponseResult<T>>;
-}
 
 function validatedResult<T>(
   result: StructuredResponseResult<T>,
@@ -182,13 +177,13 @@ export class OpenAIPersonalizationAgent
 }
 
 export class OpenAIReplyClassifier implements ReplyClassifier {
-  readonly name = "openai-responses-reply-v1";
   readonly promptVersion = "reply-classifier-prompt-v1";
   readonly schemaVersion = "reply-classifier-schema-v1";
 
   constructor(
     private readonly provider: StructuredAIProvider,
     readonly model: string,
+    readonly name = "openai-responses-reply-v1",
   ) {}
 
   async classifyObserved(

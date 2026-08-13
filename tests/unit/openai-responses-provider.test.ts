@@ -102,7 +102,12 @@ describe("OpenAI Responses structured-output boundary", () => {
       responseId: "resp_test",
       model: "gpt-5.6-terra",
       output: { answer: "Evidence-backed", confidence: 0.91 },
-      sources: [{ url: "https://example.com/source" }],
+      sources: [
+        {
+          url: "https://example.com/source",
+          provenance: "tool_observed",
+        },
+      ],
       usage: {
         inputTokens: 100,
         outputTokens: 25,

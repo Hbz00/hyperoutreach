@@ -1,5 +1,15 @@
 import { zodTextFormat } from "openai/helpers/zod";
-import type { z } from "zod";
+
+import type {
+  StructuredResponseSource,
+  StructuredResponseRequest,
+  StructuredResponseResult,
+} from "@/lib/openai/providers/types";
+
+export type {
+  StructuredResponseRequest,
+  StructuredResponseResult,
+} from "@/lib/openai/providers/types";
 
 export type ResponsesClient = {
   responses: {
@@ -8,34 +18,6 @@ export type ResponsesClient = {
       options?: { signal?: AbortSignal },
     ): Promise<unknown>;
   };
-};
-
-export type StructuredResponseRequest<T> = {
-  agent: string;
-  model: string;
-  instructions: string;
-  input: Record<string, unknown>;
-  outputSchema: z.ZodType<T>;
-  outputName: string;
-  useWebSearch: boolean;
-};
-
-export type StructuredResponseResult<T> = {
-  responseId: string;
-  model: string;
-  output: T;
-  sources: Array<{ url: string; title?: string }>;
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-    cachedInputTokens?: number;
-    cacheWriteInputTokens?: number;
-    reasoningTokens?: number;
-  } | null;
-  toolUsage: { webSearchCalls: number };
-  costUsd: number | null;
-  costAvailability: "available" | "unavailable";
 };
 
 export class OpenAIRefusalError extends Error {
@@ -73,8 +55,8 @@ function hasRefusal(response: Record<string, unknown>): boolean {
 
 function extractSources(
   response: Record<string, unknown>,
-): Array<{ url: string; title?: string }> {
-  const byUrl = new Map<string, { url: string; title?: string }>();
+): StructuredResponseSource[] {
+  const byUrl = new Map<string, StructuredResponseSource>();
   for (const item of outputItems(response)) {
     const output = record(item);
     if (!output) continue;
@@ -88,6 +70,7 @@ function extractSources(
             ...(typeof candidate.title === "string"
               ? { title: candidate.title }
               : {}),
+            provenance: "tool_observed",
           });
         }
       }

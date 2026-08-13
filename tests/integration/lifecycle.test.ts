@@ -2,7 +2,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import * as schema from "@/lib/db/schema";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
@@ -28,6 +28,7 @@ import { reviewMessage } from "@/modules/messages/review-service";
 import { sendApprovedMessage } from "@/modules/messages/send-service";
 import {
   ingestInboundMessage,
+  ingestMatchedInboundMessage,
   reconcilePendingInboundRecords,
 } from "@/modules/replies/inbound-service";
 import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
@@ -229,6 +230,32 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
   });
 
   afterAll(async () => client.end());
+
+  it("ignores unrelated mailbox traffic before classifier or body persistence", async () => {
+    const f = await fixture({ send: false });
+    const classify = vi.fn();
+    const providerMessageId = `unrelated-private-${sequence}`;
+    const result = await ingestMatchedInboundMessage(
+      db,
+      { name: "privacy-probe", classify },
+      {
+        mailboxId: f.mailbox.id,
+        providerMessageId,
+        sender: "colleague@example.net",
+        recipient: f.mailbox.normalizedEmail,
+        subject: "Private internal mail",
+        body: `private-body-${sequence}`,
+        receivedAt: new Date("2026-08-13T10:00:00.000Z"),
+      },
+    );
+    expect(result).toEqual({ ok: true, disposition: "ignored" });
+    expect(classify).not.toHaveBeenCalled();
+    const stored = await db
+      .select()
+      .from(schema.inboundRecords)
+      .where(eq(schema.inboundRecords.providerMessageId, providerMessageId));
+    expect(stored).toHaveLength(0);
+  });
 
   it("persists exactly one conservative operator settings row on a clean migration", async () => {
     const rows = await db.select().from(schema.operatorSendingSettings);
