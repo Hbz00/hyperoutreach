@@ -32,6 +32,8 @@ export class OpenAIProviderError extends Error {
   override readonly name = "OpenAIProviderError";
 }
 
+export const DEFAULT_OPENAI_OPERATION_TIMEOUT_MS = 30_000;
+
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
@@ -119,7 +121,7 @@ export class OpenAIResponsesProvider {
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(new Error("OpenAI request timed out")),
-      this.options.timeoutMs ?? 30_000,
+      this.options.timeoutMs ?? DEFAULT_OPENAI_OPERATION_TIMEOUT_MS,
     );
     try {
       rawResponse = await this.client.responses.parse(

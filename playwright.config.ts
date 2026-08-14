@@ -18,7 +18,7 @@ export default defineConfig({
   },
   webServer: {
     command:
-      "tsx scripts/ensure-disposable-database.ts && tsx scripts/reset-disposable-database.ts && npm run db:migrate && npm run db:seed && npm run build && npm start -- --hostname 127.0.0.1",
+      "tsx scripts/ensure-disposable-database.ts && tsx scripts/reset-disposable-database.ts && npm run db:migrate && npm run db:seed:mock && npm run build && npm start -- --hostname 127.0.0.1",
     url: "http://127.0.0.1:3000/api/health",
     reuseExistingServer: false,
     timeout: 120_000,

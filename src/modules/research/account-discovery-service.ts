@@ -22,7 +22,16 @@ type Account = typeof accounts.$inferSelect;
 type Candidate = AccountDiscoveryOutput["candidates"][number];
 
 export type DiscoverAccountsResult =
-  | { ok: true; accounts: Account[]; agentRunId: string }
+  | {
+      ok: true;
+      accounts: Account[];
+      conflicts: Array<{
+        code: "AMBIGUOUS_NAME";
+        name: string;
+        domain: string | null;
+      }>;
+      agentRunId: string;
+    }
   | {
       ok: false;
       code: "INVALID_INPUT" | "AGENT_ERROR" | "DATABASE_ERROR";
@@ -32,7 +41,17 @@ export type DiscoverAccountsResult =
 async function upsertCandidate(
   tx: Parameters<Parameters<AppDatabase["transaction"]>[0]>[0],
   candidate: Candidate,
-): Promise<Account> {
+): Promise<
+  | { account: Account; conflict: null }
+  | {
+      account: null;
+      conflict: {
+        code: "AMBIGUOUS_NAME";
+        name: string;
+        domain: string | null;
+      };
+    }
+> {
   const input = parseAccountInput({
     name: candidate.name,
     domain: candidate.domain,
@@ -59,26 +78,35 @@ async function upsertCandidate(
     )
     .limit(1)
     .for("update");
-  const [sameNameDomain] = !input.domain
-    ? await tx
-        .select()
-        .from(accounts)
-        .where(
-          and(
-            eq(accounts.normalizedName, input.normalizedName),
-            isNotNull(accounts.domain),
-          ),
-        )
-        .orderBy(accounts.createdAt, accounts.id)
-        .limit(1)
-        .for("update")
-    : [];
+  const sameNameDomains = await tx
+    .select()
+    .from(accounts)
+    .where(
+      and(
+        eq(accounts.normalizedName, input.normalizedName),
+        isNotNull(accounts.domain),
+      ),
+    )
+    .orderBy(accounts.createdAt, accounts.id)
+    .for("update");
+  const sameNameDomain = sameNameDomains[0];
   const decision = decideAccountMerge({
     incomingDomain: input.domain,
     strongDomainAccountId: strong?.id ?? null,
     domainlessNameAccountId: fallback?.id ?? null,
     sameNameDomainAccountId: sameNameDomain?.id ?? null,
+    sameNameDomainAccountCount: sameNameDomains.length,
   });
+  if (decision.action === "ambiguous") {
+    return {
+      account: null,
+      conflict: {
+        code: "AMBIGUOUS_NAME",
+        name: candidate.name,
+        domain: input.domain,
+      },
+    };
+  }
   if (decision.action === "use_existing") {
     const existing =
       strong?.id === decision.accountId
@@ -98,7 +126,7 @@ async function upsertCandidate(
       .where(eq(accounts.id, existing.id))
       .returning();
     if (!updated) throw new Error("Account update returned no row");
-    return updated;
+    return { account: updated, conflict: null };
   }
   if (decision.action === "enrich_fallback") {
     const [updated] = await tx
@@ -113,7 +141,7 @@ async function upsertCandidate(
       .where(eq(accounts.id, decision.accountId))
       .returning();
     if (!updated) throw new Error("Account enrichment returned no row");
-    return updated;
+    return { account: updated, conflict: null };
   }
   const [created] = await tx
     .insert(accounts)
@@ -125,7 +153,7 @@ async function upsertCandidate(
     })
     .onConflictDoNothing()
     .returning();
-  if (created) return created;
+  if (created) return { account: created, conflict: null };
   const [raced] = input.domain
     ? await tx
         .select()
@@ -143,7 +171,7 @@ async function upsertCandidate(
         )
         .limit(1);
   if (!raced) throw new Error("Account conflict could not be reconciled");
-  return raced;
+  return { account: raced, conflict: null };
 }
 
 export async function discoverAccounts(
@@ -189,8 +217,18 @@ export async function discoverAccounts(
     const evidenceObservedAt = new Date();
     const discovered = await db.transaction(async (tx) => {
       const persisted: Account[] = [];
+      const conflicts: Array<{
+        code: "AMBIGUOUS_NAME";
+        name: string;
+        domain: string | null;
+      }> = [];
       for (const candidate of result.output.candidates) {
-        const account = await upsertCandidate(tx, candidate);
+        const outcome = await upsertCandidate(tx, candidate);
+        if (outcome.conflict) {
+          conflicts.push(outcome.conflict);
+          continue;
+        }
+        const account = outcome.account;
         persisted.push(account);
         for (const source of candidate.sources) {
           await tx
@@ -220,13 +258,16 @@ export async function discoverAccounts(
         }
       }
       await completeAgentRun(tx, runId, result);
-      return persisted;
+      return { persisted, conflicts };
     });
     return {
       ok: true,
       accounts: [
-        ...new Map(discovered.map((account) => [account.id, account])).values(),
+        ...new Map(
+          discovered.persisted.map((account) => [account.id, account]),
+        ).values(),
       ],
+      conflicts: discovered.conflicts,
       agentRunId: runId,
     };
   } catch (error) {

@@ -115,17 +115,36 @@ const productionProviderDependencies: WorkflowProviderDependencies = {
   createMockDns: () => new MockDnsMxResolver(true),
 };
 
+type InboundBatchResult = {
+  mailboxId: string;
+  result?: unknown;
+  error?: string;
+};
+
+export function assertInboundBatchSucceeded(
+  results: InboundBatchResult[],
+): void {
+  if (results.some((result) => result.error !== undefined)) {
+    throw new Error("Inbound mailbox reconciliation failed");
+  }
+}
+
 export function composeEmailResolutionProviders(
   bundle: AIProviderBundle,
   dependencies: Pick<
     WorkflowProviderDependencies,
     "createRealDns" | "createMockDns"
   >,
-): { dns: DnsMxResolver; publicEvidence: PublicEmailEvidenceProvider } {
+): {
+  dns: DnsMxResolver;
+  publicEvidence: PublicEmailEvidenceProvider;
+  publicEvidenceOperationTimeoutMs: number;
+} {
   if (!bundle.usesRealInfrastructure) {
     return {
       dns: dependencies.createMockDns(),
       publicEvidence: new StaticPublicEmailEvidenceProvider([]),
+      publicEvidenceOperationTimeoutMs: 10_000,
     };
   }
   return {
@@ -134,6 +153,7 @@ export function composeEmailResolutionProviders(
       bundle.research.provider,
       bundle.research.model,
     ),
+    publicEvidenceOperationTimeoutMs: bundle.research.operationTimeoutMs,
   };
 }
 
@@ -160,6 +180,8 @@ export function createWorkflowTaskServices(
       payload,
       {
         publicEvidenceProvider: emailProviders.publicEvidence,
+        publicEvidenceOperationTimeoutMs:
+          emailProviders.publicEvidenceOperationTimeoutMs,
       },
     );
   };
@@ -310,6 +332,7 @@ export function createWorkflowTaskServices(
           });
         }
       }
+      assertInboundBatchSucceeded(results);
       return { observedAt: payload.observedAt, results };
     },
     "maintain-graph-subscriptions": async (payload) => {

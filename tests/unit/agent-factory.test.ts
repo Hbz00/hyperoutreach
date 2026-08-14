@@ -66,6 +66,7 @@ describe("agent provider routing", () => {
       research: {
         provider: codex.provider,
         model: "codex-cli:codex-research",
+        operationTimeoutMs: 120_000,
       },
       nonWeb: {
         provider: codex.provider,
@@ -115,7 +116,11 @@ describe("agent provider routing", () => {
     const agents = createAgentSetFromBundle({
       mode: "openai",
       usesRealInfrastructure: true,
-      research: { provider: responses.provider, model: "research-model" },
+      research: {
+        provider: responses.provider,
+        model: "research-model",
+        operationTimeoutMs: 30_000,
+      },
       nonWeb: { provider: responses.provider, model: "fast-model" },
     });
 

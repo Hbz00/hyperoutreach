@@ -22,7 +22,7 @@ try {
     on conflict (provider, normalized_email) do update
       set status = 'available', updated_at = now()
   `;
-  console.log("Local mock mailbox seed applied.");
+  console.log("Explicit local-demo mock mailbox seed applied.");
 } catch (error) {
   console.error(
     `Database seed failed: ${sanitizeDatabaseError(error, [databaseUrl])}`,

@@ -58,7 +58,9 @@ For `useWebSearch=true`, the provider:
 
 1. adds the global `--search` flag before `exec`;
 2. omits the conflicting `tools.web_search=false` override;
-3. keeps every unrelated local, app, plugin, browser, shell, memory, and
+3. leaves `features.code_mode_host` enabled because Codex CLI 0.147.0 requires
+   it for the GPT-5.6 web-search path even with `--search`, while keeping every
+   unrelated app, plugin, browser, shell, memory, image, computer-use, and
    subagent capability disabled;
 4. requests a generic structured envelope containing `output` and `sources`;
 5. counts completed, uniquely identified `web_search` items;
@@ -75,6 +77,14 @@ shape keeps every property required for Codex strict-schema compatibility;
   sources: Array<{ url: string; title: string | null }>;
 }
 ```
+
+Zod emits `format: "uri"` for URL fields, but that string format is outside the
+JSON Schema subset accepted by Codex structured output. The provider removes
+that wire annotation before invoking Codex. It also removes regex patterns that
+contain unsupported lookarounds, such as Zod's email pattern, while preserving
+the supported `format: "email"`. These wire adjustments do not weaken runtime
+validation: the original business Zod schema still rejects invalid emails and
+non-HTTP(S) URLs after the CLI returns.
 
 This intentionally duplicates source URLs already present in some business
 outputs, just as Responses separates tool-observed provider sources from the
@@ -126,6 +136,9 @@ Tests cover:
 - Codex mode without an API key or OpenAI client construction;
 - full Codex routing for research and non-web tasks;
 - exact `--search`/override behavior;
+- removal of unsupported `format: "uri"` annotations and regex lookarounds
+  across the complete wire schema while retaining application-level URL and
+  email validation;
 - the observed Codex 0.147.0 web-search JSONL shape;
 - source validation, de-duplication, required provenance marker, and call count;
 - valid empty search results and fail-closed behavior when the completed search

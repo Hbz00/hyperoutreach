@@ -38,6 +38,7 @@ Ship a self-hostable, single-operator prospecting and customer-discovery applica
 - [x] Real OpenAI Responses adapter uses web search and strict structured outputs; deterministic mock mode needs no credentials.
 - [x] Account discovery normalizes/deduplicates companies; source-bound account research is concurrency-claimed, crash-recoverable, and stored once with evidence, freshness, confidence, and complete agent-run metadata.
 - [x] Contact discovery persists provider-source-backed roles, globally deduplicates contacts, and records validated employer moves without attaching ambiguous employment evidence.
+- [x] Manual account creation and AI discovery share ambiguity-safe domain/name merging; multiple same-name strong accounts require an explicit domain instead of arbitrary reuse.
 - [x] Email resolution verifies an evidenced domain, infers public patterns, generates candidates, checks DNS/MX, scores confidence, supports an optional enrichment adapter, and persists typed resolution outcomes.
 - [x] Employer moves invalidate old email candidates and prior active enrollments atomically; personalization is restricted to caller-supplied trusted research URLs.
 - [x] Employment-version/message binding and shared contact action locks close the move/send race; owner-fenced resolution claims reject late former-domain results.
@@ -56,6 +57,7 @@ Ship a self-hostable, single-operator prospecting and customer-discovery applica
 ### 5. Operable UI and observability
 
 - [x] Functional pages exist for prospects, prospect detail, campaigns, review queue, inbox/replies, and settings/integrations.
+- [x] The dashboard presents the six-step operator path and persisted readiness counts for mailbox sync, AI provider/model, accounts, email action, review, follow-ups, replies, and suppressions.
 - [x] UI controls operate discovery/research/resolution and reruns, campaign configuration/version publication, review/edit/reject, connect/disconnect, sending limits/emergency pause, suppression management, sync/reconciliation, and failure inspection.
 - [x] Evidence, confidence, generated content, message history, state/stop reason, workflow failures, retries, and agent metadata are inspectable.
 - [x] Every AI operation records agent/model/prompt-schema version, structured input/output, sources, usage/cost when available, and sanitized errors; workflow attempts and state transitions are reconstructable from PostgreSQL.
@@ -97,9 +99,13 @@ npm run build
 - [x] Harden reply identity validation, multi-identifier matching, rematch audit history, suppression provenance/removal, terminal guards, and campaign pause/resume.
 - [x] Reuse persisted unmatched/ambiguous reply classifications during reconciliation and rematch without new classifier calls or agent-run rows.
 - [x] Replace unbounded history loads, retain the existing matching indexes, and rerun clean/populated migration plus full static/test/build gates.
+- [x] In self-hosted local mode, order each maintenance minute as inbound SMTP/IMAP reconciliation, due follow-ups, then stale-work recovery; abort later stages when inbox reconciliation fails.
+- [x] Give AI public-email research a provider-specific deadline, and mark provenance-validated discovered employment as professionally relevant for deterministic send policy.
 
 ## Known deviations and live-verification boundary
 
 - Initial scaffolding could not use a worktree because no commit existed at that time. The repository now has a `main` HEAD tracking `origin/main`; this document belongs to the final verified correction set committed immediately after the completion gate.
 - Local mock OpenAI and mail adapters are the automated acceptance surface. The real OpenAI adapter is contract-tested; live OpenAI/Graph verification is only claimed when usable credentials are present and a safe smoke test is actually run.
 - The repository-visible offline eval is a deterministic synthetic regression gate, not an empirical quality claim. Its versioned 100-case schema supports later captured provider outputs and human labels; a live Sol/Terra or prompt comparison still requires operator-supplied credentials and independently verified real-prospect data.
+- Codex CLI 0.147.0 was smoke-tested live on 2026-08-14 through the exact application provider: Terra account discovery/research/contact discovery/public-email research, Luna personalization, and a like-for-like Sol discovery request all completed with observed web-search events where required. This proves provider compatibility, not comparative model quality; a representative human-labeled Sol/Terra benchmark remains open.
+- The post-remediation Sol public-email service smoke completed in 23.3 seconds with a succeeded audited agent run and persisted source, proving the Codex-specific deadline and auxiliary web-event parser against the real backend. `hyperoutreach_live` was created separately, migrated without seed, verified empty, and initialized with mailbox/campaign daily caps of 1; the prior `hyperoutreach` database remains unchanged as the development archive.

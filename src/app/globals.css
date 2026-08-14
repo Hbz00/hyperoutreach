@@ -204,6 +204,36 @@ small {
   color: var(--muted);
   line-height: 1.5;
 }
+.metric-card .metric-value {
+  color: var(--ink);
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+.workflow-path {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.workflow-path li {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  background: var(--panel);
+}
+.workflow-path a {
+  color: var(--ink);
+  font-weight: 800;
+}
+.workflow-path span {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
 .stack,
 .button-stack {
   display: grid;
@@ -429,6 +459,7 @@ details > summary {
     margin-top: 0;
   }
   .card-grid,
+  .workflow-path,
   .detail-grid,
   .form-grid,
   .review-grid {

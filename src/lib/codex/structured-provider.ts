@@ -118,6 +118,30 @@ function webEnvelopeSchema<T>(outputSchema: z.ZodType<T>) {
     .strict();
 }
 
+const JSON_SCHEMA_REGEX_LOOKAROUND = /\(\?(?:[=!]|<[=!])/;
+
+function codexCompatibleJsonSchema(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(codexCompatibleJsonSchema);
+  }
+  if (typeof value !== "object" || value === null) return value;
+
+  const normalized = Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => [
+      key,
+      codexCompatibleJsonSchema(nested),
+    ]),
+  );
+  if (normalized.format === "uri") delete normalized.format;
+  if (
+    typeof normalized.pattern === "string" &&
+    JSON_SCHEMA_REGEX_LOOKAROUND.test(normalized.pattern)
+  ) {
+    delete normalized.pattern;
+  }
+  return normalized;
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
@@ -138,7 +162,9 @@ function invocationArguments(
 ): string[] {
   const configOverrides = useWebSearch
     ? CODEX_CONFIG_OVERRIDES.filter(
-        (override) => override !== "tools.web_search=false",
+        (override) =>
+          override !== "tools.web_search=false" &&
+          override !== "features.code_mode_host=false",
       )
     : CODEX_CONFIG_OVERRIDES;
   return [
@@ -224,15 +250,30 @@ function parseJsonl(stdout: string, requireWebSearch: boolean): ParsedJsonl {
           message = item.text;
         }
         if (item?.type === "web_search") {
-          if (
-            typeof item.id !== "string" ||
-            !item.id.trim() ||
-            typeof item.query !== "string" ||
-            !item.query.trim()
-          ) {
+          if (typeof item.id !== "string" || !item.id.trim()) {
             throw new Error("invalid completed web search");
           }
-          completedWebSearchIds.add(item.id);
+          const action = record(item.action);
+          const actionType =
+            typeof action?.type === "string" ? action.type : undefined;
+          const searchAction =
+            actionType === "search" ||
+            (actionType === undefined && typeof item.query === "string");
+          if (searchAction) {
+            const queries = [
+              typeof item.query === "string" ? item.query : "",
+              typeof action?.query === "string" ? action.query : "",
+              ...(Array.isArray(action?.queries)
+                ? action.queries.filter(
+                    (query): query is string => typeof query === "string",
+                  )
+                : []),
+            ];
+            if (!queries.some((query) => query.trim())) {
+              throw new Error("invalid completed web search");
+            }
+            completedWebSearchIds.add(item.id);
+          }
         }
       }
       if (event.type === "turn.completed") {
@@ -365,7 +406,7 @@ export class CodexCliStructuredAIProvider implements StructuredAIProvider {
         : request.outputSchema;
       await filesystem.writeFile(
         schemaPath,
-        JSON.stringify(z.toJSONSchema(wireSchema)),
+        JSON.stringify(codexCompatibleJsonSchema(z.toJSONSchema(wireSchema))),
       );
       let result;
       try {

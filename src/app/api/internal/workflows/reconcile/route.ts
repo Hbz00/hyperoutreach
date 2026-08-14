@@ -1,6 +1,7 @@
 import { authorizeOperatorRequest } from "@/lib/operator-auth";
 import { createWorkflowDispatcher } from "@/modules/workflows/dispatcher-factory";
-import { recoveryDispatchKey } from "@/modules/workflows/recovery-service";
+import { dispatchMaintenanceTick } from "@/modules/workflows/maintenance-service";
+import { resolveWorkflowProvider } from "@/modules/workflows/provider-config";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -18,15 +19,18 @@ export async function POST(request: Request) {
   }
   const now = new Date();
   try {
-    const outcome = await createWorkflowDispatcher().dispatch({
-      task: "recover-stale-work",
-      payload: { observedAt: now.toISOString() },
-      idempotencyKey: recoveryDispatchKey(now),
-    });
-    return Response.json(outcome, { status: outcome.duplicate ? 200 : 202 });
+    const outcomes = await dispatchMaintenanceTick(
+      createWorkflowDispatcher(),
+      resolveWorkflowProvider(process.env),
+      now,
+    );
+    return Response.json(
+      { outcomes },
+      { status: outcomes.every((outcome) => outcome.duplicate) ? 200 : 202 },
+    );
   } catch {
     return Response.json(
-      { error: "Workflow recovery dispatch failed" },
+      { error: "Workflow maintenance failed" },
       { status: 503 },
     );
   }

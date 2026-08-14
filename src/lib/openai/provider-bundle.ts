@@ -5,11 +5,16 @@ import {
   type ResolvedAIProviderConfig,
 } from "@/lib/openai/provider-config";
 import type { StructuredAIProvider } from "@/lib/openai/providers/types";
+import { DEFAULT_OPENAI_OPERATION_TIMEOUT_MS } from "@/lib/openai/providers/responses-provider";
 
 export type LiveAIProviderBundle = {
   mode: "openai" | "codex";
   usesRealInfrastructure: true;
-  research: { provider: StructuredAIProvider; model: string };
+  research: {
+    provider: StructuredAIProvider;
+    model: string;
+    operationTimeoutMs: number;
+  };
   nonWeb: { provider: StructuredAIProvider; model: string };
 };
 
@@ -40,6 +45,7 @@ export function createLiveAIProviderBundle(
       research: {
         provider: codex,
         model: `codex-cli:${config.codex.researchModel}`,
+        operationTimeoutMs: config.codex.timeoutMs,
       },
       nonWeb: {
         provider: codex,
@@ -60,6 +66,7 @@ export function createLiveAIProviderBundle(
     research: {
       provider: responses,
       model: config.openai.researchModel,
+      operationTimeoutMs: DEFAULT_OPENAI_OPERATION_TIMEOUT_MS,
     },
     nonWeb: { provider: responses, model: config.openai.fastModel },
   };

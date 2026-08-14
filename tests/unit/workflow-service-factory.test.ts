@@ -5,6 +5,7 @@ import type { AIProviderBundle } from "@/lib/openai/provider-bundle";
 import type { StructuredAIProvider } from "@/lib/openai/providers/types";
 import type { DnsMxResolver } from "@/modules/email-resolution/dns";
 import {
+  assertInboundBatchSucceeded,
   composeEmailResolutionProviders,
   createWorkflowTaskServices,
 } from "@/modules/workflows/service-factory";
@@ -90,7 +91,11 @@ describe("workflow service provider composition", () => {
     const bundle: AIProviderBundle = {
       mode: "codex",
       usesRealInfrastructure: true,
-      research: { provider: codex, model: "codex-cli:research" },
+      research: {
+        provider: codex,
+        model: "codex-cli:research",
+        operationTimeoutMs: 120_000,
+      },
       nonWeb: { provider: codex, model: "codex-cli:fast" },
     };
     const injected = dependencies(bundle);
@@ -139,6 +144,7 @@ describe("workflow service provider composition", () => {
     );
 
     const emailProviders = composeEmailResolutionProviders(bundle, injected);
+    expect(emailProviders.publicEvidenceOperationTimeoutMs).toBe(120_000);
     await emailProviders.dns.resolve("example.com");
     await emailProviders.publicEvidence.find({ companyDomain: "example.com" });
     expect(injected.createRealDns).toHaveBeenCalledOnce();
@@ -164,7 +170,11 @@ describe("workflow service provider composition", () => {
     const bundle: AIProviderBundle = {
       mode: "openai",
       usesRealInfrastructure: true,
-      research: { provider: responses, model: "research-model" },
+      research: {
+        provider: responses,
+        model: "research-model",
+        operationTimeoutMs: 30_000,
+      },
       nonWeb: { provider: responses, model: "fast-model" },
     };
     const injected = dependencies(bundle);
@@ -182,6 +192,7 @@ describe("workflow service provider composition", () => {
       requiredSignals: [],
     });
     const emailProviders = composeEmailResolutionProviders(bundle, injected);
+    expect(emailProviders.publicEvidenceOperationTimeoutMs).toBe(30_000);
     await emailProviders.dns.resolve("example.com");
     await emailProviders.publicEvidence.find({ companyDomain: "example.com" });
 
@@ -208,6 +219,7 @@ describe("workflow service provider composition", () => {
     );
 
     const emailProviders = composeEmailResolutionProviders(bundle, injected);
+    expect(emailProviders.publicEvidenceOperationTimeoutMs).toBe(10_000);
     await emailProviders.dns.resolve("example.com");
     await expect(
       emailProviders.publicEvidence.find({ companyDomain: "example.com" }),
@@ -218,5 +230,25 @@ describe("workflow service provider composition", () => {
     expect(injected.createRealDns).not.toHaveBeenCalled();
     expect(injected.mockDns.resolve).toHaveBeenCalledWith("example.com");
     expect(injected.realDns.resolve).not.toHaveBeenCalled();
+  });
+});
+
+describe("inbound maintenance safety", () => {
+  it("fails the batch when any SMTP/IMAP mailbox reconciliation failed", () => {
+    expect(() =>
+      assertInboundBatchSucceeded([
+        { mailboxId: "mailbox-ok", result: { processed: 1 } },
+        { mailboxId: "mailbox-failed", error: "Connection refused" },
+      ]),
+    ).toThrow("Inbound mailbox reconciliation failed");
+  });
+
+  it("accepts an empty or fully successful batch", () => {
+    expect(() => assertInboundBatchSucceeded([])).not.toThrow();
+    expect(() =>
+      assertInboundBatchSucceeded([
+        { mailboxId: "mailbox-ok", result: { processed: 1 } },
+      ]),
+    ).not.toThrow();
   });
 });

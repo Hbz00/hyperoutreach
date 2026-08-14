@@ -103,6 +103,26 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await expect(
       page.getByRole("heading", { name: "Campaign state at a glance" }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Your operating path" }),
+    ).toBeVisible();
+    const path = page.getByRole("list", { name: "Outreach workflow" });
+    await expect(path.getByRole("listitem")).toHaveCount(6);
+    await expect(path).toContainText("1. Settings");
+    await expect(path).toContainText("2. Campaigns");
+    await expect(path).toContainText("3. Prospects");
+    await expect(path).toContainText("4. Campaign enrollment");
+    await expect(path).toContainText("5. Review queue");
+    await expect(path).toContainText("6. Inbox");
+    await expect(
+      page.getByText("0 live · 1 mock", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Deterministic mock", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("deterministic-mock", { exact: true }),
+    ).toBeVisible();
 
     await page.getByRole("link", { name: "Settings", exact: true }).click();
     const settings = page.locator('form[action$="update-settings"]');

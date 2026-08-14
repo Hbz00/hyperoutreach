@@ -360,11 +360,11 @@ describe("Codex CLI structured provider", () => {
       "put the business result in output and every cited HTTP(S) URL in sources",
     );
     expect(args.slice(0, 2)).toEqual(["--search", "exec"]);
-    expect(
-      args.flatMap((argument, index) =>
-        argument === "-c" && args[index + 1] ? [args[index + 1]!] : [],
-      ),
-    ).toEqual([
+    const overrides = args.flatMap((argument, index) =>
+      argument === "-c" && args[index + 1] ? [args[index + 1]!] : [],
+    );
+    expect(overrides).not.toContain("features.code_mode_host=false");
+    expect(overrides).toEqual([
       developerInstructionsOverride,
       "features.shell_tool=false",
       "features.unified_exec=false",
@@ -380,7 +380,6 @@ describe("Codex CLI structured provider", () => {
       "features.browser_use=false",
       "features.browser_use_external=false",
       "features.browser_use_full_cdp_access=false",
-      "features.code_mode_host=false",
       "features.computer_use=false",
       "features.goals=false",
       "features.image_generation=false",
@@ -439,6 +438,65 @@ describe("Codex CLI structured provider", () => {
     });
   });
 
+  it("removes unsupported URI formats and regex lookarounds from the complete web output schema", async () => {
+    let generatedSchema: Record<string, unknown> | undefined;
+    const httpUrl = z.url().refine((value) => {
+      const protocol = new URL(value).protocol;
+      return protocol === "http:" || protocol === "https:";
+    });
+    const runner = new CapturingRunner(
+      {
+        exitCode: 0,
+        stdout: webJsonl({
+          output: {
+            website: "https://example.com/company",
+            email: "person@example.com",
+          },
+          sources: [{ url: "https://example.com/source", title: null }],
+        }),
+        stderr: "",
+      },
+      async (processRequest) => {
+        generatedSchema = JSON.parse(
+          await readFile(
+            join(processRequest.cwd, "output-schema.json"),
+            "utf8",
+          ),
+        );
+      },
+    );
+
+    await new CodexCliStructuredAIProvider(
+      { executable: "codex", timeoutMs: 1_000, maxConcurrency: 1 },
+      runner,
+      { temporaryRoot: tmpdir() },
+    ).run(
+      request({
+        outputSchema: z.object({ website: httpUrl, email: z.email() }).strict(),
+        useWebSearch: true,
+      }),
+    );
+
+    expect(generatedSchema).toMatchObject({
+      properties: {
+        output: {
+          properties: {
+            website: { type: "string" },
+            email: { type: "string" },
+          },
+        },
+        sources: {
+          items: {
+            properties: { url: { type: "string" } },
+          },
+        },
+      },
+    });
+    const schemaText = JSON.stringify(generatedSchema);
+    expect(schemaText).not.toContain('"format":"uri"');
+    expect(schemaText).not.toMatch(/\(\?(?:[=!]|<[=!])/);
+  });
+
   it("counts completed web searches once per stable item ID", async () => {
     const search = {
       id: "exec-search-1",
@@ -466,6 +524,44 @@ describe("Codex CLI structured provider", () => {
 
     expect(result.sources).toEqual([]);
     expect(result.toolUsage).toEqual({ webSearchCalls: 2 });
+  });
+
+  it("accepts completed auxiliary web actions without counting them as searches", async () => {
+    const runner = new CapturingRunner({
+      exitCode: 0,
+      stdout: webJsonl(
+        {
+          output: { answer: "Evidence-backed", confidence: 0.9 },
+          sources: [],
+        },
+        [
+          {
+            id: "exec-search-1",
+            type: "web_search",
+            query: "site:example.com evidence",
+            action: {
+              type: "search",
+              queries: ["site:example.com evidence"],
+            },
+          },
+          {
+            id: "exec-open-1",
+            type: "web_search",
+            query: "",
+            action: { type: "other" },
+          },
+        ],
+      ),
+      stderr: "",
+    });
+
+    const result = await new CodexCliStructuredAIProvider(
+      { executable: "codex", timeoutMs: 1_000, maxConcurrency: 1 },
+      runner,
+      { temporaryRoot: tmpdir() },
+    ).run(request({ useWebSearch: true }));
+
+    expect(result.toolUsage).toEqual({ webSearchCalls: 1 });
   });
 
   it.each([
@@ -1314,7 +1410,11 @@ describe("production provider bundle", () => {
     expect(cli.run).not.toHaveBeenCalled();
     expect(bundle).toMatchObject({
       mode: "codex",
-      research: { provider: cli, model: "codex-cli:codex-research" },
+      research: {
+        provider: cli,
+        model: "codex-cli:codex-research",
+        operationTimeoutMs: 120_000,
+      },
       nonWeb: { provider: cli, model: "codex-cli:codex-fast" },
     });
     if (bundle.mode === "mock") throw new Error("unexpected mock bundle");

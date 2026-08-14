@@ -27,6 +27,7 @@ describe("reply classifier provider routing", () => {
       research: {
         provider: { run: codexRun },
         model: "codex-cli:codex-research",
+        operationTimeoutMs: 120_000,
       },
       nonWeb: {
         provider: { run: codexRun },
@@ -62,6 +63,7 @@ describe("reply classifier provider routing", () => {
       research: {
         provider: { run: researchRun },
         model: "research-model",
+        operationTimeoutMs: 120_000,
       },
       nonWeb: {
         provider: { run: codexRun },
@@ -104,6 +106,7 @@ describe("reply classifier provider routing", () => {
       research: {
         provider: { run: responsesRun },
         model: "research-model",
+        operationTimeoutMs: 30_000,
       },
       nonWeb: {
         provider: { run: responsesRun },

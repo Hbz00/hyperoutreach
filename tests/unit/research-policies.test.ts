@@ -11,6 +11,7 @@ describe("account discovery merge policy", () => {
         strongDomainAccountId: "strong",
         domainlessNameAccountId: "fallback",
         sameNameDomainAccountId: "strong",
+        sameNameDomainAccountCount: 1,
       }),
     ).toEqual({ action: "use_existing", accountId: "strong" });
   });
@@ -22,6 +23,7 @@ describe("account discovery merge policy", () => {
         strongDomainAccountId: null,
         domainlessNameAccountId: "fallback",
         sameNameDomainAccountId: null,
+        sameNameDomainAccountCount: 0,
       }),
     ).toEqual({ action: "enrich_fallback", accountId: "fallback" });
   });
@@ -33,19 +35,21 @@ describe("account discovery merge policy", () => {
         strongDomainAccountId: null,
         domainlessNameAccountId: null,
         sameNameDomainAccountId: "different-domain",
+        sameNameDomainAccountCount: 1,
       }),
     ).toEqual({ action: "create" });
   });
 
-  it("uses name fallback only for a domainless incoming company", () => {
+  it("refuses a domainless input when weak and strong same-name accounts coexist", () => {
     expect(
       decideAccountMerge({
         incomingDomain: null,
         strongDomainAccountId: null,
         domainlessNameAccountId: "fallback",
         sameNameDomainAccountId: "strong",
+        sameNameDomainAccountCount: 1,
       }),
-    ).toEqual({ action: "use_existing", accountId: "fallback" });
+    ).toEqual({ action: "ambiguous" });
   });
 
   it("uses an existing same-name domain account for a later domainless candidate", () => {
@@ -55,8 +59,33 @@ describe("account discovery merge policy", () => {
         strongDomainAccountId: null,
         domainlessNameAccountId: null,
         sameNameDomainAccountId: "strong",
+        sameNameDomainAccountCount: 1,
       }),
     ).toEqual({ action: "use_existing", accountId: "strong" });
+  });
+
+  it("refuses to guess between multiple strong same-name companies", () => {
+    expect(
+      decideAccountMerge({
+        incomingDomain: null,
+        strongDomainAccountId: null,
+        domainlessNameAccountId: null,
+        sameNameDomainAccountId: "oldest-is-not-authoritative",
+        sameNameDomainAccountCount: 2,
+      }),
+    ).toEqual({ action: "ambiguous" });
+  });
+
+  it("does not enrich a weak record when another strong same-name company exists", () => {
+    expect(
+      decideAccountMerge({
+        incomingDomain: "new-domain.example",
+        strongDomainAccountId: null,
+        domainlessNameAccountId: "weak",
+        sameNameDomainAccountId: "other-domain",
+        sameNameDomainAccountCount: 1,
+      }),
+    ).toEqual({ action: "create" });
   });
 });
 

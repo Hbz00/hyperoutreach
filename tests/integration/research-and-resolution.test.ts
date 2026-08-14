@@ -433,6 +433,72 @@ describe("database-backed research and email resolution", () => {
     ).toHaveLength(1);
   });
 
+  it("does not guess a domainless discovery match between strong same-name companies", async () => {
+    const first = await createOrGetAccount(db, {
+      name: "Discovery Homonym",
+      domain: "discovery-homonym-one.example",
+    });
+    const second = await createOrGetAccount(db, {
+      name: "Discovery Homonym",
+      domain: "discovery-homonym-two.example",
+    });
+    if (!first.ok || !second.ok) throw new Error("Account fixture failed");
+    const sourceUrl = "https://directory.example/discovery-homonym";
+    const discovered = await discoverAccounts(
+      db,
+      new AccountDiscoveryFixture({
+        candidates: [
+          {
+            name: "Discovery Homonym",
+            domain: null,
+            website: null,
+            industry: null,
+            employeeRange: null,
+            country: null,
+            confidence: 0.7,
+            sources: [
+              {
+                url: sourceUrl,
+                title: "Directory listing",
+                supports: ["identity"],
+                retrievedAt,
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        icp: "Companies used to verify ambiguous identity handling",
+        limit: 1,
+        countries: [],
+        industries: [],
+      },
+    );
+    expect(discovered).toMatchObject({
+      ok: true,
+      accounts: [],
+      conflicts: [
+        {
+          code: "AMBIGUOUS_NAME",
+          name: "Discovery Homonym",
+          domain: null,
+        },
+      ],
+    });
+    expect(
+      await db
+        .select()
+        .from(schema.accounts)
+        .where(eq(schema.accounts.normalizedName, "discovery homonym")),
+    ).toHaveLength(2);
+    expect(
+      await db
+        .select()
+        .from(schema.evidenceSources)
+        .where(eq(schema.evidenceSources.url, sourceUrl)),
+    ).toHaveLength(0);
+  });
+
   it("fails provenance-mismatched discovery without persisting model claims", async () => {
     const output: AccountDiscoveryOutput = {
       candidates: [
@@ -859,6 +925,11 @@ describe("database-backed research and email resolution", () => {
     expect(discovered.ok).toBe(true);
     if (!discovered.ok) return;
     expect(discovered.contacts).toHaveLength(1);
+    expect(discovered.contacts[0]?.professionalRelevance).toEqual({
+      relevant: true,
+      targetRoles: ["VP Sales"],
+      confidence: 0.94,
+    });
     const evidence = await db
       .select()
       .from(schema.evidenceSources)
@@ -2156,6 +2227,65 @@ describe("database-backed research and email resolution", () => {
       reason: "provider_transient_error",
     });
     expect(enrichmentAborted).toBe(true);
+  });
+
+  it("gives AI public evidence its own longer deadline without relaxing DNS and enrichment", async () => {
+    const fixture = await accountAndContact("email-public-evidence-deadline");
+    const slowPublicEvidence = {
+      name: "slow-public-evidence",
+      async find(_input: unknown, options?: { signal?: AbortSignal }) {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(resolve, 40);
+          options?.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timeout);
+              reject(options.signal?.reason);
+            },
+            { once: true },
+          );
+        });
+        return {
+          samples: [
+            {
+              firstName: "Marie",
+              lastName: "Dupont",
+              email: `marie.dupont@${fixture.domain}`,
+              sourceUrl: `https://${fixture.domain}/team`,
+            },
+            {
+              firstName: "John",
+              lastName: "Smith",
+              email: `john.smith@${fixture.domain}`,
+              sourceUrl: `https://${fixture.domain}/team`,
+            },
+          ],
+          sourceUrls: [`https://${fixture.domain}/team`],
+        };
+      },
+    };
+    await expect(
+      resolveContactEmailService(
+        db,
+        new MockDnsMxResolver(true),
+        null,
+        { contactId: fixture.contact.id },
+        {
+          providerOperationTimeoutMs: 10,
+          publicEvidenceOperationTimeoutMs: 100,
+          publicEvidenceProvider: slowPublicEvidence,
+        },
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: "resolved",
+      reason: null,
+      candidates: [
+        expect.objectContaining({
+          normalizedEmail: `alice.emailpublicevidencedeadline@${fixture.domain}`,
+        }),
+      ],
+    });
   });
 
   it("does not mark a second contact resolved when the candidate belongs to another contact", async () => {

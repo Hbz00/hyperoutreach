@@ -83,10 +83,45 @@ describe("database-backed reliable outreach vertical slice", () => {
     });
     expect(domainBearingSharedName.ok && domainlessSharedName.ok).toBe(true);
     if (!domainBearingSharedName.ok || !domainlessSharedName.ok) return;
-    expect(domainlessSharedName).toMatchObject({ disposition: "created" });
-    expect(domainlessSharedName.account.id).not.toBe(
+    expect(domainlessSharedName).toMatchObject({ disposition: "existing" });
+    expect(domainlessSharedName.account.id).toBe(
       domainBearingSharedName.account.id,
     );
+
+    const weakBeforeDomain = await createOrGetAccount(db, {
+      name: "Weak Before Domain",
+    });
+    expect(weakBeforeDomain.ok).toBe(true);
+    if (!weakBeforeDomain.ok) return;
+    const enrichedWeak = await createOrGetAccount(db, {
+      name: "Weak Before Domain",
+      domain: "weak-before-domain.example",
+    });
+    expect(enrichedWeak).toMatchObject({
+      ok: true,
+      disposition: "existing",
+      account: {
+        id: weakBeforeDomain.account.id,
+        domain: "weak-before-domain.example",
+      },
+    });
+
+    const ambiguousOne = await createOrGetAccount(db, {
+      name: "Ambiguous Holdings",
+      domain: "ambiguous-one.example",
+    });
+    const ambiguousTwo = await createOrGetAccount(db, {
+      name: "Ambiguous Holdings",
+      domain: "ambiguous-two.example",
+    });
+    expect(ambiguousOne.ok && ambiguousTwo.ok).toBe(true);
+    await expect(
+      createOrGetAccount(db, { name: "Ambiguous Holdings" }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "AMBIGUOUS_IDENTITY",
+      message: "Company name matches multiple domains; provide a domain",
+    });
 
     const domainless = await createOrGetAccount(db, { name: "No Domain SAS" });
     const duplicateDomainless = await createOrGetAccount(db, {

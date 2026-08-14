@@ -125,6 +125,7 @@ export async function discoverContacts(
         jobTitle: candidate.jobTitle,
         linkedinUrl: candidate.linkedinUrl,
         professionalRelevance: {
+          relevant: true,
           targetRoles: parsed.data.roles,
           confidence: candidate.confidence,
         },

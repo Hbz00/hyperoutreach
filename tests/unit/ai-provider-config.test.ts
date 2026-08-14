@@ -219,6 +219,7 @@ describe("live AI provider bundle", () => {
       research: {
         provider: codexProvider,
         model: "codex-cli:codex-research",
+        operationTimeoutMs: 120_000,
       },
       nonWeb: {
         provider: codexProvider,

@@ -12,9 +12,11 @@ The complete credential-free MVP path is implemented: authenticated operator
 UI, prospect research and resolution, immutable campaigns, human review, mock
 sending, durable follow-ups, reply ingestion, suppression, and operational
 inspection. PostgreSQL migrations, deterministic provider substitutes, and
-unit/integration/Playwright coverage are included. Real Microsoft Graph,
-OpenAI, and Trigger.dev adapters are implemented and contract-tested; live
-provider verification still requires the operator's own credentials.
+unit/integration/Playwright coverage are included. The local Codex CLI adapter
+has also been smoke-tested through the real structured research path. Microsoft
+Graph, OpenAI Responses, and Trigger.dev adapters are implemented and
+contract-tested; their live verification still requires the operator's own
+credentials.
 
 ## Prerequisites
 
@@ -27,14 +29,13 @@ does **not** expose `docker compose`; the npm database scripts deliberately use
 the verified legacy binary. PostgreSQL is published only on the loopback
 interface (`127.0.0.1:55432`), not on external network interfaces.
 
-## Local setup
+## Real/self-hosted installation (no demo data)
 
 ```bash
 cp .env.example .env.local
 npm_config_cache=/private/tmp/hyperoutreach-npm-cache npm ci
 npm run db:up
 npm run db:migrate
-npm run db:seed
 npm run dev
 ```
 
@@ -49,6 +50,37 @@ The example environment defaults all external providers to deterministic mock
 mode. Replace the session and encryption placeholders before any non-local use.
 OpenAI, Microsoft, and Trigger credentials are server-only and intentionally
 blank. Never commit `.env` or `.env.local`.
+
+Do **not** run a seed command for a real installation. Migrations create only
+the schema and the singleton sending-policy row; connect the real mailbox from
+Settings. For the first controlled send, keep automatic follow-ups disabled and
+set both daily caps to `1`.
+
+## Optional local mock demonstration
+
+To add the deterministic `operator@example.com` mock mailbox explicitly:
+
+```bash
+npm run db:seed:mock
+```
+
+`npm run db:seed` remains a compatibility alias for this demo-only command. It
+must not be part of a real installation bootstrap. The database volume is
+persistent: migrations and seed commands do not erase earlier campaigns,
+messages, replies, or suppressions.
+
+To preserve an existing development database as an archive, create a separate
+database, migrate it, and only then change `DATABASE_URL`:
+
+```bash
+docker-compose exec -T postgres psql -U hyperoutreach -d postgres \
+  -c "create database hyperoutreach_live owner hyperoutreach"
+DATABASE_URL=postgresql://hyperoutreach:hyperoutreach@localhost:55432/hyperoutreach_live \
+  npm run db:migrate
+```
+
+Do not run this create command again after the database exists, and do not run
+the mock seed against it.
 
 ## Operator workflow
 
@@ -89,7 +121,8 @@ that destroys local database data and is therefore not the default script.
 - `npm run db:check` validates migration-history consistency.
 - `npm run db:up` starts PostgreSQL and idempotently provisions the disposable
   `hyperoutreach_test` database, including when the Docker volume already exists.
-- `npm run db:seed` idempotently creates the local mock mailbox.
+- `npm run db:seed:mock` idempotently creates the explicit local-demo mock
+  mailbox; `db:seed` is only a compatibility alias.
 - `npm run test:integration` rebuilds the test database's `public` schema,
   applies the repository-visible migrations through Drizzle, and proves the material
   relational constraints against PostgreSQL. It uses `TEST_DATABASE_URL` rather
@@ -114,6 +147,16 @@ Historical `used_at` state remains after enrollment deletion, and an enrollment'
 campaign, version, and contact identity cannot be repinned after insert;
 operational state and mailbox assignment remain updateable. Tables with an
 `updated_at` column advance it automatically on update.
+
+Account creation and AI discovery share one conservative identity policy. An
+exact normalized domain always reuses its account. A newly supplied domain may
+enrich the single same-name domainless account; a domainless input may reuse a
+single unambiguous same-name account. When several same-name accounts have
+different domains, Hyperoutreach refuses the automatic merge and requires a
+domain instead of choosing an arbitrary oldest row. Contact discovery reports
+validated known identities through the same global LinkedIn/company-scoped
+fallback constraints; rerunning it may consume another provider call but cannot
+create a duplicate strong identity.
 
 ## Discovery, research, and email resolution
 
@@ -146,6 +189,15 @@ CODEX_FAST_MODEL=gpt-5.6-luna
 CODEX_TIMEOUT_MS=120000
 CODEX_MAX_CONCURRENCY=1
 ```
+
+For web requests, the hardened invocation keeps Codex's Code Mode host enabled
+because Codex CLI 0.147.0 requires it to expose the GPT-5.6 web-search tool even
+when `--search` is present. Shell, unified execution, browser, app, plugin,
+memory, image, computer-use, and subagent capabilities remain disabled. Non-web
+requests also disable the Code Mode host. The generated wire schema removes the
+unsupported JSON Schema `format: "uri"` annotation and regex lookarounds that
+Codex rejects, while the original Zod schema still validates every returned URL
+and email after execution.
 
 Codex mode requires local workflow execution and is rejected with
 `WORKFLOW_PROVIDER=trigger`; a hosted Trigger worker cannot use the operator
@@ -209,8 +261,11 @@ does not accept mail; any MX only affects confidence and never proves that a
 recipient exists. Below the confidence threshold, an optional
 `EmailEnrichmentProvider` can add candidates;
 no-result and transient-failure outcomes remain explicit instead of inventing an
-address. DNS, public-evidence, enrichment, and OpenAI operations are abortable and
-deadline-bound. A claim fenced by contact/account/domain/employment version keeps
+address. DNS and conventional enrichment retain their short provider deadline.
+AI public-evidence research has its own deadline: Codex uses
+`CODEX_TIMEOUT_MS` (120 seconds by default) while Responses uses its provider
+operation timeout. All remain abortable and deadline-bound. A claim fenced by
+contact/account/domain/employment version keeps
 late old-employer results from persisting. PostgreSQL permits at most one accepted
 address per contact, and later resolutions replace it transactionally. Contacts
 durably retain a typed outcome reason (including missing domain,
@@ -329,8 +384,12 @@ persistence and send does not strand the local workflow.
 
 For a long-running local/self-hosted installation, call the authenticated
 `POST /api/internal/workflows/reconcile` endpoint once per minute from the host
-scheduler. It executes recovery synchronously in mock/local mode and dispatches
-the durable recovery task in Trigger mode. Repeated calls in the same minute are
+scheduler. In local mode, one tick executes and audits the safety-critical order
+**SMTP/IMAP inbox reconciliation → due follow-ups → stale-work recovery**. A
+mailbox reconciliation failure therefore stops the tick before any due send;
+mailbox health also remains a deterministic send-policy gate. In Trigger mode,
+the endpoint dispatches recovery because the dedicated Trigger schedules own
+inbox and due-follow-up reconciliation. Repeated calls in the same minute are
 persistently deduplicated.
 
 For Trigger.dev Cloud, create a project, set `WORKFLOW_PROVIDER=trigger`,
@@ -466,13 +525,15 @@ suppression.
   files, and test artifacts passed `npm ci`, formatting, lint, typecheck,
   unit/integration tests, eval, migration-history validation, Trigger task
   import, and production build.
-- Live OpenAI, Microsoft Graph, and Trigger.dev behavior is not claimed as
-  verified. The real OpenAI and Microsoft Graph adapters are contract-tested
-  without network access; live checks still require explicitly supplied
-  credentials and, for Graph notifications, a public HTTPS endpoint. The
-  Trigger.dev task module and dispatcher contract are tested locally, but cloud
-  execution/deployment still needs a configured project. Mock mode keeps the
-  entire application credential-free.
+- Live OpenAI Responses, Microsoft Graph, and Trigger.dev Cloud behavior is not
+  claimed as verified. Their adapters are contract-tested without network
+  access; live checks still require explicitly supplied credentials and, for
+  Graph notifications, a public HTTPS endpoint. Codex CLI 0.147.0 has been
+  exercised through the exact application provider, including structured web
+  research and the public-email resolution service with its 120-second lane.
+  The Trigger.dev task module and dispatcher contract are tested locally, but
+  cloud execution/deployment still needs a configured project. Mock mode keeps
+  the entire application credential-free.
 - The full credential-free critical lifecycle is verified through rendered
   Chromium as documented above. Live provider smoke checks remain separate.
 - A full development-dependency `npm audit` retains five moderate findings in

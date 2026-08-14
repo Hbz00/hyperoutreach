@@ -208,6 +208,7 @@ export async function resolveContactEmail(
     now?: Date;
     claimLeaseMs?: number;
     providerOperationTimeoutMs?: number;
+    publicEvidenceOperationTimeoutMs?: number;
     publicEvidenceProvider?: PublicEmailEvidenceProvider | null;
   } = {},
 ): Promise<ResolveContactEmailResult> {
@@ -223,6 +224,8 @@ export async function resolveContactEmail(
   const claimLeaseMs = options.claimLeaseMs ?? 5 * 60_000;
   const providerOperationTimeoutMs =
     options.providerOperationTimeoutMs ?? 10_000;
+  const publicEvidenceOperationTimeoutMs =
+    options.publicEvidenceOperationTimeoutMs ?? providerOperationTimeoutMs;
   const claimId = randomUUID();
   const [owner] = await db
     .select({ contact: contacts, account: accounts })
@@ -358,7 +361,7 @@ export async function resolveContactEmail(
         db,
         options.publicEvidenceProvider,
         { companyDomain: domain },
-        providerOperationTimeoutMs,
+        publicEvidenceOperationTimeoutMs,
       );
       publicSamples = evidence.samples;
     } catch {
