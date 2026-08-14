@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { connect as netConnect } from "node:net";
 
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { ImapFlow } from "imapflow";
+import nodemailer from "nodemailer";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -108,36 +108,64 @@ const GREENMAIL_HOST = "127.0.0.1";
 const GREENMAIL_IMAPS_PORT = 3993;
 const GREENMAIL_SMTPS_PORT = 3587;
 
-function isPortOpen(
-  host: string,
-  port: number,
-  timeoutMs = 1_500,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = netConnect({ host, port });
-    const finish = (result: boolean) => {
-      socket.removeAllListeners();
-      socket.destroy();
-      resolve(result);
-    };
-    socket.setTimeout(timeoutMs);
-    socket.once("connect", () => finish(true));
-    socket.once("timeout", () => finish(false));
-    socket.once("error", () => finish(false));
+const GREENMAIL_READINESS_TIMEOUT_MS = 1_500;
+const GREENMAIL_READINESS_AUTH = {
+  user: "readiness@greenmail.local",
+  pass: "readiness",
+};
+
+async function probeImaps(): Promise<void> {
+  const imap = new ImapFlow({
+    host: GREENMAIL_HOST,
+    port: GREENMAIL_IMAPS_PORT,
+    secure: true,
+    auth: GREENMAIL_READINESS_AUTH,
+    logger: false,
+    tls: { rejectUnauthorized: false },
+    connectionTimeout: GREENMAIL_READINESS_TIMEOUT_MS,
+    greetingTimeout: GREENMAIL_READINESS_TIMEOUT_MS,
+    socketTimeout: GREENMAIL_READINESS_TIMEOUT_MS,
   });
+  try {
+    await imap.connect();
+    await imap.logout();
+  } catch (error) {
+    imap.close();
+    throw error;
+  }
 }
 
-// A container that is merely slow to accept connections (still starting)
-// looks identical to "absent" from a single quick probe -- a short retry
-// loop tells the two apart without turning a genuinely absent container into
-// a long hang.
+async function probeSmtps(): Promise<void> {
+  const transporter = nodemailer.createTransport({
+    host: GREENMAIL_HOST,
+    port: GREENMAIL_SMTPS_PORT,
+    secure: true,
+    auth: GREENMAIL_READINESS_AUTH,
+    tls: { rejectUnauthorized: false },
+    connectionTimeout: GREENMAIL_READINESS_TIMEOUT_MS,
+    greetingTimeout: GREENMAIL_READINESS_TIMEOUT_MS,
+    socketTimeout: GREENMAIL_READINESS_TIMEOUT_MS,
+  });
+  try {
+    await transporter.verify();
+  } finally {
+    transporter.close();
+  }
+}
+
+async function protocolsAreReady(): Promise<boolean> {
+  const results = await Promise.allSettled([probeImaps(), probeSmtps()]);
+  return results.every((result) => result.status === "fulfilled");
+}
+
+// A raw TCP connect/destroy against an implicit-TLS port is not a harmless
+// availability check: GreenMail 2.1.6 can leave its IMAP handler spinning on
+// EOF indefinitely. Complete the real TLS protocols and their LOGOUT/QUIT
+// shutdowns instead. A short retry loop still distinguishes a starting
+// container from an absent one.
 async function waitForGreenmail(): Promise<boolean> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const [imapOpen, smtpOpen] = await Promise.all([
-      isPortOpen(GREENMAIL_HOST, GREENMAIL_IMAPS_PORT),
-      isPortOpen(GREENMAIL_HOST, GREENMAIL_SMTPS_PORT),
-    ]);
-    if (imapOpen && smtpOpen) return true;
+    if (await protocolsAreReady()) return true;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;
