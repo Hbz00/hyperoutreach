@@ -522,4 +522,53 @@ describe("committed PostgreSQL migration", () => {
       "23514",
     );
   });
+
+  it("creates exactly one durable maintenance projection and its history index", async () => {
+    const rows = await client<
+      Array<{
+        id: number;
+        ownerToken: string | null;
+        cycleStartedAt: string | null;
+        heartbeatAt: string | null;
+        lastSucceededAt: string | null;
+        lastFailedAt: string | null;
+        lastError: string | null;
+      }>
+    >`
+      select
+        id,
+        owner_token as "ownerToken",
+        cycle_started_at as "cycleStartedAt",
+        heartbeat_at as "heartbeatAt",
+        last_succeeded_at as "lastSucceededAt",
+        last_failed_at as "lastFailedAt",
+        last_error as "lastError"
+      from maintenance_state
+    `;
+    expect(rows).toEqual([
+      {
+        id: 1,
+        ownerToken: null,
+        cycleStartedAt: null,
+        heartbeatAt: null,
+        lastSucceededAt: null,
+        lastFailedAt: null,
+        lastError: null,
+      },
+    ]);
+
+    await expectDatabaseError(
+      () => client`insert into maintenance_state (id) values (2)`,
+      "23514",
+    );
+
+    const [{ indexCount }] = await client<[{ indexCount: number }]>`
+      select count(*)::int as "indexCount"
+      from pg_indexes
+      where schemaname = 'public'
+        and tablename = 'workflow_events'
+        and indexname = 'workflow_events_workflow_created_idx'
+    `;
+    expect(indexCount).toBe(1);
+  });
 });

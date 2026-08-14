@@ -28,6 +28,7 @@ export default defineConfig({
       OPENAI_PROVIDER: "mock",
       MAIL_PROVIDER: "mock",
       WORKFLOW_PROVIDER: "mock",
+      LOCAL_MAINTENANCE_ENABLED: "false",
       // Never inherit an operator's real credentials into the disposable E2E
       // installation. The browser and request tests import these same values.
       OPERATOR_EMAIL: E2E_OPERATOR_EMAIL,

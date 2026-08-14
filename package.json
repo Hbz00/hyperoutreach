@@ -9,9 +9,12 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/run-local-stack.mjs dev",
+    "dev:web": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/run-local-stack.mjs start",
+    "start:web": "next start",
+    "maintenance:local": "node scripts/local-maintenance-worker.mjs",
     "trigger:dev": "trigger.dev dev",
     "trigger:deploy": "trigger.dev deploy",
     "format": "prettier --write .",
@@ -32,6 +35,7 @@
     "db:seed:mock": "tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@next/env": "16.3.0",
     "@trigger.dev/sdk": "4.5.10",
     "drizzle-orm": "0.45.2",
     "html-to-text": "10.0.0",

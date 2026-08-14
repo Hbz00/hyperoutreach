@@ -48,9 +48,11 @@ function enrollmentIdentity(html: string): string {
   return match[1];
 }
 
-test("operates the mock outreach lifecycle through authenticated application endpoints", async () => {
+test("operates the mock outreach lifecycle through authenticated application endpoints", async ({
+  baseURL,
+}) => {
   const browser = await playwrightRequest.newContext({
-    baseURL: "http://127.0.0.1:3000",
+    baseURL,
   });
   await browser.post("/api/operator/session", {
     form: {
@@ -62,6 +64,10 @@ test("operates the mock outreach lifecycle through authenticated application end
   });
   const prospects = await browser.get("/prospects");
   const csrf = hidden(await prospects.text(), "csrf");
+  const initialSettings = await (await browser.get("/settings")).text();
+  expect(initialSettings).toContain("Maintenance automation");
+  expect(initialSettings).toContain("Not started");
+  expect(initialSettings).toContain("Disabled by configuration");
   const settingsForm = new FormData();
   settingsForm.set("csrf", csrf);
   settingsForm.set("timezone", "UTC");

@@ -5,9 +5,11 @@ import {
   E2E_OPERATOR_PASSWORD,
 } from "./support/environment";
 
-test("protects the operator UI and issues a hardened session cookie", async () => {
+test("protects the operator UI and issues a hardened session cookie", async ({
+  baseURL,
+}) => {
   const anonymous = await playwrightRequest.newContext({
-    baseURL: "http://127.0.0.1:3000",
+    baseURL,
   });
   const protectedResponse = await anonymous.get("/prospects", {
     maxRedirects: 0,
@@ -76,9 +78,11 @@ test("protects the operator UI and issues a hardened session cookie", async () =
   await anonymous.dispose();
 });
 
-test("lets the authenticated operator remove a manual suppression with an audit justification", async () => {
+test("lets the authenticated operator remove a manual suppression with an audit justification", async ({
+  baseURL,
+}) => {
   const operator = await playwrightRequest.newContext({
-    baseURL: "http://127.0.0.1:3000",
+    baseURL,
   });
   await operator.post("/api/operator/session", {
     form: {

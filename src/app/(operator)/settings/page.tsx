@@ -1,17 +1,29 @@
 import { desc } from "drizzle-orm";
 
+import maintenanceConfig from "../../../../config/maintenance.json";
 import { getCodexCliStatus } from "@/lib/codex/status";
 import { getDatabase } from "@/lib/db/client";
 import {
   agentRuns,
   graphNotificationReceipts,
   mailboxConnections,
+  maintenanceState,
   workflowEvents,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { MaintenanceStatusPanel } from "@/modules/settings/maintenance-status-panel";
 import { resolveProviderPresentation } from "@/modules/settings/provider-presentation";
 import { getOperatorSendingSettings } from "@/modules/settings/service";
 import { listSuppressions } from "@/modules/suppression/service";
+import {
+  getMaintenanceCodeTimeoutMs,
+  getMaintenanceStatusPresentation,
+  resolveMaintenanceAutomationPresentation,
+} from "@/modules/workflows/maintenance-status-presentation";
+import {
+  resolveMaintenanceStatus,
+  type MaintenanceStatusProjection,
+} from "@/modules/workflows/maintenance-status";
 
 export default async function SettingsPage({
   searchParams,
@@ -29,6 +41,7 @@ export default async function SettingsPage({
     workflows,
     runs,
     notificationFailures,
+    maintenanceRows,
   ] = await Promise.all([
     resolveProviderPresentation(process.env, getCodexCliStatus),
     getOperatorSendingSettings(db),
@@ -56,7 +69,45 @@ export default async function SettingsPage({
       .from(graphNotificationReceipts)
       .orderBy(desc(graphNotificationReceipts.receivedAt))
       .limit(30),
+    db
+      .select({
+        ownerToken: maintenanceState.ownerToken,
+        cycleStartedAt: maintenanceState.cycleStartedAt,
+        heartbeatAt: maintenanceState.heartbeatAt,
+        lastSucceededAt: maintenanceState.lastSucceededAt,
+        lastFailedAt: maintenanceState.lastFailedAt,
+        lastError: maintenanceState.lastError,
+      })
+      .from(maintenanceState)
+      .limit(1),
   ]);
+  const maintenanceProjection: MaintenanceStatusProjection =
+    maintenanceRows[0] ?? {
+      ownerToken: null,
+      cycleStartedAt: null,
+      heartbeatAt: null,
+      lastSucceededAt: null,
+      lastFailedAt: null,
+      lastError: null,
+    };
+  const maintenanceStatus = resolveMaintenanceStatus(maintenanceProjection, {
+    now: new Date(),
+    intervalMs: maintenanceConfig.intervalMs,
+    codeTimeoutMs: getMaintenanceCodeTimeoutMs(process.env),
+    staleLeaseMs: maintenanceConfig.staleLeaseMs,
+  });
+  const maintenancePresentation = getMaintenanceStatusPresentation(
+    maintenanceStatus.state,
+  );
+  const maintenanceAutomation = resolveMaintenanceAutomationPresentation(
+    process.env,
+  );
+  const maintenanceActiveCycle = Boolean(maintenanceProjection.ownerToken)
+    ? {
+        startedAt: maintenanceProjection.cycleStartedAt,
+        heartbeatAt: maintenanceProjection.heartbeatAt,
+      }
+    : null;
   return (
     <main className="page-shell">
       <header className="page-header">
@@ -125,6 +176,14 @@ export default async function SettingsPage({
         ) : null}
         <p className="muted">Secret values are never rendered.</p>
       </section>
+      <MaintenanceStatusPanel
+        presentation={maintenancePresentation}
+        automation={maintenanceAutomation}
+        activeCycle={maintenanceActiveCycle}
+        lastSucceededAt={maintenanceProjection.lastSucceededAt}
+        lastFailedAt={maintenanceProjection.lastFailedAt}
+        lastError={maintenanceProjection.lastError}
+      />
       <section className="panel">
         <div className="panel-heading">
           <h2>Mailbox connections</h2>

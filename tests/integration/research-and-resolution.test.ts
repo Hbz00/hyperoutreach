@@ -1765,6 +1765,14 @@ describe("database-backed research and email resolution", () => {
       domain: "atomic-contact-batch.example",
     });
     if (!account.ok) throw new Error(account.message);
+    const priorRunIds = new Set(
+      (
+        await db
+          .select({ id: schema.agentRuns.id })
+          .from(schema.agentRuns)
+          .where(eq(schema.agentRuns.agent, "contact_discovery"))
+      ).map((run) => run.id),
+    );
     const output = {
       contacts: [
         {
@@ -1811,13 +1819,14 @@ describe("database-backed research and email resolution", () => {
         .from(schema.contacts)
         .where(eq(schema.contacts.accountId, account.account.id)),
     ).toHaveLength(0);
-    const [run] = await db
-      .select()
-      .from(schema.agentRuns)
-      .where(eq(schema.agentRuns.agent, "contact_discovery"))
-      .orderBy(schema.agentRuns.createdAt)
-      .then((rows) => (rows.at(-1) ? [rows.at(-1)!] : []));
-    expect(run?.status).not.toBe("succeeded");
+    const newRuns = (
+      await db
+        .select()
+        .from(schema.agentRuns)
+        .where(eq(schema.agentRuns.agent, "contact_discovery"))
+    ).filter((run) => !priorRunIds.has(run.id));
+    expect(newRuns).toHaveLength(1);
+    expect(newRuns[0]).toMatchObject({ status: "failed" });
   });
 
   it("persists high, low, and missing email-resolution outcomes without duplicate candidates", async () => {

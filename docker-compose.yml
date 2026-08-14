@@ -40,9 +40,18 @@ services:
       - "127.0.0.1:3587:3465"
     healthcheck:
       # The image has neither `curl` nor `wget` (bare Ubuntu + a JRE) -- `bash`
-      # is present, so `/dev/tcp` is the cheapest "is IMAPS actually accepting
-      # connections yet" probe available inside the container.
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/3993' || exit 1"]
+      # is present. Probe the internal plaintext SMTP listener and close it with
+      # QUIT: reading from an implicit-TLS port blocks before the TLS handshake
+      # and leaks descendants when Docker times the healthcheck out.
+      test:
+        [
+          "CMD",
+          "timeout",
+          "1",
+          "bash",
+          "-c",
+          "exec 3<>/dev/tcp/127.0.0.1/3025; printf 'QUIT\\r\\n' >&3; exec 3>&-; exec 3<&-",
+        ]
       interval: 2s
       timeout: 3s
       retries: 20

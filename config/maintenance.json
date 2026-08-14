@@ -1,0 +1,14 @@
+{
+  "intervalMs": 60000,
+  "stageMaximumsMs": {
+    "inbound": 300000,
+    "followups": 180000,
+    "recovery": 300000
+  },
+  "transportMarginMs": 60000,
+  "aggregateBudgetMs": 840000,
+  "heartbeatIntervalMs": 30000,
+  "staleLeaseMs": 120000,
+  "workerShutdownGraceMs": 30000,
+  "nextShutdownGraceMs": 30000
+}

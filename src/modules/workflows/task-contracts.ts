@@ -4,6 +4,7 @@ import {
   accountDiscoveryInputSchema,
   personalizationInputSchema,
 } from "@/modules/agents/schemas";
+import maintenanceConfig from "../../../config/maintenance.json";
 
 export const WORKFLOW_TASKS = {
   "account-discovery": {
@@ -62,6 +63,10 @@ export const WORKFLOW_TASKS = {
     maxDuration: 300,
     retry: { maxAttempts: 3, minTimeoutInMs: 2_000, maxTimeoutInMs: 30_000 },
   },
+  "maintenance-cycle": {
+    maxDuration: maintenanceConfig.aggregateBudgetMs / 1_000,
+    retry: { maxAttempts: 3, minTimeoutInMs: 2_000, maxTimeoutInMs: 30_000 },
+  },
 } as const;
 
 export type WorkflowTaskName = keyof typeof WORKFLOW_TASKS;
@@ -110,6 +115,7 @@ export type WorkflowPayloads = {
   "reconcile-inbound-mailboxes": { observedAt?: string; limit?: number };
   "maintain-graph-subscriptions": { observedAt?: string };
   "recover-stale-work": { observedAt?: string; limit?: number };
+  "maintenance-cycle": { observedAt?: string };
 };
 
 export type WorkflowDispatchRequest<T extends WorkflowTaskName> = {
@@ -184,6 +190,7 @@ export const WORKFLOW_PAYLOAD_SCHEMAS = {
       limit: z.number().int().min(1).max(200).optional(),
     })
     .strict(),
+  "maintenance-cycle": z.object({ observedAt: observedAtSchema }).strict(),
 } satisfies Record<WorkflowTaskName, z.ZodType>;
 
 export function parseWorkflowPayload<T extends WorkflowTaskName>(

@@ -5,9 +5,11 @@ import {
   E2E_OPERATOR_PASSWORD,
 } from "./support/environment";
 
-test("serves the authenticated product shell and public database health", async () => {
+test("serves the authenticated product shell and public database health", async ({
+  baseURL,
+}) => {
   const context = await playwrightRequest.newContext({
-    baseURL: "http://127.0.0.1:3000",
+    baseURL,
   });
   const health = await context.get("/api/health");
   expect(health.status()).toBe(200);

@@ -102,7 +102,8 @@ function entityContext<T extends WorkflowTaskName>(
     case "drain-graph-webhooks":
     case "reconcile-inbound-mailboxes":
     case "maintain-graph-subscriptions":
-    case "recover-stale-work": {
+    case "recover-stale-work":
+    case "maintenance-cycle": {
       const observedAt =
         "observedAt" in payload && typeof payload.observedAt === "string"
           ? payload.observedAt

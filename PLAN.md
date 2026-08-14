@@ -1,6 +1,6 @@
 # Hyperoutreach MVP Implementation Plan
 
-> Status: complete. `SPEC.md` is authoritative. Checkboxes reflect verified repository state, not intent.
+> Status: core MVP complete; automatic-maintenance remediation tasks 1–7 are implemented, while the final live smoke and completion review remain open. `SPEC.md` is authoritative. Checkboxes reflect verified repository state, not intent.
 
 ## Goal
 
@@ -72,7 +72,7 @@ Ship a self-hostable, single-operator prospecting and customer-discovery applica
 - [x] A versioned deterministic synthetic evaluation fixture and command report account/contact precision, fact-level evidence support, email accuracy/confidence/reasons, personalization acceptance, reply outcomes, policy blocks, and duplicates prevented; captured-output mutations and declared regressions fail the command without live providers.
 - [x] The evaluator accepts versioned captured model/prompt outputs and independent human labels for a roughly 100-prospect calibration. The repository fixture exercises that contract deterministically; running a live empirical comparison remains an explicitly documented credential/data-dependent validation step.
 - [x] Separate final review checked concurrency, idempotency, security, indexes, provider boundaries, stale state, N+1 access, dead code, documentation, and required-feature gaps; all material code, eval, browser-test, and documentation findings were fixed. Live-provider and empirical model-quality checks remain explicitly documented external validation boundaries.
-- [x] A clean-checkout README and `.env.example` document install/bootstrap, Docker/legacy Compose, migrations, mock/live modes, Trigger.dev setup, Microsoft app registration and webhook exposure, encryption/session keys, live smoke checks, deviations, and limitations. The repository has a `main` HEAD; the final correction commit is created only after this exact completion gate succeeds.
+- [x] A clean-checkout README and `.env.example` document install/bootstrap, Docker/legacy Compose, migrations, mock/live modes, Trigger.dev setup, Microsoft app registration and webhook exposure, encryption/session keys, live smoke checks, deviations, and limitations. The prior MVP correction set was committed after its completion gate; the new automatic-maintenance gate is tracked separately below.
 
 ## Validation commands
 
@@ -99,12 +99,36 @@ npm run build
 - [x] Harden reply identity validation, multi-identifier matching, rematch audit history, suppression provenance/removal, terminal guards, and campaign pause/resume.
 - [x] Reuse persisted unmatched/ambiguous reply classifications during reconciliation and rematch without new classifier calls or agent-run rows.
 - [x] Replace unbounded history loads, retain the existing matching indexes, and rerun clean/populated migration plus full static/test/build gates.
-- [x] In self-hosted local mode, order each maintenance minute as inbound SMTP/IMAP reconciliation, due follow-ups, then stale-work recovery; abort later stages when inbox reconciliation fails.
+- [x] In self-hosted local mode, start maintenance with `npm run dev`/`npm start`; order each cycle as all available non-mock inbound mailbox reconciliation, due follow-ups, then stale-work recovery; abort later stages when inbox reconciliation fails.
 - [x] Give AI public-email research a provider-specific deadline, and mark provenance-validated discovered employment as professionally relevant for deterministic send policy.
+
+## Automatic maintenance worker remediation
+
+- [x] Add the populated-safe singleton maintenance projection, workflow-history index, six-state resolver, and Codex-aware overdue window.
+- [x] Add the owner-fenced aggregate cycle with heartbeat renewal, stale takeover, neutral busy outcomes, strict inbound → due follow-up → recovery order, and fail-closed inbound behavior.
+- [x] Add the local worker preflight, health wait, immediate/minute ticks, long-cycle overlap guard, bounded request, sanitized logging, and graceful drain.
+- [x] Make `npm run dev` and `npm start` supervise Next.js plus the worker in local mode; retain `dev:web`, `start:web`, and `maintenance:local` as narrow commands.
+- [x] Replace the independently scheduled Trigger inbound/follow-up/recovery tasks with one minute aggregate schedule while leaving the narrow tasks callable; retain the separate Graph-subscription schedule.
+- [x] Render the persisted six-state maintenance status only in Settings, without exposing owner tokens or raw provider errors.
+- [x] Document automatic startup, opt-out and port rules, one-shot diagnostics, Trigger parity, and migration-without-seed installation.
+- [x] Run the complete disposable gate, migrate and smoke `hyperoutreach_live` under emergency pause, verify automatic SMTP/IMAP maintenance without a send, perform the independent final review, and rerun all affected checks.
+
+The automatic maintenance implementation is live-verified against the dedicated
+`hyperoutreach_live` database and its available SMTP/IMAP mailbox: an automatic
+cycle completed without a send, a same-minute duplicate tick was neutral, and
+the database remained at zero messages/replies/due enrollments. The exact final
+tree passed the disposable gate (551 unit and 256 PostgreSQL integration tests),
+the synthetic eval, production build, production dependency audit, and 4 request
+E2E workflows; the rendered Chromium workflow remains an operator-terminal
+verification because the managed tool sandbox cannot reap or launch browser
+processes reliably. The implementation is not yet claimed committed: the final
+working-tree versions must be staged from a normal terminal before committing.
+No live send, Microsoft Graph cloud run, or Trigger.dev Cloud deployment is
+implied by this maintenance verification.
 
 ## Known deviations and live-verification boundary
 
-- Initial scaffolding could not use a worktree because no commit existed at that time. The repository now has a `main` HEAD tracking `origin/main`; this document belongs to the final verified correction set committed immediately after the completion gate.
+- Initial scaffolding could not use a worktree because no commit existed at that time. The repository now has a `main` history; the approved maintenance design is committed ahead of `origin/main`, while this final verified implementation remains uncommitted pending operator staging from a normal terminal.
 - Local mock OpenAI and mail adapters are the automated acceptance surface. The real OpenAI adapter is contract-tested; live OpenAI/Graph verification is only claimed when usable credentials are present and a safe smoke test is actually run.
 - The repository-visible offline eval is a deterministic synthetic regression gate, not an empirical quality claim. Its versioned 100-case schema supports later captured provider outputs and human labels; a live Sol/Terra or prompt comparison still requires operator-supplied credentials and independently verified real-prospect data.
 - Codex CLI 0.147.0 was smoke-tested live on 2026-08-14 through the exact application provider: Terra account discovery/research/contact discovery/public-email research, Luna personalization, and a like-for-like Sol discovery request all completed with observed web-search events where required. This proves provider compatibility, not comparative model quality; a representative human-labeled Sol/Terra benchmark remains open.

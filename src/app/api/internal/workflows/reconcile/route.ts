@@ -1,10 +1,9 @@
 import { authorizeOperatorRequest } from "@/lib/operator-auth";
 import { createWorkflowDispatcher } from "@/modules/workflows/dispatcher-factory";
 import { dispatchMaintenanceTick } from "@/modules/workflows/maintenance-service";
-import { resolveWorkflowProvider } from "@/modules/workflows/provider-config";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 840;
 
 export async function POST(request: Request) {
   const authorization = authorizeOperatorRequest(request);
@@ -21,7 +20,6 @@ export async function POST(request: Request) {
   try {
     const outcomes = await dispatchMaintenanceTick(
       createWorkflowDispatcher(),
-      resolveWorkflowProvider(process.env),
       now,
     );
     return Response.json(

@@ -183,6 +183,13 @@
       "when": 1786571364131,
       "tag": "0025_friendly_maverick",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1786701058460,
+      "tag": "0026_maintenance_state",
+      "breakpoints": true
     }
   ]
 }

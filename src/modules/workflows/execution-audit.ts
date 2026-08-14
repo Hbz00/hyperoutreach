@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 
 import { workflowEvents } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
+import { getSafeWorkflowAuditError } from "@/modules/workflows/maintenance-error";
 import type { WorkflowTaskName } from "@/modules/workflows/task-contracts";
 
 type ExecutionContext = {
@@ -76,13 +77,13 @@ export async function executeAuditedWorkflow<T>(
       })
       .where(eq(workflowEvents.id, created.id));
     return output;
-  } catch {
+  } catch (error) {
     await db
       .update(workflowEvents)
       .set({
         status: "failed",
         completedAt: new Date(),
-        error: "Workflow task failed",
+        error: getSafeWorkflowAuditError(error),
       })
       .where(eq(workflowEvents.id, created.id));
     throw new Error("Workflow task failed");

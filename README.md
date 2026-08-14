@@ -33,6 +33,27 @@ interface (`127.0.0.1:55432`), not on external network interfaces.
 
 ```bash
 cp .env.example .env.local
+```
+
+Stop here and replace every public placeholder in `.env.local` before running
+the application. This is a mandatory configuration gate, not an optional
+hardening step:
+
+- set a unique `OPERATOR_PASSWORD` of at least 12 characters;
+- generate independent random values for `OPERATOR_API_TOKEN` (at least 32
+  characters) and `SESSION_SECRET` (at least 32 bytes);
+- configure a valid AES-256-GCM keyring with a base64-encoded 32-byte key in
+  `TOKEN_ENCRYPTION_KEYS` and its matching ID in
+  `TOKEN_ENCRYPTION_ACTIVE_KEY_ID`;
+- verify `DATABASE_URL`, `TEST_DATABASE_URL`, and the selected AI, mail, and
+  workflow provider settings for this installation.
+
+The checked-in secret values are deliberately invalid and must never be used as
+credentials. Keep generated values only in the uncommitted `.env.local` or a
+secret manager; do not paste them into commands, logs, issues, or documentation.
+Only after completing that gate, install and start the application:
+
+```bash
 npm_config_cache=/private/tmp/hyperoutreach-npm-cache npm ci
 npm run db:up
 npm run db:migrate
@@ -40,11 +61,21 @@ npm run dev
 ```
 
 Open <http://localhost:3000> and sign in with `OPERATOR_EMAIL` and
-`OPERATOR_PASSWORD`. Use a unique password of at least 12 characters and a
-random `SESSION_SECRET` of at least 32 bytes outside local development. The
-database-backed health endpoint is
+`OPERATOR_PASSWORD`. The database-backed health endpoint is
 <http://localhost:3000/api/health> and returns HTTP 200 only when PostgreSQL is
 reachable.
+
+With the default `WORKFLOW_PROVIDER=local`, `npm run dev` starts one supervisor
+that owns both the Next.js process and the local maintenance worker. The worker
+waits for the health endpoint, requests an immediate maintenance cycle, and then
+offers a new cycle every minute. `npm start` provides the same process lifecycle
+for a production build. No foreground shell loop or host cron is required for
+the aggregate inbound/follow-up/recovery cycle in this local workflow mode.
+
+Local maintenance requires `OPERATOR_API_TOKEN` to contain at least 32
+characters. The supervisor validates this once before starting either child and
+exits with one actionable startup error when it is missing or too short; it does
+not leave a worker logging an authentication failure every minute.
 
 The example environment defaults all external providers to deterministic mock
 mode. Replace the session and encryption placeholders before any non-local use.
@@ -52,9 +83,9 @@ OpenAI, Microsoft, and Trigger credentials are server-only and intentionally
 blank. Never commit `.env` or `.env.local`.
 
 Do **not** run a seed command for a real installation. Migrations create only
-the schema and the singleton sending-policy row; connect the real mailbox from
+the schema and operational singleton rows; connect the real mailbox from
 Settings. For the first controlled send, keep automatic follow-ups disabled and
-set both daily caps to `1`.
+review the mailbox and campaign daily caps explicitly before enabling sending.
 
 ## Optional local mock demonstration
 
@@ -285,6 +316,11 @@ retrieve the persisted draft, while the latter sends it. OAuth also asks for
 `openid profile email offline_access`. No directory-wide application permission
 is used.
 
+Sending and inbound reconciliation still resolve the adapter from each
+connected mailbox. The global `MAIL_PROVIDER=microsoft_graph` value additionally
+enables the separate Graph notification-subscription maintenance task; without
+that value the task intentionally skips, even if a Microsoft mailbox row exists.
+
 Generate a 32-byte encryption key and assign it a stable ID:
 
 ```bash
@@ -319,13 +355,19 @@ saves only a completed `@odata.deltaLink` after every item is durable; `410` or
 confined to the configured Graph origin/version path. Webhook and delta messages
 enter the same idempotent inbound path.
 
-Configure a one-minute scheduler (host cron, platform cron, or an equivalent
-durable scheduler) to call `POST /api/internal/microsoft/reconcile` with
-`Authorization: Bearer <OPERATOR_API_TOKEN>`. This database-backed recovery
-executor renews subscriptions, reclaims crashed webhook/lifecycle work, and runs
-Inbox delta reconciliation even when no later webhook arrives. The webhook's
-post-response worker is only a latency optimization; correctness does not depend
-on it.
+The ordered maintenance cycle reconciles available Microsoft mailboxes through
+the same inbound stage as SMTP/IMAP. Microsoft notification-subscription
+maintenance remains a separate responsibility: Trigger.dev runs its dedicated
+five-minute schedule. The authenticated
+`POST /api/internal/microsoft/reconcile` endpoint remains available for an
+explicit local diagnostic or recovery run. The webhook's post-response worker
+is only a latency optimization; database-backed reconciliation remains the
+correctness boundary.
+
+This Graph subscription lifecycle is deliberately separate from the aggregate
+send-safety cycle. A self-hosted local Microsoft installation that requires
+continuous webhook renewal must run that narrow operation through its own
+infrastructure automation or use Trigger.dev; SMTP/IMAP does not require it.
 
 Outbound mail creates an immutable-ID Graph draft with `X-Outreach-ID`, persists
 the draft identity before sending, treats Graph's `202 Accepted` as uncertain,
@@ -354,10 +396,11 @@ the password is stored as an AES-256-GCM envelope and is never rendered back to
 the operator. Disconnect waits for any in-flight mailbox action, then clears the
 password envelope, transport configuration, and inbound cursor.
 
-Trigger.dev reconciles every available SMTP/IMAP inbox once per minute through
-the shared durable inbound path. **Sync now** is an additional operator action,
-not a correctness requirement. Before classification or body persistence, mail
-must match an outbound identity; unrelated private mailbox traffic is ignored.
+The automatic local worker and Trigger.dev both reconcile every available
+SMTP/IMAP inbox once per minute through the shared durable inbound path. **Sync
+now** is an additional operator action, not a correctness requirement. Before
+classification or body persistence, mail must match an outbound identity;
+unrelated private mailbox traffic is ignored.
 Standard delivery-status reports become hard/soft bounce signals. Verified hard
 bounces stop the enrollment and suppress the recipient. Definite SMTP 5xx
 recipient refusals are terminal failures, while ambiguous socket failures remain
@@ -382,15 +425,100 @@ The application mock mail provider also reconstructs deterministic draft and
 delivery identities from PostgreSQL, so a process restart between draft
 persistence and send does not strand the local workflow.
 
-For a long-running local/self-hosted installation, call the authenticated
-`POST /api/internal/workflows/reconcile` endpoint once per minute from the host
-scheduler. In local mode, one tick executes and audits the safety-critical order
-**SMTP/IMAP inbox reconciliation → due follow-ups → stale-work recovery**. A
-mailbox reconciliation failure therefore stops the tick before any due send;
-mailbox health also remains a deterministic send-policy gate. In Trigger mode,
-the endpoint dispatches recovery because the dedicated Trigger schedules own
-inbox and due-follow-up reconciliation. Repeated calls in the same minute are
-persistently deduplicated.
+In local mode, the normal `npm run dev` and `npm start` commands start the
+maintenance worker automatically. Each owned cycle executes and audits this
+safety-critical order:
+
+1. reconcile every available non-mock inbound mailbox and ingest/classify
+   matched replies;
+2. reconcile due follow-ups;
+3. recover stale work.
+
+An inbound failure stops the cycle before any due send. Mailbox health also
+remains a deterministic send-policy gate. A process-local guard makes the next
+minute tick a neutral `busy` no-op while a long request is still running, and a
+singleton PostgreSQL lease prevents overlap across processes. Neither guard
+changes business state ownership: PostgreSQL remains authoritative.
+
+The narrow commands are intended for diagnostics and infrastructure-managed
+deployments:
+
+```bash
+npm run dev:web          # Next.js only, without the supervisor
+npm run start:web        # production Next.js only
+npm run maintenance:local # standalone local worker
+```
+
+Set `LOCAL_MAINTENANCE_ENABLED=false` to opt out explicitly while retaining
+`npm run dev` or `npm start`; the supervisor prints one startup notice and runs
+only Next.js. `WORKFLOW_PROVIDER=trigger` also starts only Next.js because
+Trigger.dev owns scheduling. In local mode, the worker origin defaults to
+`http://127.0.0.1:${PORT:-3000}`. `PORT` must be set in the environment that
+launches npm; a `PORT` value in `.env.local` is intentionally ignored for
+process binding. `LOCAL_MAINTENANCE_BASE_URL` can override the origin with an
+absolute HTTP(S) URL for a proxy or container topology.
+
+While local maintenance is enabled, pass the Next port through `PORT=4100 npm
+run dev`, not `npm run dev -- --port 4100` or `-p`: the supervisor rejects
+Next.js CLI port flags so the server and worker cannot silently select different
+origins. The authenticated `POST /api/internal/workflows/reconcile` endpoint is
+still available for a deliberate one-shot diagnostic:
+
+```bash
+node --input-type=module <<'NODE'
+import { loadAndResolveLocalMaintenanceConfig } from "./scripts/local-maintenance-runtime.mjs";
+
+const config = loadAndResolveLocalMaintenanceConfig();
+if (config.mode !== "enabled") {
+  throw new Error("This diagnostic requires enabled local maintenance");
+}
+try {
+  const response = await fetch(config.maintenanceUrl, {
+    method: "POST",
+    headers: { authorization: `Bearer ${config.token}` },
+    signal: AbortSignal.timeout(config.requestTimeoutMs),
+  });
+  if (!response.ok) {
+    console.error(`Maintenance diagnostic failed with HTTP ${response.status}`);
+    process.exitCode = 1;
+  } else {
+    console.log(`Maintenance diagnostic completed with HTTP ${response.status}`);
+  }
+} catch {
+  console.error(
+    `Maintenance diagnostic request failed or timed out after ${config.requestTimeoutMs}ms`,
+  );
+  process.exitCode = 1;
+}
+NODE
+```
+
+This local-mode diagnostic uses the same `.env*`, launch-process `PORT`, URL,
+and token resolution and bounded request timeout as the production worker. The
+token stays out of the command arguments and output, and transport failures do
+not print raw provider errors. The request is not the normal scheduler and may
+return a deduplicated or neutral busy outcome when another cycle owns the minute
+or database lease. When diagnosing a production `npm start` process, invoke the
+same snippet with `NODE_ENV=production node --input-type=module` so Next's
+production `.env*` selection is preserved.
+
+Settings, and only Settings in this iteration, shows the persisted maintenance
+projection:
+
+- **Not started** — no cycle has ever been recorded;
+- **Running** — a cycle owns the lease and its heartbeat is current;
+- **Stalled** — an owner remains but its heartbeat is stale;
+- **Failed** — the latest failure is newer than the latest success;
+- **Overdue** — no cycle is active and the last success is outside the expected
+  window;
+- **Healthy** — no cycle is active and the last success is recent.
+
+`Running` is distinct from `Overdue`: a normal long Codex cycle remains running
+while its heartbeat is current. The no-owner overdue window is the greater of
+`CODEX_TIMEOUT_MS + 60 seconds` and three maintenance intervals (five minutes
+with the default 240-second Codex timeout). Settings also shows the automation
+provider/mode, active-cycle timestamps when applicable, the last success, and a
+sanitized historical failure without exposing the lease token or credentials.
 
 For Trigger.dev Cloud, create a project, set `WORKFLOW_PROVIDER=trigger`,
 `TRIGGER_PROJECT_REF`, and the server-only `TRIGGER_SECRET_KEY`, then run:
@@ -402,9 +530,12 @@ npm run trigger:deploy
 ```
 
 The pinned SDK/CLI version is 4.5.10. `trigger.config.ts` uses the Node 22 runtime
-and the checked-in `trigger/` directory. Declarative schedules scan due
-follow-ups and SMTP/IMAP inboxes every minute, and run Graph/subscription and
-stale-work recovery every five minutes. Account discovery/research, contact
+and the checked-in `trigger/` directory. One aggregate `maintenance-cycle`
+schedule runs every minute and preserves the same inbound → due follow-up →
+stale recovery order and fail-closed behavior as local mode. The narrow inbound,
+due-follow-up, and stale-recovery tasks remain callable for explicit recovery
+and testing but are not independently scheduled. Graph subscription maintenance
+keeps its separate five-minute schedule. Account discovery/research, contact
 discovery, email resolution,
 personalization, deterministic generation, approved sending, sequence advance,
 webhook drain, and delta reconciliation also have narrow task entrypoints.
@@ -520,17 +651,20 @@ suppression.
 ## Known deviations and live-service boundary
 
 - Initial work was performed without a Git worktree because the repository had
-  no commit at that time. It now has a `main` HEAD tracking `origin/main`; a fresh
-  filesystem export excluding dependencies, build output, local environment
-  files, and test artifacts passed `npm ci`, formatting, lint, typecheck,
-  unit/integration tests, eval, migration-history validation, Trigger task
-  import, and production build.
+  no commit at that time. The repository now has a `main` history and the
+  maintenance design commits are ahead of `origin/main`; the current
+  implementation remains uncommitted until its final gate. The previously
+  released baseline passed a fresh filesystem export excluding dependencies,
+  build output, local environment files, and test artifacts through `npm ci`,
+  formatting, lint, typecheck, unit/integration tests, eval, migration-history
+  validation, Trigger task import, and production build. The maintenance change
+  set must rerun those gates before the same claim is made for it.
 - Live OpenAI Responses, Microsoft Graph, and Trigger.dev Cloud behavior is not
   claimed as verified. Their adapters are contract-tested without network
   access; live checks still require explicitly supplied credentials and, for
   Graph notifications, a public HTTPS endpoint. Codex CLI 0.147.0 has been
   exercised through the exact application provider, including structured web
-  research and the public-email resolution service with its 120-second lane.
+  research and the public-email resolution service with its 240-second lane.
   The Trigger.dev task module and dispatcher contract are tested locally, but
   cloud execution/deployment still needs a configured project. Mock mode keeps
   the entire application credential-free.

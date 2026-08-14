@@ -953,7 +953,26 @@ export const workflowEvents = pgTable(
     index("workflow_events_entity_idx").on(table.entityType, table.entityId),
     index("workflow_events_status_idx").on(table.status),
     index("workflow_events_run_id_idx").on(table.runId),
+    index("workflow_events_workflow_created_idx").on(
+      table.workflowName,
+      table.createdAt,
+    ),
   ],
+);
+
+export const maintenanceState = pgTable(
+  "maintenance_state",
+  {
+    id: integer("id").default(1).primaryKey(),
+    ownerToken: text("owner_token"),
+    cycleStartedAt: timestamp("cycle_started_at", { withTimezone: true }),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    lastSucceededAt: timestamp("last_succeeded_at", { withTimezone: true }),
+    lastFailedAt: timestamp("last_failed_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (table) => [check("maintenance_state_singleton_check", sql`${table.id} = 1`)],
 );
 
 export const stateTransitions = pgTable(

@@ -40,38 +40,27 @@ export const drainGraphWebhooksTask = regularTask("drain-graph-webhooks");
 export const reconcileInboundMailboxTask = regularTask(
   "reconcile-inbound-mailbox",
 );
+export const reconcileInboundMailboxesTask = regularTask(
+  "reconcile-inbound-mailboxes",
+);
+export const reconcileDueFollowUpsTask = regularTask(
+  "reconcile-due-follow-ups",
+);
+export const recoverStaleWorkTask = regularTask("recover-stale-work");
 
-export const reconcileInboundMailboxesTask = schedules.task({
-  id: "reconcile-inbound-mailboxes",
+export const maintenanceCycleTask = schedules.task({
+  id: "maintenance-cycle",
   cron: "* * * * *",
-  ttl: "5m",
+  ttl: "15m",
   retry: {
-    ...WORKFLOW_TASKS["reconcile-inbound-mailboxes"].retry,
+    ...WORKFLOW_TASKS["maintenance-cycle"].retry,
     factor: 2,
     randomize: true,
   },
-  maxDuration: WORKFLOW_TASKS["reconcile-inbound-mailboxes"].maxDuration,
+  maxDuration: WORKFLOW_TASKS["maintenance-cycle"].maxDuration,
   run: (payload, { ctx }) =>
     runtime().execute(
-      "reconcile-inbound-mailboxes",
-      { observedAt: payload.timestamp.toISOString(), limit: 50 },
-      { runId: ctx.run.id, attempt: ctx.attempt.number },
-    ),
-});
-
-export const reconcileDueFollowUpsTask = schedules.task({
-  id: "reconcile-due-follow-ups",
-  cron: "* * * * *",
-  ttl: "5m",
-  retry: {
-    ...WORKFLOW_TASKS["reconcile-due-follow-ups"].retry,
-    factor: 2,
-    randomize: true,
-  },
-  maxDuration: WORKFLOW_TASKS["reconcile-due-follow-ups"].maxDuration,
-  run: (payload, { ctx }) =>
-    runtime().execute(
-      "reconcile-due-follow-ups",
+      "maintenance-cycle",
       { observedAt: payload.timestamp.toISOString() },
       { runId: ctx.run.id, attempt: ctx.attempt.number },
     ),
@@ -90,24 +79,6 @@ export const maintainGraphSubscriptionsTask = schedules.task({
   run: (payload, { ctx }) =>
     runtime().execute(
       "maintain-graph-subscriptions",
-      { observedAt: payload.timestamp.toISOString() },
-      { runId: ctx.run.id, attempt: ctx.attempt.number },
-    ),
-});
-
-export const recoverStaleWorkTask = schedules.task({
-  id: "recover-stale-work",
-  cron: "*/5 * * * *",
-  ttl: "10m",
-  retry: {
-    ...WORKFLOW_TASKS["recover-stale-work"].retry,
-    factor: 2,
-    randomize: true,
-  },
-  maxDuration: WORKFLOW_TASKS["recover-stale-work"].maxDuration,
-  run: (payload, { ctx }) =>
-    runtime().execute(
-      "recover-stale-work",
       { observedAt: payload.timestamp.toISOString() },
       { runId: ctx.run.id, attempt: ctx.attempt.number },
     ),

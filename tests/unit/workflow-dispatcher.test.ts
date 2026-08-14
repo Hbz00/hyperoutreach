@@ -24,6 +24,7 @@ describe("workflow dispatcher contracts", () => {
       "emailResolutionTask",
       "generateMessageTask",
       "maintainGraphSubscriptionsTask",
+      "maintenanceCycleTask",
       "personalizeMessageTask",
       "reconcileDueFollowUpsTask",
       "reconcileInboundMailboxTask",
@@ -49,10 +50,11 @@ describe("workflow dispatcher contracts", () => {
       "reconcile-inbound-mailboxes",
       "maintain-graph-subscriptions",
       "recover-stale-work",
+      "maintenance-cycle",
     ]);
     for (const definition of Object.values(WORKFLOW_TASKS)) {
       expect(definition.maxDuration).toBeGreaterThanOrEqual(30);
-      expect(definition.maxDuration).toBeLessThanOrEqual(300);
+      expect(definition.maxDuration).toBeLessThanOrEqual(840);
       expect(definition.retry.maxAttempts).toBeGreaterThanOrEqual(1);
       expect(definition.retry.maxAttempts).toBeLessThanOrEqual(5);
     }
@@ -124,6 +126,17 @@ describe("workflow dispatcher contracts", () => {
         messageId: "295c8514-b87b-4ea4-8606-4b13f90f814a",
       }),
     ).toEqual({ messageId: "295c8514-b87b-4ea4-8606-4b13f90f814a" });
+    expect(
+      parseWorkflowPayload("maintenance-cycle", {
+        observedAt: "2026-08-14T10:42:00.000Z",
+      }),
+    ).toEqual({ observedAt: "2026-08-14T10:42:00.000Z" });
+    expect(() =>
+      parseWorkflowPayload("maintenance-cycle", {
+        observedAt: "2026-08-14T10:42:00.000Z",
+        untrusted: true,
+      }),
+    ).toThrow();
   });
 
   it("uses a stable minute bucket for duplicate recovery scheduler calls", () => {

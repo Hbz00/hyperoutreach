@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 
 import { enrollments, mailboxConnections, messages } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
@@ -45,6 +45,7 @@ import { researchAccount } from "@/modules/research/account-research-service";
 import { discoverContacts } from "@/modules/research/contact-discovery-service";
 import { personalizeReasoningFields } from "@/modules/research/personalization-service";
 import type { WorkflowTaskServices } from "@/modules/workflows/runtime";
+import { runMaintenanceCycle } from "@/modules/workflows/maintenance-cycle-service";
 import {
   findDueEnrollments,
   processFollowUpInvocation,
@@ -54,6 +55,12 @@ import { findStaleRecoveryCandidates } from "@/modules/workflows/recovery-servic
 function observedDate(value: string | undefined): Date {
   return value ? new Date(value) : new Date();
 }
+
+// One slow or manually-synchronizing mailbox must not permanently pin every
+// later mailbox behind it. Keep this deliberately below the PostgreSQL pool
+// size: each reconciliation owns a reserved advisory-lock session, while the
+// aggregate heartbeat and ordinary queries still need connections.
+const INBOUND_MAILBOX_CONCURRENCY = 2;
 
 async function providerForEnrollment(
   enrollmentId: string,
@@ -234,7 +241,7 @@ export function createWorkflowTaskServices(
       },
     );
   };
-  return {
+  const services = {
     "account-discovery": (payload) =>
       discoverAccounts(db, agents.accountDiscovery, payload),
     "account-research": (payload) =>
@@ -305,33 +312,53 @@ export function createWorkflowTaskServices(
     "reconcile-inbound-mailbox": (payload) =>
       reconcileOneInboundMailbox(payload.mailboxId),
     "reconcile-inbound-mailboxes": async (payload) => {
-      const rows = await db
+      const availableMailboxes = db
         .select({ id: mailboxConnections.id })
         .from(mailboxConnections)
         .where(
           and(
-            eq(mailboxConnections.provider, "smtp_imap"),
+            ne(mailboxConnections.provider, "mock"),
             eq(mailboxConnections.status, "available"),
           ),
         )
-        .limit(payload.limit ?? 50);
-      const results = [];
-      for (const row of rows) {
-        try {
-          results.push({
-            mailboxId: row.id,
-            result: await reconcileOneInboundMailbox(row.id),
-          });
-        } catch (error) {
-          results.push({
-            mailboxId: row.id,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Inbound reconciliation failed",
-          });
+        .orderBy(asc(mailboxConnections.id));
+      const rows =
+        payload.limit === undefined
+          ? await availableMailboxes
+          : await availableMailboxes.limit(payload.limit);
+      const results: Array<
+        | { mailboxId: string; result: unknown }
+        | { mailboxId: string; error: string }
+      > = new Array(rows.length);
+      let nextIndex = 0;
+      const reconcileNext = async (): Promise<void> => {
+        for (;;) {
+          const index = nextIndex;
+          nextIndex += 1;
+          const row = rows[index];
+          if (!row) return;
+          try {
+            results[index] = {
+              mailboxId: row.id,
+              result: await reconcileOneInboundMailbox(row.id),
+            };
+          } catch (error) {
+            results[index] = {
+              mailboxId: row.id,
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Inbound reconciliation failed",
+            };
+          }
         }
-      }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(INBOUND_MAILBOX_CONCURRENCY, rows.length) },
+          () => reconcileNext(),
+        ),
+      );
       assertInboundBatchSucceeded(results);
       return { observedAt: payload.observedAt, results };
     },
@@ -417,5 +444,16 @@ export function createWorkflowTaskServices(
         followUpsRecovered,
       };
     },
-  };
+  } as WorkflowTaskServices;
+  services["maintenance-cycle"] = (payload) =>
+    runMaintenanceCycle(
+      db,
+      {
+        "reconcile-inbound-mailboxes": services["reconcile-inbound-mailboxes"],
+        "reconcile-due-follow-ups": services["reconcile-due-follow-ups"],
+        "recover-stale-work": services["recover-stale-work"],
+      },
+      payload,
+    );
+  return services;
 }

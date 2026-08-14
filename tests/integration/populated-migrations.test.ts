@@ -481,4 +481,70 @@ describe("populated migration upgrades", () => {
       lastAttemptAt: null,
     });
   });
+
+  it("adds the maintenance singleton to a populated database without losing workflow history", async () => {
+    for (const migration of [
+      "0000_sturdy_kid_colt.sql",
+      "0001_pink_luminals.sql",
+      "0002_exotic_wind_dancer.sql",
+      "0003_woozy_fenris.sql",
+      "0004_brief_firedrake.sql",
+      "0005_rainy_warbound.sql",
+      "0006_sleepy_blade.sql",
+      "0007_quiet_scrambler.sql",
+      "0008_material_gunslinger.sql",
+      "0009_parallel_venom.sql",
+      "0010_fancy_quasimodo.sql",
+      "0011_sweet_misty_knight.sql",
+      "0012_futuristic_meltdown.sql",
+      "0013_powerful_viper.sql",
+      "0014_futuristic_jean_grey.sql",
+      "0015_spooky_the_fallen.sql",
+      "0016_first_sersi.sql",
+      "0017_wonderful_nekra.sql",
+      "0018_colorful_arclight.sql",
+      "0019_nice_black_tarantula.sql",
+      "0020_brief_gideon.sql",
+      "0021_overrated_salo.sql",
+      "0022_long_exodus.sql",
+      "0023_complete_piledriver.sql",
+      "0024_smooth_impossible_man.sql",
+      "0025_friendly_maverick.sql",
+    ]) {
+      await applyMigration(migration);
+    }
+
+    const [{ eventId }] = await client<[{ eventId: string }]>`
+      insert into workflow_events (
+        entity_type, entity_id, event, workflow_name, status, payload
+      ) values (
+        'system', '00000000-0000-0000-0000-000000000001',
+        'legacy.maintenance', 'legacy-maintenance', 'succeeded', '{}'
+      ) returning id as "eventId"
+    `;
+
+    await applyMigration("0026_maintenance_state.sql");
+
+    const [projection] = await client<
+      Array<{ id: number; ownerToken: string | null }>
+    >`
+      select id, owner_token as "ownerToken" from maintenance_state
+    `;
+    expect(projection).toEqual({ id: 1, ownerToken: null });
+
+    const [{ eventCount }] = await client<[{ eventCount: number }]>`
+      select count(*)::int as "eventCount"
+      from workflow_events where id = ${eventId}
+    `;
+    expect(eventCount).toBe(1);
+
+    await client`
+      insert into maintenance_state (id) values (1)
+      on conflict (id) do nothing
+    `;
+    const [{ projectionCount }] = await client<[{ projectionCount: number }]>`
+      select count(*)::int as "projectionCount" from maintenance_state
+    `;
+    expect(projectionCount).toBe(1);
+  });
 });
