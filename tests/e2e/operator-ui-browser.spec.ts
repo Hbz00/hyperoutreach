@@ -302,6 +302,15 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await probeCard
       .getByRole("button", { name: "Approve", exact: true })
       .click();
+    // Each rendered send form carries its own request token. A send the policy
+    // declines resolves instead of throwing, so a token shared by every click
+    // on this message would be recorded as succeeded and deduplicate every
+    // later retry into a silent no-op — leaving the operator no way to send it.
+    await expect(
+      probeCard.locator(
+        'form[action$="send-message"] input[name="requestToken"]',
+      ),
+    ).toHaveCount(1);
     await probeCard
       .getByRole("button", { name: "Send approved message" })
       .click();

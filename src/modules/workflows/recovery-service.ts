@@ -65,8 +65,14 @@ export async function findStaleRecoveryCandidates(
       .select({ id: messages.id })
       .from(messages)
       .where(
+        // Recovery resumes a send somebody already requested and left
+        // unfinished. `approved` is deliberately excluded: it is a review
+        // decision, not a send request, so recovering it would turn every
+        // approval into an automatic send on the next maintenance tick.
+        // `drafted` stays ungated because it is only reachable through a real
+        // send attempt that created a provider draft and released its claim.
         or(
-          inArray(messages.status, ["approved", "drafted"]),
+          inArray(messages.status, ["drafted"]),
           and(
             inArray(messages.status, ["draft_creating", "sending"]),
             lt(messages.sendClaimedAt, staleBefore),

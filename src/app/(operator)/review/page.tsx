@@ -288,6 +288,11 @@ export default async function ReviewPage({
                     name="messageId"
                     value={row.message.id}
                   />
+                  <input
+                    type="hidden"
+                    name="requestToken"
+                    value={crypto.randomUUID()}
+                  />
                   <button>Send approved message</button>
                 </form>
               ) : null}

@@ -346,7 +346,7 @@ describe("durable workflow execution audit", () => {
         recipient: "actionable@example.com",
         contactAccountId: account!.id,
         employmentVersion: 1,
-        status: "approved",
+        status: "drafted",
       })
       .returning({ id: schema.messages.id });
 
@@ -367,6 +367,84 @@ describe("durable workflow execution audit", () => {
       nextTick.messageIds.filter((id) => uncertainIds.includes(id)),
     ).toHaveLength(1);
     expect(nextTick.messageIds).not.toContain(firstUncertain);
+  });
+
+  // Approval is a review decision, not a send request. Recovery resumes work
+  // an operator (or an automatic follow-up) already asked to send and left
+  // unfinished; it must never originate the send itself.
+  it("leaves approved messages to the operator and recovers only requested sends", async () => {
+    const now = new Date("2026-08-12T10:00:00.000Z");
+    const [account] = await db
+      .insert(schema.accounts)
+      .values({
+        name: "Approval gate",
+        normalizedName: `approval-gate-${crypto.randomUUID()}`,
+      })
+      .returning();
+    const [contact] = await db
+      .insert(schema.contacts)
+      .values({
+        accountId: account!.id,
+        firstName: "Approval",
+        lastName: "Gate",
+        fullName: "Approval Gate",
+        normalizedFullName: `approval-gate-${crypto.randomUUID()}`,
+      })
+      .returning();
+    const [campaign] = await db
+      .insert(schema.campaigns)
+      .values({
+        name: "Approval gate",
+        type: "commercial_outreach",
+        status: "active",
+        targetDescription: "Approval must not schedule a send",
+      })
+      .returning();
+    const [version] = await db
+      .insert(schema.campaignVersions)
+      .values({ campaignId: campaign!.id, version: 1, publishedAt: now })
+      .returning();
+    const [enrollment] = await db
+      .insert(schema.enrollments)
+      .values({
+        campaignId: campaign!.id,
+        campaignVersionId: version!.id,
+        contactId: contact!.id,
+        state: "approved",
+      })
+      .returning();
+    const insertMessage = async (
+      status: "approved" | "drafted",
+      stepIndex: number,
+    ) => {
+      const [row] = await db
+        .insert(schema.messages)
+        .values({
+          enrollmentId: enrollment!.id,
+          stepIndex,
+          direction: "outbound",
+          outreachId: `gate-${crypto.randomUUID()}`,
+          subject: status,
+          body: status,
+          recipient: `${status}-${crypto.randomUUID()}@example.com`,
+          contactAccountId: account!.id,
+          employmentVersion: 1,
+          status,
+        })
+        .returning({ id: schema.messages.id });
+      return row!.id;
+    };
+    const approvedId = await insertMessage("approved", 40);
+    const draftedId = await insertMessage("drafted", 41);
+
+    const candidates = await findStaleRecoveryCandidates(db, {
+      now,
+      limit: 200,
+      messageLimit: 200,
+    });
+
+    expect(candidates.messageIds).not.toContain(approvedId);
+    expect(candidates.messageIds).toContain(draftedId);
   });
 
   it("retries a failed local dispatch without losing persistent idempotency", async () => {

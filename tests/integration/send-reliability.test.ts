@@ -49,6 +49,7 @@ import { sendApprovedMessage } from "@/modules/messages/send-service";
 import { ingestInboundMessage } from "@/modules/replies/inbound-service";
 import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
 import { addSuppression } from "@/modules/suppression/service";
+import { createWorkflowTaskServices } from "@/modules/workflows/service-factory";
 
 // Its own disposable keyring, distinct from whatever `.env.local`/`process.env`
 // sets -- threaded explicitly via `connectSmtpImapMailbox`'s `environment`
@@ -2730,4 +2731,39 @@ describe("reliable send attempt ownership and provider confirmation", () => {
       expect(stored).toMatchObject({ status: "drafted", attemptCount: 0 });
     },
   );
+
+  // Live incident, 2026-08-14: an operator approved a message in the review
+  // queue and never clicked "Send approved message". The maintenance cycle's
+  // recovery stage claimed the `approved` row on its next tick and delivered
+  // it 35 seconds after the approval. Approval is a review decision; only an
+  // explicit send request may reach the provider. This test runs last in the
+  // file because a recovery round touches rows the earlier tests left behind.
+  it("never sends an approved message no operator asked to send", async () => {
+    const fixture = await prepareApprovedMessage({ mailbox: true });
+    const services = createWorkflowTaskServices(db, connectionEnvironment);
+
+    await services["recover-stale-work"]({
+      observedAt: new Date().toISOString(),
+      limit: 1,
+    });
+
+    const [afterRecovery] = await db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.id, fixture.message.id));
+    expect(afterRecovery).toMatchObject({
+      status: "approved",
+      attemptCount: 0,
+      sendAttemptToken: null,
+      providerDraftId: null,
+    });
+
+    // Positive control: nothing else about this fixture blocks delivery, so
+    // the assertion above isolates the missing operator decision.
+    expect(
+      await sendApprovedMessage(db, new DatabaseMockMailProvider(db), {
+        messageId: fixture.message.id,
+      }),
+    ).toMatchObject({ ok: true, disposition: "sent" });
+  });
 });

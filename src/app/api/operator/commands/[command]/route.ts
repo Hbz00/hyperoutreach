@@ -566,7 +566,12 @@ export async function POST(
       await createWorkflowDispatcher().dispatch({
         task: "send-approved-message",
         payload: { messageId: messageId! },
-        idempotencyKey: `ui:send:${messageId}`,
+        // Per rendered form, like every other operator command: a send the
+        // policy declines (working hours, cap, suppression) resolves rather
+        // than throws, so a message-wide key would be recorded as succeeded
+        // and every later click on this message deduplicated into a no-op.
+        // The send service's own claim keeps concurrent clicks safe.
+        idempotencyKey: `ui:send:${messageId}:${value(formData, "requestToken") ?? randomUUID()}`,
       });
       return destination(request, "/review", "Send execution completed");
     } catch {
