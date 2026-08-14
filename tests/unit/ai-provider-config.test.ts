@@ -64,7 +64,7 @@ describe("AI provider configuration", () => {
         executable: "codex",
         researchModel: "gpt-5.6-terra",
         fastModel: "gpt-5.6-luna",
-        timeoutMs: 120_000,
+        timeoutMs: 240_000,
         maxConcurrency: 1,
       },
     });
@@ -219,7 +219,7 @@ describe("live AI provider bundle", () => {
       research: {
         provider: codexProvider,
         model: "codex-cli:codex-research",
-        operationTimeoutMs: 120_000,
+        operationTimeoutMs: 240_000,
       },
       nonWeb: {
         provider: codexProvider,

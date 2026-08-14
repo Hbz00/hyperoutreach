@@ -1413,7 +1413,7 @@ describe("production provider bundle", () => {
       research: {
         provider: cli,
         model: "codex-cli:codex-research",
-        operationTimeoutMs: 120_000,
+        operationTimeoutMs: 240_000,
       },
       nonWeb: { provider: cli, model: "codex-cli:codex-fast" },
     });

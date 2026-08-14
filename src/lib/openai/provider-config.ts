@@ -38,7 +38,7 @@ export type ResolvedAIProviderConfig =
 
 type AIProviderEnvironment = Record<string, string | undefined>;
 
-const DEFAULT_CODEX_TIMEOUT_MS = 120_000;
+const DEFAULT_CODEX_TIMEOUT_MS = 240_000;
 const MAX_CODEX_TIMEOUT_MS = 600_000;
 const DEFAULT_CODEX_MAX_CONCURRENCY = 1;
 const MAX_CODEX_MAX_CONCURRENCY = 8;

@@ -90,7 +90,7 @@ Move/re-export the existing request/result types without changing their fields. 
 
 - [ ] **Step 4: Implement strict configuration and the pure injected bundle**
 
-Implement `resolveAIProviderConfig(environment)` with bounded helpers. Preserve `gpt-5.6-terra` and `gpt-5.6-luna` defaults. Use conservative constants `CODEX_TIMEOUT_MS=120000`, maximum timeout `600000`, default concurrency `1`, and maximum concurrency `8`. Prefix only the Codex non-web audit model as `codex-cli:<raw-model>`.
+Implement `resolveAIProviderConfig(environment)` with bounded helpers. Preserve `gpt-5.6-terra` and `gpt-5.6-luna` defaults. Use constants `CODEX_TIMEOUT_MS=240000`, maximum timeout `600000`, default concurrency `1`, and maximum concurrency `8`. Prefix only the Codex non-web audit model as `codex-cli:<raw-model>`.
 
 Implement:
 

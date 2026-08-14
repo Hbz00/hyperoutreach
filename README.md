@@ -186,7 +186,7 @@ WORKFLOW_PROVIDER=local
 CODEX_EXECUTABLE=codex
 CODEX_RESEARCH_MODEL=gpt-5.6-terra
 CODEX_FAST_MODEL=gpt-5.6-luna
-CODEX_TIMEOUT_MS=120000
+CODEX_TIMEOUT_MS=240000
 CODEX_MAX_CONCURRENCY=1
 ```
 
@@ -263,7 +263,7 @@ recipient exists. Below the confidence threshold, an optional
 no-result and transient-failure outcomes remain explicit instead of inventing an
 address. DNS and conventional enrichment retain their short provider deadline.
 AI public-evidence research has its own deadline: Codex uses
-`CODEX_TIMEOUT_MS` (120 seconds by default) while Responses uses its provider
+`CODEX_TIMEOUT_MS` (240 seconds by default) while Responses uses its provider
 operation timeout. All remain abortable and deadline-bound. A claim fenced by
 contact/account/domain/employment version keeps
 late old-employer results from persisting. PostgreSQL permits at most one accepted
