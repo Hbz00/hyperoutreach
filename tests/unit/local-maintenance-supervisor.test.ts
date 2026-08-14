@@ -567,5 +567,11 @@ describe("local stack package contract", () => {
       (playwrightConfig.webServer as { env?: Record<string, string> }).env
         ?.LOCAL_MAINTENANCE_ENABLED,
     ).toBe("false");
+    expect(
+      (playwrightConfig.webServer as { command?: string }).command,
+    ).toContain("npm run start:web --");
+    expect(
+      (playwrightConfig.webServer as { command?: string }).command,
+    ).not.toContain("npm start --");
   });
 });
