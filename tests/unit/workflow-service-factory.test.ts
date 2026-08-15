@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppDatabase } from "@/lib/db/types";
-import type { AIProviderBundle } from "@/lib/openai/provider-bundle";
-import type { StructuredAIProvider } from "@/lib/openai/providers/types";
+import type { AIProviderBundle } from "@/lib/ai/provider-bundle";
+import type { StructuredAIProvider } from "@/lib/ai/providers/types";
 import type { DnsMxResolver } from "@/modules/email-resolution/dns";
 import {
   assertInboundBatchSucceeded,
@@ -63,7 +63,7 @@ function dependencies(bundle: AIProviderBundle) {
 describe("workflow service provider composition", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("shares one Codex provider across research and non-web lanes", async () => {
+  it("shares one desktop provider across research and non-web lanes", async () => {
     const codex = providerDouble((request) =>
       request.agent === "public_email_evidence"
         ? { samples: [] }
@@ -89,27 +89,21 @@ describe("workflow service provider composition", () => {
           : { candidates: [] },
     );
     const bundle: AIProviderBundle = {
-      mode: "codex",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
         provider: codex,
-        model: "codex-cli:research",
+        model: "chatgpt-desktop:GPT-5.6 Sol",
         operationTimeoutMs: 120_000,
       },
-      nonWeb: { provider: codex, model: "codex-cli:fast" },
+      nonWeb: { provider: codex, model: "chatgpt-desktop:GPT-5.6 Sol" },
     };
     const injected = dependencies(bundle);
     const db = databaseWriterDouble();
-    const services = createWorkflowTaskServices(
-      db,
-      { OPENAI_PROVIDER: "codex" },
-      injected,
-    );
+    const services = createWorkflowTaskServices(db, {}, injected);
 
     expect(injected.createBundle).toHaveBeenCalledOnce();
-    expect(injected.createBundle).toHaveBeenCalledWith({
-      OPENAI_PROVIDER: "codex",
-    });
+    expect(injected.createBundle).toHaveBeenCalledWith({});
 
     await expect(
       services["account-discovery"]({
@@ -136,11 +130,14 @@ describe("workflow service provider composition", () => {
     expect(codex.run).toHaveBeenCalledWith(
       expect.objectContaining({
         useWebSearch: true,
-        model: "codex-cli:research",
+        model: "chatgpt-desktop:GPT-5.6 Sol",
       }),
     );
     expect(codex.run).toHaveBeenCalledWith(
-      expect.objectContaining({ useWebSearch: false, model: "codex-cli:fast" }),
+      expect.objectContaining({
+        useWebSearch: false,
+        model: "chatgpt-desktop:GPT-5.6 Sol",
+      }),
     );
 
     const emailProviders = composeEmailResolutionProviders(bundle, injected);
@@ -154,33 +151,33 @@ describe("workflow service provider composition", () => {
     expect(codex.run).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: "public_email_evidence",
-        model: "codex-cli:research",
+        model: "chatgpt-desktop:GPT-5.6 Sol",
         useWebSearch: true,
       }),
     );
     expect(codex.run).toHaveBeenCalledTimes(3);
   });
 
-  it("selects real DNS and the Responses research lane in OpenAI mode", async () => {
-    const responses = providerDouble((request) =>
+  it("selects real DNS and the research lane whenever the surface is live", async () => {
+    const surface = providerDouble((request) =>
       request.agent === "public_email_evidence"
         ? { samples: [] }
         : { candidates: [] },
     );
     const bundle: AIProviderBundle = {
-      mode: "openai",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
-        provider: responses,
-        model: "research-model",
-        operationTimeoutMs: 30_000,
+        provider: surface,
+        model: "chatgpt-desktop:research-lane",
+        operationTimeoutMs: 600_000,
       },
-      nonWeb: { provider: responses, model: "fast-model" },
+      nonWeb: { provider: surface, model: "chatgpt-desktop:fast-lane" },
     };
     const injected = dependencies(bundle);
     const services = createWorkflowTaskServices(
       databaseWriterDouble(),
-      { OPENAI_PROVIDER: "openai", OPENAI_API_KEY: "unused" },
+      {},
       injected,
     );
 
@@ -192,13 +189,18 @@ describe("workflow service provider composition", () => {
       requiredSignals: [],
     });
     const emailProviders = composeEmailResolutionProviders(bundle, injected);
-    expect(emailProviders.publicEvidenceOperationTimeoutMs).toBe(30_000);
+    // Public email evidence is web research, so it inherits the research
+    // deadline rather than a short operation timeout.
+    expect(emailProviders.publicEvidenceOperationTimeoutMs).toBe(600_000);
     await emailProviders.dns.resolve("example.com");
     await emailProviders.publicEvidence.find({ companyDomain: "example.com" });
 
     expect(injected.createBundle).toHaveBeenCalledOnce();
-    expect(responses.run).toHaveBeenCalledWith(
-      expect.objectContaining({ useWebSearch: true, model: "research-model" }),
+    expect(surface.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        useWebSearch: true,
+        model: "chatgpt-desktop:research-lane",
+      }),
     );
     expect(injected.createRealDns).toHaveBeenCalledOnce();
     expect(injected.createMockDns).not.toHaveBeenCalled();
@@ -214,7 +216,7 @@ describe("workflow service provider composition", () => {
     const injected = dependencies(bundle);
     createWorkflowTaskServices(
       databaseWriterDouble(),
-      { OPENAI_PROVIDER: "mock" },
+      { AI_PROVIDER: "mock" },
       injected,
     );
 

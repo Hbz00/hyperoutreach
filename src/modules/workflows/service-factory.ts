@@ -3,8 +3,8 @@ import { and, asc, eq, ne } from "drizzle-orm";
 import { enrollments, mailboxConnections, messages } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import { requireMicrosoftConfig } from "@/lib/microsoft/config";
-import { createProductionAIProviderBundle } from "@/lib/openai/production-provider-bundle";
-import type { AIProviderBundle } from "@/lib/openai/provider-bundle";
+import { createProductionAIProviderBundle } from "@/lib/ai/production-provider-bundle";
+import type { AIProviderBundle } from "@/lib/ai/provider-bundle";
 import { createAgentSetFromBundle } from "@/modules/agents/factory";
 import {
   MockDnsMxResolver,
@@ -13,7 +13,7 @@ import {
 } from "@/modules/email-resolution/dns";
 import { NoResultEmailEnrichmentProvider } from "@/modules/email-resolution/providers";
 import {
-  OpenAIPublicEmailEvidenceProvider,
+  StructuredPublicEmailEvidenceProvider,
   StaticPublicEmailEvidenceProvider,
   type PublicEmailEvidenceProvider,
 } from "@/modules/email-resolution/public-evidence-provider";
@@ -156,7 +156,7 @@ export function composeEmailResolutionProviders(
   }
   return {
     dns: dependencies.createRealDns(),
-    publicEvidence: new OpenAIPublicEmailEvidenceProvider(
+    publicEvidence: new StructuredPublicEmailEvidenceProvider(
       bundle.research.provider,
       bundle.research.model,
     ),

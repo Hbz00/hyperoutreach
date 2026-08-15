@@ -675,7 +675,7 @@ describe("durable workflow execution audit", () => {
       createMailProviderForMailbox(db, mailbox.id, {}),
     ).resolves.toMatchObject({ kind: "smtp_imap" });
 
-    const services = createWorkflowTaskServices(db, {});
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
     const round = (await services["recover-stale-work"]({
       observedAt: now.toISOString(),
       limit: 1,
@@ -715,7 +715,7 @@ describe("durable workflow execution audit", () => {
       })
       .returning();
     if (!mailbox) throw new Error("mailbox fixture missing");
-    const services = createWorkflowTaskServices(db, {});
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
 
     // The fixture mailbox has no stored password (and no transport config):
     // `createSource` must throw *inside* the health wrapper, not before it —
@@ -755,7 +755,7 @@ describe("durable workflow execution audit", () => {
       })
       .returning();
     if (!mailbox) throw new Error("mailbox fixture missing");
-    const services = createWorkflowTaskServices(db, {});
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
 
     // Neither `lastSyncedAt` nor `syncCursor` set: the mailbox has not
     // finished connecting, so `createSource` must refuse rather than default
@@ -799,7 +799,7 @@ describe("durable workflow execution audit", () => {
     // no longer resolves Graph config eagerly (outside any wrapper) — it
     // goes through the same registry-entry path as every other provider, so
     // this failure must land inside the health wrapper too.
-    const services = createWorkflowTaskServices(db, {});
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
 
     await expect(
       services["reconcile-inbound-mailbox"]({ mailboxId: mailbox.id }),
@@ -835,7 +835,7 @@ describe("durable workflow execution audit", () => {
       })
       .returning();
     if (!mailbox) throw new Error("mailbox fixture missing");
-    const services = createWorkflowTaskServices(db, {});
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
 
     await expect(
       services["reconcile-inbound-mailbox"]({ mailboxId: mailbox.id }),

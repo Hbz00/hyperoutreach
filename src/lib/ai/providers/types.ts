@@ -32,7 +32,8 @@ export type StructuredResponseResult<T> = {
     cacheWriteInputTokens?: number;
     reasoningTokens?: number;
   } | null;
-  toolUsage: { webSearchCalls: number };
+  /** Null when the surface does not report tool activity at all. */
+  toolUsage: { webSearchCalls: number } | null;
   costUsd: number | null;
   costAvailability: "available" | "unavailable";
 };

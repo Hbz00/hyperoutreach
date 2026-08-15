@@ -17,7 +17,7 @@ import {
   NodeDnsMxResolver,
 } from "@/modules/email-resolution/dns";
 import {
-  OpenAIPublicEmailEvidenceProvider,
+  StructuredPublicEmailEvidenceProvider,
   StaticPublicEmailEvidenceProvider,
 } from "@/modules/email-resolution/public-evidence-provider";
 
@@ -208,7 +208,7 @@ describe("public email evidence providers", () => {
   });
 
   it("binds structured samples to provider-declared sources", async () => {
-    const provider = new OpenAIPublicEmailEvidenceProvider(
+    const provider = new StructuredPublicEmailEvidenceProvider(
       {
         run: async () => ({
           responseId: "resp_public_email",
@@ -241,7 +241,7 @@ describe("public email evidence providers", () => {
 
   it("requests web search through the real structured provider contract", async () => {
     let request: Record<string, unknown> | undefined;
-    const provider = new OpenAIPublicEmailEvidenceProvider(
+    const provider = new StructuredPublicEmailEvidenceProvider(
       {
         run: async (input: Record<string, unknown>) => {
           request = input;

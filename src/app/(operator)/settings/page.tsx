@@ -1,7 +1,6 @@
 import { desc } from "drizzle-orm";
 
 import maintenanceConfig from "../../../../config/maintenance.json";
-import { getCodexCliStatus } from "@/lib/codex/status";
 import { getDatabase } from "@/lib/db/client";
 import {
   agentRuns,
@@ -43,7 +42,7 @@ export default async function SettingsPage({
     notificationFailures,
     maintenanceRows,
   ] = await Promise.all([
-    resolveProviderPresentation(process.env, getCodexCliStatus),
+    resolveProviderPresentation(process.env),
     getOperatorSendingSettings(db),
     listSuppressions(db, {}),
     db
@@ -145,12 +144,6 @@ export default async function SettingsPage({
             <dt>Non-web model</dt>
             <dd>{aiProvider.nonWebModel}</dd>
           </div>
-          {aiProvider.codexStatus ? (
-            <div>
-              <dt>Codex CLI status</dt>
-              <dd>{aiProvider.codexStatus}</dd>
-            </div>
-          ) : null}
           <div>
             <dt>Mail provider fallback</dt>
             <dd>
@@ -167,9 +160,6 @@ export default async function SettingsPage({
           <p className="alert" role="status">
             {aiProvider.configurationNotice}
           </p>
-        ) : null}
-        {aiProvider.codexStatusNote ? (
-          <p className="muted">{aiProvider.codexStatusNote}</p>
         ) : null}
         {aiProvider.sourceProvenanceNote ? (
           <p className="muted">{aiProvider.sourceProvenanceNote}</p>

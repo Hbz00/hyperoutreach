@@ -1,9 +1,8 @@
-import type { CodexCliStatus } from "@/lib/codex/status";
 import {
   AIProviderConfigurationError,
   resolveAIProviderConfig,
   type ResolvedAIProviderConfig,
-} from "@/lib/openai/provider-config";
+} from "@/lib/ai/provider-config";
 import {
   resolveWorkflowProvider,
   WorkflowProviderConfigurationError,
@@ -15,8 +14,6 @@ export type ProviderPresentation = {
   researchModel: string;
   nonWebModel: string;
   workflowProvider: string;
-  codexStatus: string | undefined;
-  codexStatusNote?: string;
   sourceProvenanceNote?: string;
   configurationNotice?: string;
 };
@@ -25,15 +22,12 @@ type ProviderConfigResolver = (
   environment: Record<string, string | undefined>,
 ) => ResolvedAIProviderConfig;
 
-const CODEX_STATUS_LABELS: Record<CodexCliStatus, string> = {
-  authenticated: "Authenticated",
-  not_authenticated: "Installed, not authenticated",
-  unavailable: "Unavailable",
-};
+function lane(model: string, effort: string): string {
+  return `${model} · ${effort}`;
+}
 
 export function getProviderPresentation(
   config: ResolvedAIProviderConfig,
-  codexStatus?: CodexCliStatus,
   workflowProvider: WorkflowProvider = "local",
 ): ProviderPresentation {
   const workflowProviderLabel =
@@ -44,44 +38,22 @@ export function getProviderPresentation(
       researchModel: "deterministic-mock",
       nonWebModel: "deterministic-mock",
       workflowProvider: workflowProviderLabel,
-      codexStatus: undefined,
     };
   }
 
-  if (config.mode === "openai") {
-    return {
-      provider: "OpenAI Responses API",
-      researchModel: config.openai.researchModel,
-      nonWebModel: config.openai.fastModel,
-      workflowProvider: workflowProviderLabel,
-      codexStatus: undefined,
-    };
-  }
-
+  const { research, fast } = config.chatGptDesktop;
   return {
-    provider: "Local Codex CLI / ChatGPT account for all AI tasks",
-    researchModel: config.codex.researchModel,
-    nonWebModel: config.codex.fastModel,
+    provider: "Local ChatGPT desktop app",
+    researchModel: lane(research.model, research.effort),
+    nonWebModel: lane(fast.model, fast.effort),
     workflowProvider: workflowProviderLabel,
-    codexStatus: CODEX_STATUS_LABELS[codexStatus ?? "unavailable"],
-    codexStatusNote:
-      "Login status only; hardened Codex invocations can still fail closed if the installed CLI is incompatible.",
     sourceProvenanceNote:
-      "Web citations are model-declared after an observed Codex search, not tool-observed.",
+      "Web citations are model-declared: the desktop app reports neither its searches nor its token usage.",
   };
-}
-
-export async function statusForProvider(
-  config: ResolvedAIProviderConfig,
-  statusLoader: (executable: string) => Promise<CodexCliStatus>,
-): Promise<CodexCliStatus | undefined> {
-  if (config.mode !== "codex") return undefined;
-  return statusLoader(config.codex.executable);
 }
 
 export async function resolveProviderPresentation(
   environment: Record<string, string | undefined>,
-  statusLoader: (executable: string) => Promise<CodexCliStatus>,
   configResolver: ProviderConfigResolver = resolveAIProviderConfig,
 ): Promise<ProviderPresentation> {
   let config: ResolvedAIProviderConfig;
@@ -101,12 +73,10 @@ export async function resolveProviderPresentation(
       researchModel: "Unavailable",
       nonWebModel: "Unavailable",
       workflowProvider: "Misconfigured",
-      codexStatus: undefined,
       configurationNotice:
         "Provider configuration is invalid. Check the server environment.",
     };
   }
 
-  const codexStatus = await statusForProvider(config, statusLoader);
-  return getProviderPresentation(config, codexStatus, workflowProvider);
+  return getProviderPresentation(config, workflowProvider);
 }

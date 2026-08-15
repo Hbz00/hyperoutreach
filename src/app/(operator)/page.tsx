@@ -12,7 +12,7 @@ import {
   suppressionEntries,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
-import { resolveAIProviderConfig } from "@/lib/openai/provider-config";
+import { resolveAIProviderConfig } from "@/lib/ai/provider-config";
 import { getProviderPresentation } from "@/modules/settings/provider-presentation";
 import { resolveWorkflowProvider } from "@/modules/workflows/provider-config";
 
@@ -87,7 +87,6 @@ export default async function DashboardPage() {
   try {
     provider = getProviderPresentation(
       resolveAIProviderConfig(process.env),
-      undefined,
       resolveWorkflowProvider(process.env),
     );
   } catch {

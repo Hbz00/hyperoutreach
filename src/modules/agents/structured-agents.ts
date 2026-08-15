@@ -3,8 +3,8 @@ import type { z } from "zod";
 import type {
   StructuredAIProvider,
   StructuredResponseResult,
-} from "@/lib/openai/providers/types";
-export type { StructuredAIProvider } from "@/lib/openai/providers/types";
+} from "@/lib/ai/providers/types";
+export type { StructuredAIProvider } from "@/lib/ai/providers/types";
 import type {
   AccountDiscoveryAgent,
   AccountResearchAgent,
@@ -51,7 +51,7 @@ function validatedResult<T>(
   return { ...result, output: schema.parse(result.output) };
 }
 
-abstract class BaseOpenAIAgent {
+abstract class BaseStructuredAgent {
   abstract readonly name: string;
   abstract readonly promptVersion: string;
   abstract readonly schemaVersion: string;
@@ -62,8 +62,8 @@ abstract class BaseOpenAIAgent {
   ) {}
 }
 
-export class OpenAIAccountDiscoveryAgent
-  extends BaseOpenAIAgent
+export class StructuredAccountDiscoveryAgent
+  extends BaseStructuredAgent
   implements AccountDiscoveryAgent
 {
   readonly name = "account_discovery";
@@ -90,8 +90,8 @@ export class OpenAIAccountDiscoveryAgent
   }
 }
 
-export class OpenAIAccountResearchAgent
-  extends BaseOpenAIAgent
+export class StructuredAccountResearchAgent
+  extends BaseStructuredAgent
   implements AccountResearchAgent
 {
   readonly name = "account_research";
@@ -118,8 +118,8 @@ export class OpenAIAccountResearchAgent
   }
 }
 
-export class OpenAIContactDiscoveryAgent
-  extends BaseOpenAIAgent
+export class StructuredContactDiscoveryAgent
+  extends BaseStructuredAgent
   implements ContactDiscoveryAgent
 {
   readonly name = "contact_discovery";
@@ -146,8 +146,8 @@ export class OpenAIContactDiscoveryAgent
   }
 }
 
-export class OpenAIPersonalizationAgent
-  extends BaseOpenAIAgent
+export class StructuredPersonalizationAgent
+  extends BaseStructuredAgent
   implements PersonalizationAgent
 {
   readonly name = "personalization";
@@ -176,14 +176,17 @@ export class OpenAIPersonalizationAgent
   }
 }
 
-export class OpenAIReplyClassifier implements ReplyClassifier {
+export class StructuredReplyClassifier implements ReplyClassifier {
   readonly promptVersion = "reply-classifier-prompt-v1";
   readonly schemaVersion = "reply-classifier-schema-v1";
 
   constructor(
     private readonly provider: StructuredAIProvider,
     readonly model: string,
-    readonly name = "openai-responses-reply-v1",
+    // `replies.classifier` persists this string. Every caller passes the
+    // surface-specific identity; the fallback stays provider-neutral so a
+    // caller that forgets cannot stamp a row with a provider that never ran it.
+    readonly name = "structured-reply-v1",
   ) {}
 
   async classifyObserved(

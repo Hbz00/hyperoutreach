@@ -19,8 +19,8 @@ import type {
   PersonalizationOutput,
 } from "@/modules/agents/schemas";
 import type { AgentResult } from "@/modules/agents/types";
-import { OpenAIReplyClassifier } from "@/modules/agents/openai-agents";
-import type { StructuredAIProvider } from "@/modules/agents/openai-agents";
+import { StructuredReplyClassifier } from "@/modules/agents/structured-agents";
+import type { StructuredAIProvider } from "@/modules/agents/structured-agents";
 import { createOrGetAccount } from "@/modules/accounts/service";
 import {
   createDraftCampaign,
@@ -40,7 +40,7 @@ import {
 } from "@/modules/email-resolution/providers";
 import { resolveContactEmail as resolveContactEmailService } from "@/modules/email-resolution/service";
 import {
-  OpenAIPublicEmailEvidenceProvider,
+  StructuredPublicEmailEvidenceProvider,
   StaticPublicEmailEvidenceProvider,
 } from "@/modules/email-resolution/public-evidence-provider";
 import { generateOutreachProposal } from "@/modules/messages/generation-service";
@@ -1934,7 +1934,7 @@ describe("database-backed research and email resolution", () => {
         sourceUrl: `https://${fixture.domain}/team`,
       },
     ];
-    const publicEvidenceProvider = new OpenAIPublicEmailEvidenceProvider(
+    const publicEvidenceProvider = new StructuredPublicEmailEvidenceProvider(
       {
         run: async () => ({
           responseId: "resp_public_email_audit_success",
@@ -2008,7 +2008,7 @@ describe("database-backed research and email resolution", () => {
 
   it("persists a sanitized failed agent run when OpenAI public-email evidence fails", async () => {
     const fixture = await accountAndContact("email-ai-audit-failure");
-    const publicEvidenceProvider = new OpenAIPublicEmailEvidenceProvider(
+    const publicEvidenceProvider = new StructuredPublicEmailEvidenceProvider(
       {
         run: async () => {
           throw new Error("sk-secret-public-evidence-leak");
@@ -2398,7 +2398,7 @@ describe("database-backed research and email resolution", () => {
   });
 
   it("audits reply classification without inbound side effects and sanitizes failed agent errors", async () => {
-    const classifier = new OpenAIReplyClassifier(
+    const classifier = new StructuredReplyClassifier(
       {
         run: async () =>
           result(

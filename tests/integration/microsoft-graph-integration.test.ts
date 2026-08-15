@@ -955,7 +955,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
     // microsoft_graph. No Microsoft env vars here, so requireMicrosoftConfig
     // throws inside the health wrapper before any network call.
     const dispatchMailbox = await insertMailbox({ lastSyncedAt: anchor });
-    const services = createWorkflowTaskServices(db, {});
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
     await expect(
       services["reconcile-inbound-mailbox"]({
         mailboxId: dispatchMailbox.id,

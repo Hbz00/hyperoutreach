@@ -1,4 +1,4 @@
-import type { LiveSourceProvenance } from "@/lib/openai/providers/types";
+import type { LiveSourceProvenance } from "@/lib/ai/providers/types";
 
 export type AgentSource = {
   url: string;
@@ -23,7 +23,8 @@ export type AgentResult<T> = {
   output: T;
   sources: AgentSource[];
   usage: AgentUsage | null;
-  toolUsage?: AgentToolUsage;
+  /** Null when the provider surface does not report tool activity. */
+  toolUsage?: AgentToolUsage | null;
   costUsd: number | null;
   costAvailability?: "available" | "unavailable";
 };

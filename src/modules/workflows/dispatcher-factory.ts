@@ -3,7 +3,7 @@ import "server-only";
 import { idempotencyKeys, tasks } from "@trigger.dev/sdk";
 
 import { getDatabase } from "@/lib/db/client";
-import { assertAIWorkflowCompatibility } from "@/lib/openai/provider-config";
+import { assertAIWorkflowCompatibility } from "@/lib/ai/provider-config";
 import {
   LocalWorkflowDispatcher,
   TriggerWorkflowDispatcher,

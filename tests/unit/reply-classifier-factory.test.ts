@@ -6,10 +6,10 @@ const { createReplyClassifierFromBundle } =
   await import("@/modules/replies/classifier-factory");
 
 describe("reply classifier provider routing", () => {
-  it("uses the non-web lane on the same Codex provider used for research", async () => {
-    const codexRun = vi.fn().mockResolvedValue({
-      responseId: "codex-thread",
-      model: "codex-cli:codex-fast",
+  it("uses the non-web lane on the same surface as research", async () => {
+    const desktopRun = vi.fn().mockResolvedValue({
+      responseId: "chatgpt-desktop_test",
+      model: "chatgpt-desktop:GPT-5.6 Sol",
       output: {
         category: "positive",
         confidence: 0.93,
@@ -17,25 +17,25 @@ describe("reply classifier provider routing", () => {
       },
       sources: [],
       usage: null,
-      toolUsage: { webSearchCalls: 0 },
+      toolUsage: null,
       costUsd: null,
       costAvailability: "unavailable",
     });
     const classifier = createReplyClassifierFromBundle({
-      mode: "codex",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
-        provider: { run: codexRun },
-        model: "codex-cli:codex-research",
+        provider: { run: desktopRun },
+        model: "chatgpt-desktop:GPT-5.6 Sol",
         operationTimeoutMs: 120_000,
       },
       nonWeb: {
-        provider: { run: codexRun },
-        model: "codex-cli:codex-fast",
+        provider: { run: desktopRun },
+        model: "chatgpt-desktop:GPT-5.6 Sol",
       },
     });
 
-    expect(classifier.name).toBe("codex-cli-reply-v1");
+    expect(classifier.name).toBe("chatgpt-desktop-reply-v1");
 
     await expect(
       classifier.classify({
@@ -44,21 +44,23 @@ describe("reply classifier provider routing", () => {
         sender: "ada@example.com",
       }),
     ).resolves.toMatchObject({ category: "positive" });
-    expect(codexRun).toHaveBeenCalledWith(
+    expect(desktopRun).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: "reply_classifier",
-        model: "codex-cli:codex-fast",
+        model: "chatgpt-desktop:GPT-5.6 Sol",
         useWebSearch: false,
       }),
     );
-    expect(codexRun).toHaveBeenCalledTimes(1);
+    expect(desktopRun).toHaveBeenCalledTimes(1);
   });
 
-  it("propagates Codex errors instead of invoking the research provider", async () => {
+  it("propagates surface errors instead of invoking the research lane", async () => {
     const researchRun = vi.fn();
-    const codexRun = vi.fn().mockRejectedValue(new Error("Codex unavailable"));
+    const desktopRun = vi
+      .fn()
+      .mockRejectedValue(new Error("ChatGPT desktop is not reachable"));
     const classifier = createReplyClassifierFromBundle({
-      mode: "codex",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
         provider: { run: researchRun },
@@ -66,8 +68,8 @@ describe("reply classifier provider routing", () => {
         operationTimeoutMs: 120_000,
       },
       nonWeb: {
-        provider: { run: codexRun },
-        model: "codex-cli:codex-fast",
+        provider: { run: desktopRun },
+        model: "chatgpt-desktop:GPT-5.6 Sol",
       },
     });
 
@@ -77,7 +79,7 @@ describe("reply classifier provider routing", () => {
         body: "Hello",
         sender: "ada@example.com",
       }),
-    ).rejects.toThrow("Codex unavailable");
+    ).rejects.toThrow("ChatGPT desktop is not reachable");
     expect(researchRun).not.toHaveBeenCalled();
   });
 
@@ -98,22 +100,20 @@ describe("reply classifier provider routing", () => {
     ).resolves.toMatchObject({ category: "unsubscribe" });
   });
 
-  it("preserves the OpenAI Responses classifier identity", () => {
-    const responsesRun = vi.fn();
+  it("names the classifier after the surface that answered", () => {
+    const run = vi.fn();
     const classifier = createReplyClassifierFromBundle({
-      mode: "openai",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
-        provider: { run: responsesRun },
-        model: "research-model",
-        operationTimeoutMs: 30_000,
+        provider: { run },
+        model: "chatgpt-desktop:GPT-5.6 Sol",
+        operationTimeoutMs: 600_000,
       },
-      nonWeb: {
-        provider: { run: responsesRun },
-        model: "fast-model",
-      },
+      nonWeb: { provider: { run }, model: "chatgpt-desktop:GPT-5.6 Sol" },
     });
 
-    expect(classifier.name).toBe("openai-responses-reply-v1");
+    expect(classifier.name).toBe("chatgpt-desktop-reply-v1");
+    expect(run).not.toHaveBeenCalled();
   });
 });

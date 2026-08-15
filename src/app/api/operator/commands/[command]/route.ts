@@ -50,7 +50,11 @@ import {
 import { createWorkflowDispatcher } from "@/modules/workflows/dispatcher-factory";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+// Operator commands run their workflow task inside this request, so the ceiling
+// must cover the slowest configurable AI call (MAX_AI_TIMEOUT_MS) plus a
+// transport margin; anything lower would kill a long web-research command that
+// the provider itself still considers in budget.
+export const maxDuration = 960;
 
 const createProspectSchema = z.object({
   companyName: z.string().trim().min(1).max(300),

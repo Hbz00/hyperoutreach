@@ -12,11 +12,10 @@ The complete credential-free MVP path is implemented: authenticated operator
 UI, prospect research and resolution, immutable campaigns, human review, mock
 sending, durable follow-ups, reply ingestion, suppression, and operational
 inspection. PostgreSQL migrations, deterministic provider substitutes, and
-unit/integration/Playwright coverage are included. The local Codex CLI adapter
-has also been smoke-tested through the real structured research path. Microsoft
-Graph, OpenAI Responses, and Trigger.dev adapters are implemented and
-contract-tested; their live verification still requires the operator's own
-credentials.
+unit/integration/Playwright coverage are included. The ChatGPT desktop adapter
+has been exercised against the real app. Microsoft Graph and Trigger.dev
+adapters are implemented and contract-tested; their live verification still
+requires the operator's own credentials.
 
 ## Prerequisites
 
@@ -79,8 +78,9 @@ not leave a worker logging an authentication failure every minute.
 
 The example environment defaults all external providers to deterministic mock
 mode. Replace the session and encryption placeholders before any non-local use.
-OpenAI, Microsoft, and Trigger credentials are server-only and intentionally
-blank. Never commit `.env` or `.env.local`.
+Microsoft and Trigger credentials are server-only and intentionally blank; the
+AI path takes no credential at all, because it drives the operator's own signed-in
+ChatGPT app. Never commit `.env` or `.env.local`.
 
 Do **not** run a seed command for a real installation. Migrations create only
 the schema and operational singleton rows; connect the real mailbox from
@@ -193,78 +193,76 @@ create a duplicate strong identity.
 
 Narrow account-discovery, account-research, contact-discovery,
 personalization, and reply-classification agents share a strict structured-output
-boundary. `OPENAI_PROVIDER=openai` sends every AI task through OpenAI's Responses
-API, current `web_search`, and Zod-derived strict JSON schemas.
+boundary. Every one of them runs on the operator's own ChatGPT desktop app: the
+app is driven through its devtools protocol, the turn is typed into the real
+composer and the answer is read back from the surface. No API key is involved,
+and no network request is reconstructed — the app performs its own request
+exactly as it would for a human.
 
-`OPENAI_PROVIDER=codex` is an optional mode for a local, single-operator
-installation. One locally installed Codex CLI provider uses the operator's
-authenticated ChatGPT account for every AI task. Research requests enable live
-web search with `--search`; personalization and reply classification keep web
-search disabled. Codex mode does not construct an OpenAI API client and does not
-require `OPENAI_API_KEY`. A Codex failure fails the current task and never
-silently falls back to the API.
-
-Before enabling the mode, install Codex locally and authenticate it with
-`codex login`. A successful `codex login status` confirms authentication only;
-it does not prove that the installed CLI supports Hyperoutreach's hardened
-invocation. That invocation is tested with Codex CLI 0.147.0 and fails closed if
-required flags or isolation settings are incompatible. Then configure the
-server-only environment and restart the application:
+The two lanes differ only in how the picker is set. Research agents run
+`AI_RESEARCH_MODEL` at `AI_RESEARCH_EFFORT` (default `GPT-5.6 Sol` at `High`)
+and may use the app's web search; personalization and reply classification run
+`AI_FAST_MODEL` at `AI_FAST_EFFORT` (default `GPT-5.6 Sol` at `Instant`). Effort
+and model are always stated: an unset value would inherit whatever default the
+app carries, which is how evidence-bound research silently degrades.
 
 ```bash
-OPENAI_PROVIDER=codex
+AI_PROVIDER=chatgpt_desktop
 WORKFLOW_PROVIDER=local
-CODEX_EXECUTABLE=codex
-CODEX_RESEARCH_MODEL=gpt-5.6-terra
-CODEX_FAST_MODEL=gpt-5.6-luna
-CODEX_TIMEOUT_MS=240000
-CODEX_MAX_CONCURRENCY=1
+AI_RESEARCH_MODEL=GPT-5.6 Sol
+AI_RESEARCH_EFFORT=High
+AI_RESEARCH_TIMEOUT_MS=600000
+AI_FAST_MODEL=GPT-5.6 Sol
+AI_FAST_EFFORT=Instant
+AI_FAST_TIMEOUT_MS=120000
 ```
 
-For web requests, the hardened invocation keeps Codex's Code Mode host enabled
-because Codex CLI 0.147.0 requires it to expose the GPT-5.6 web-search tool even
-when `--search` is present. Shell, unified execution, browser, app, plugin,
-memory, image, computer-use, and subagent capabilities remain disabled. Non-web
-requests also disable the Code Mode host. The generated wire schema removes the
-unsupported JSON Schema `format: "uri"` annotation and regex lookarounds that
-Codex rejects, while the original Zod schema still validates every returned URL
-and email after execution.
+Each turn opens a new chat, switches the app into temporary chat so nothing is
+persisted in the account history, selects model and effort, sends the prompt,
+waits for the answer to stabilise, and restores the mode it found. Turns are
+serialized because the app has a single composer, and each turn carries its own
+deadline, counted from the moment the caller asked — including the wait for the
+composer to be free. That bound has a visible consequence: while a long
+research turn holds the window, a short call queued behind it can exhaust its
+own deadline without ever being sent, and fails rather than piling up. The
+queue lives in the application process; running `npm run chatgpt` at the same
+time drives the same window from outside it.
 
-Codex mode requires local workflow execution and is rejected with
-`WORKFLOW_PROVIDER=trigger`; a hosted Trigger worker cannot use the operator
-machine's CLI installation or ChatGPT login.
+The app cannot be handed an output schema, so the schema travels in the prompt
+and is enforced after the fact by the same Zod schema the rest of the pipeline
+uses. An answer that is not a single valid JSON object earns exactly one
+correction turn; a second failure fails the task rather than persisting
+something unvalidated. Answers are read from the document tree, not the
+rendering, so a linkified URL cannot break a JSON string.
 
-Codex JSONL proves that a web search occurred and records its query, but Codex
-CLI 0.147.0 does not expose the result URLs in the completed `web_search` event.
-Its validated HTTP(S) citations are therefore persisted as
-`model_declared_after_search`: the model declared them after an observed search,
-but Hyperoutreach cannot prove that each URL appeared in the hidden result set.
-Responses API sources are persisted separately as `tool_observed`, because they
-come directly from `web_search_call.action.sources`. The UI and audit data do
-not present these two provenance strengths as equivalent.
+Two limits follow from the surface and are treated as facts, not gaps: the app
+reports neither token usage nor its searches, so cost is `unavailable` and tool
+usage is null rather than an invented zero; and every citation is persisted as
+`model_declared_after_search`, because nothing in the surface proves a URL came
+from a result set.
 
-This mode is not a hosted multi-user authentication mechanism and must not be
-used to expose one operator's Codex session to remote users. Hyperoutreach does
-not extract ChatGPT tokens or invoke the ChatGPT desktop app; it launches the
-authenticated Codex CLI as a constrained local subprocess. `/settings` reports
-only a sanitized installed/authenticated status and never displays account
-identity or secrets. Codex token usage is recorded when the CLI reports it, but
-dollar cost remains unavailable because ChatGPT-plan consumption is not API
-metering.
+`AI_PROVIDER=chatgpt_desktop` requires local workflow execution and is rejected
+with `WORKFLOW_PROVIDER=trigger`: a hosted worker has no desktop app to drive.
+This is a single-operator arrangement and must not be used to expose one
+operator's ChatGPT session to remote users. `/settings` shows the lane models
+and efforts, never account identity or secrets.
 
-`OPENAI_PROVIDER=mock` keeps all AI tasks deterministic and credential-free.
-OpenAI model names use `OPENAI_RESEARCH_MODEL` and `OPENAI_FAST_MODEL`; Codex
-uses `CODEX_RESEARCH_MODEL` and `CODEX_FAST_MODEL`. Their defaults are
-`gpt-5.6-terra` and `gpt-5.6-luna`. All live modes fail closed on missing or
-invalid configuration and never silently fall back to another provider.
+`AI_PROVIDER=mock` is the default and keeps all AI tasks deterministic and
+credential-free. The live mode is opt-in by name because it has side effects on
+the operator's own machine: it launches and drives their ChatGPT app.
+Configuration failures are explicit: no mode silently falls back to another.
+
+The retired Codex CLI provider is still in the tree under `src/lib/codex/`,
+unplugged from the provider factory. It is kept for reference, not selected by
+any configuration.
 
 Credential-free development uses deterministic mock agents through the same
 interfaces. Each persisted operation records agent/model/prompt/schema versions,
 structured input/output, provider response/thread ID, sources, detailed
 token/cache/reasoning usage, web-search call count, cost availability/value,
 completion state, and sanitized failures in `agent_runs`. Provider sources carry
-their provenance strength: Responses URLs are tool-observed, while Codex URLs
-are model-declared after an observed search. Account research has a configurable
+their provenance strength: desktop-app URLs are model-declared after the
+model's own search. Account research has a configurable
 freshness TTL, a crash-recoverable
 ownership claim that avoids duplicate concurrent calls, and one snapshot reused
 by every contact. A global
@@ -293,9 +291,9 @@ recipient exists. Below the confidence threshold, an optional
 `EmailEnrichmentProvider` can add candidates;
 no-result and transient-failure outcomes remain explicit instead of inventing an
 address. DNS and conventional enrichment retain their short provider deadline.
-AI public-evidence research has its own deadline: Codex uses
-`CODEX_TIMEOUT_MS` (240 seconds by default) while Responses uses its provider
-operation timeout. All remain abortable and deadline-bound. A claim fenced by
+AI public-evidence research has its own deadline, `AI_RESEARCH_TIMEOUT_MS`
+(600 seconds by default), because it is web research like any other research
+call. All remain abortable and deadline-bound. A claim fenced by
 contact/account/domain/employment version keeps
 late old-employer results from persisting. PostgreSQL permits at most one accepted
 address per contact, and later resolutions replace it transactionally. Contacts
@@ -513,10 +511,10 @@ projection:
   window;
 - **Healthy** — no cycle is active and the last success is recent.
 
-`Running` is distinct from `Overdue`: a normal long Codex cycle remains running
+`Running` is distinct from `Overdue`: a normal long AI cycle remains running
 while its heartbeat is current. The no-owner overdue window is the greater of
-`CODEX_TIMEOUT_MS + 60 seconds` and three maintenance intervals (five minutes
-with the default 240-second Codex timeout). Settings also shows the automation
+`AI_RESEARCH_TIMEOUT_MS + 60 seconds` and three maintenance intervals (eleven
+minutes with the default 600-second research deadline). Settings also shows the automation
 provider/mode, active-cycle timestamps when applicable, the last success, and a
 sanitized historical failure without exposing the lease token or credentials.
 
@@ -567,6 +565,85 @@ Trigger credentials are present. The task module itself is import/type checked;
 the remaining live check is `npm run trigger:dev`, invoke each task in the
 development environment, inspect its PostgreSQL `workflow_events`, then perform
 a dry-run and production deploy.
+
+## ChatGPT desktop bridge
+
+`src/lib/chatgpt-desktop` drives the ChatGPT macOS app's Chat surface from
+Node, so a prompt can be answered by the ChatGPT subscription rather than a
+billed API key. It is macOS-only, and with `AI_PROVIDER=chatgpt_desktop` it is
+the surface every agent runs on — `src/lib/ai/production-provider-bundle`
+builds both lanes on top of it. The commands below drive the same bridge by
+hand, which is how a broken selector is diagnosed.
+
+```bash
+npm run chatgpt -- --models
+npm run chatgpt -- --model "GPT-5.6 Sol" --effort High "your prompt"
+echo "your prompt" | npm run chatgpt -- --json
+npm run chatgpt:doctor
+```
+
+```ts
+import { askChatGptDesktop } from "@/lib/chatgpt-desktop";
+
+const { text } = await askChatGptDesktop({
+  prompt: "…",
+  model: "GPT-5.6 Sol",
+  effort: "High",
+});
+```
+
+Each call opens a new chat, switches Temporary chat on so the turn leaves no
+history, selects the model, sends the prompt, waits for the answer to settle,
+and restores the mode it found. Calls are serialised, because the Chat surface
+is a single shared window.
+
+### How it works, and what it does not do
+
+The app is Electron, and it already accepts Chromium's devtools switch. The
+bridge attaches to that port and drives the app's own surface with devtools
+input events, which reach the renderer without the window being focused or
+visible, so it runs quietly in the background.
+
+Everything network-facing stays inside the app: the request, its authentication
+and its integrity checks are performed by ChatGPT itself, exactly as when you
+press send. The bridge never reconstructs that traffic. Two paths were explored
+and rejected on purpose:
+
+- Calling `chatgpt.com/backend-api/f/conversation` from the app's bundled
+  webview returns `403 Unusual activity` without the sentinel proof-of-work
+  tokens. Reproducing them would mean defeating an anti-abuse measure, so the
+  bridge does not.
+- The app shell renderer cannot reach the backend at all — its `app://` scheme
+  is not CORS-enabled, and its traffic goes through the main process over
+  private IPC.
+
+### Requirements and failure modes
+
+The app must be running with its devtools port open. The bridge launches it
+hidden and unfocused when it is closed:
+
+```bash
+open -g -j -a /Applications/ChatGPT.app --args --remote-debugging-port=9333
+```
+
+macOS ignores `--args` for an app that is already running, so an app started
+without the switch cannot be attached to; the bridge reports that rather than
+guessing. Override the port with `--port` or `CHATGPT_DESKTOP_CDP_PORT`.
+
+Because the bridge drives a real interface, a ChatGPT desktop update can rename
+a hook. Every one of them lives in `SELECTORS` in `chat-surface.ts`, and
+`npm run chatgpt:doctor` checks them in order and names the first that no longer
+holds.
+
+Two failures are deliberately loud rather than silent, because degrading
+quietly would break a guarantee the caller asked for:
+
+- If the temporary-chat control cannot be found, the turn is refused instead of
+  sent. Sending anyway would persist a prompt the caller asked to keep
+  ephemeral.
+- If the answer does not finish within the timeout, the call throws instead of
+  returning what had arrived, which would pass a truncated answer off as a
+  complete one. The partial text is carried in the error's `detail`.
 
 ## Validation
 
@@ -659,12 +736,12 @@ suppression.
   formatting, lint, typecheck, unit/integration tests, eval, migration-history
   validation, Trigger task import, and production build. The maintenance change
   set must rerun those gates before the same claim is made for it.
-- Live OpenAI Responses, Microsoft Graph, and Trigger.dev Cloud behavior is not
-  claimed as verified. Their adapters are contract-tested without network
-  access; live checks still require explicitly supplied credentials and, for
-  Graph notifications, a public HTTPS endpoint. Codex CLI 0.147.0 has been
-  exercised through the exact application provider, including structured web
-  research and the public-email resolution service with its 240-second lane.
+- Live Microsoft Graph and Trigger.dev Cloud behavior is not claimed as
+  verified. Their adapters are contract-tested without network access; live
+  checks still require explicitly supplied credentials and, for Graph
+  notifications, a public HTTPS endpoint. The ChatGPT desktop adapter has been
+  driven against the real app, which must be installed, signed in and reachable
+  on its debug port.
   The Trigger.dev task module and dispatcher contract are tested locally, but
   cloud execution/deployment still needs a configured project. Mock mode keeps
   the entire application credential-free.

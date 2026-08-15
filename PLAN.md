@@ -1,6 +1,8 @@
 # Hyperoutreach MVP Implementation Plan
 
 > Status: core MVP complete; automatic-maintenance remediation tasks 1–7 are implemented, while the final live smoke and completion review remain open. `SPEC.md` is authoritative. Checkboxes reflect verified repository state, not intent.
+>
+> Superseded on 2026-08-15 for the AI surface only: every mention below of the OpenAI Responses API or the Codex CLI describes the architecture as it stood when the corresponding task was verified. All AI tasks now run through the operator's local ChatGPT desktop app; the API adapter was deleted and the Codex adapter unplugged. `README.md` is authoritative for the current AI path. Nothing else in this plan is affected.
 
 ## Goal
 

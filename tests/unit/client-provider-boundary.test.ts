@@ -6,8 +6,10 @@ import { describe, expect, it } from "vitest";
 const sourceRoot = resolve(process.cwd(), "src");
 const forbiddenServerModules = [
   "lib/codex/",
-  "lib/openai/client",
-  "lib/openai/production-provider-bundle",
+  // The live AI surface: it shells out, reads the filesystem and opens a
+  // devtools socket. Everything a client bundle must never reach.
+  "lib/chatgpt-desktop/",
+  "lib/ai/production-provider-bundle",
   "modules/agents/factory",
   "modules/replies/classifier-factory",
   "modules/workflows/service-factory",

@@ -1,16 +1,20 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
   AIProviderConfigurationError,
+  MAX_AI_TIMEOUT_MS,
   resolveAIProviderConfig,
   type AIProviderMode,
   type ResolvedAIProviderConfig,
-} from "@/lib/openai/provider-config";
+} from "@/lib/ai/provider-config";
 import {
   createLiveAIProviderBundle,
   type AIProviderBundle,
-} from "@/lib/openai/provider-bundle";
-import type { StructuredAIProvider } from "@/lib/openai/providers/types";
+} from "@/lib/ai/provider-bundle";
+import { createProductionAIProviderBundle } from "@/lib/ai/production-provider-bundle";
+import type { StructuredAIProvider } from "@/lib/ai/providers/types";
 
 function providerDouble(label: string): StructuredAIProvider {
   return {
@@ -20,224 +24,179 @@ function providerDouble(label: string): StructuredAIProvider {
   };
 }
 
+const desktopDefaults = {
+  research: { model: "GPT-5.6 Sol", effort: "High", timeoutMs: 600_000 },
+  fast: { model: "GPT-5.6 Sol", effort: "Instant", timeoutMs: 120_000 },
+};
+
 describe("AI provider configuration", () => {
-  it("defaults an empty environment and resolves explicit mock mode", () => {
-    const expectedMode: AIProviderMode = "mock";
+  it("stays on mocks until the live surface is asked for by name", () => {
+    // The live surface launches and drives the operator's own ChatGPT app, so
+    // it is never what an unconfigured environment gets.
     const config: ResolvedAIProviderConfig = resolveAIProviderConfig({});
-    const explicitConfig = resolveAIProviderConfig({
-      OPENAI_PROVIDER: " mock ",
-    });
 
-    expect(config).toEqual({
-      mode: expectedMode,
-      usesRealInfrastructure: false,
+    expect(config).toEqual({ mode: "mock", usesRealInfrastructure: false });
+    expect(resolveAIProviderConfig({ AI_PROVIDER: " mock " })).toEqual(config);
+
+    const live: AIProviderMode = "chatgpt_desktop";
+    expect(
+      resolveAIProviderConfig({ AI_PROVIDER: " chatgpt_desktop " }),
+    ).toEqual({
+      mode: live,
+      usesRealInfrastructure: true,
+      chatGptDesktop: desktopDefaults,
     });
-    expect(explicitConfig).toEqual(config);
   });
 
-  it("resolves OpenAI mode with trimmed values and stable model defaults", () => {
+  it("gives research a deep lane and the fast path an instant one", () => {
+    const config = resolveAIProviderConfig({ AI_PROVIDER: "chatgpt_desktop" });
+    if (config.mode !== "chatgpt_desktop") throw new Error("unexpected mode");
+
+    expect(config.chatGptDesktop.research.effort).toBe("High");
+    expect(config.chatGptDesktop.fast.effort).toBe("Instant");
+    expect(config.chatGptDesktop.research.timeoutMs).toBeGreaterThan(
+      config.chatGptDesktop.fast.timeoutMs,
+    );
+  });
+
+  it("accepts explicit lane settings and trims them", () => {
     expect(
       resolveAIProviderConfig({
-        OPENAI_PROVIDER: " openai ",
-        OPENAI_API_KEY: " secret-key ",
+        AI_PROVIDER: "chatgpt_desktop",
+        AI_RESEARCH_MODEL: " GPT-5.5 ",
+        AI_RESEARCH_EFFORT: " Medium ",
+        AI_RESEARCH_TIMEOUT_MS: "900000",
+        AI_FAST_MODEL: "GPT-5.6 Sol",
+        AI_FAST_EFFORT: "Medium",
+        AI_FAST_TIMEOUT_MS: "60000",
       }),
     ).toEqual({
-      mode: "openai",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
-      openai: {
-        apiKey: "secret-key",
-        researchModel: "gpt-5.6-terra",
-        fastModel: "gpt-5.6-luna",
+      chatGptDesktop: {
+        research: { model: "GPT-5.5", effort: "Medium", timeoutMs: 900_000 },
+        fast: { model: "GPT-5.6 Sol", effort: "Medium", timeoutMs: 60_000 },
       },
     });
   });
 
-  it("resolves Codex without an API key and exposes both model lanes", () => {
-    expect(
-      resolveAIProviderConfig({
-        OPENAI_PROVIDER: "codex",
-      }),
-    ).toEqual({
-      mode: "codex",
-      usesRealInfrastructure: true,
-      codex: {
-        executable: "codex",
-        researchModel: "gpt-5.6-terra",
-        fastModel: "gpt-5.6-luna",
-        timeoutMs: 240_000,
-        maxConcurrency: 1,
-      },
-    });
-  });
-
-  it.each([undefined, "", "mock"])(
-    "allows Codex with local workflow execution (%s)",
-    (workflowProvider) => {
-      expect(
-        resolveAIProviderConfig({
-          OPENAI_PROVIDER: "codex",
-          WORKFLOW_PROVIDER: workflowProvider,
-        }),
-      ).toMatchObject({ mode: "codex", usesRealInfrastructure: true });
-    },
-  );
-
-  it("rejects Codex when workflows run in a hosted Trigger worker", () => {
+  it("rejects an unknown provider mode instead of silently selecting mocks", () => {
     expect(() =>
-      resolveAIProviderConfig({
-        OPENAI_PROVIDER: "codex",
-        WORKFLOW_PROVIDER: " trigger ",
-      }),
-    ).toThrowError(AIProviderConfigurationError);
-    expect(() =>
-      resolveAIProviderConfig({
-        OPENAI_PROVIDER: "codex",
-        WORKFLOW_PROVIDER: " trigger ",
-      }),
-    ).toThrowError(/local workflow execution/i);
-  });
-
-  it("accepts explicit Codex settings within their bounds", () => {
-    expect(
-      resolveAIProviderConfig({
-        OPENAI_PROVIDER: "codex",
-        OPENAI_RESEARCH_MODEL: "research-custom",
-        OPENAI_FAST_MODEL: "api-fast",
-        CODEX_RESEARCH_MODEL: "codex-research",
-        CODEX_EXECUTABLE: "/opt/homebrew/bin/codex",
-        CODEX_FAST_MODEL: "codex-fast",
-        CODEX_TIMEOUT_MS: "600000",
-        CODEX_MAX_CONCURRENCY: "8",
-      }),
-    ).toEqual({
-      mode: "codex",
-      usesRealInfrastructure: true,
-      codex: {
-        executable: "/opt/homebrew/bin/codex",
-        researchModel: "codex-research",
-        fastModel: "codex-fast",
-        timeoutMs: 600_000,
-        maxConcurrency: 8,
-      },
-    });
-  });
-
-  it("uses OpenAI model variables as compatibility fallbacks for Codex", () => {
-    expect(
-      resolveAIProviderConfig({
-        OPENAI_PROVIDER: "codex",
-        OPENAI_RESEARCH_MODEL: "legacy-research",
-        OPENAI_FAST_MODEL: "legacy-fast",
-      }),
-    ).toMatchObject({
-      codex: {
-        researchModel: "legacy-research",
-        fastModel: "legacy-fast",
-      },
-    });
-  });
-
-  it("requires an API key only in OpenAI mode", () => {
-    expect(() =>
-      resolveAIProviderConfig({ OPENAI_PROVIDER: "openai" }),
-    ).toThrowError(AIProviderConfigurationError);
-    expect(() =>
-      resolveAIProviderConfig({ OPENAI_PROVIDER: "codex" }),
-    ).not.toThrow();
-  });
-
-  it("rejects unknown provider modes instead of silently selecting mocks", () => {
-    expect(() =>
-      resolveAIProviderConfig({ OPENAI_PROVIDER: "local-ish" }),
+      resolveAIProviderConfig({ AI_PROVIDER: "openai" }),
     ).toThrowError(AIProviderConfigurationError);
   });
 
   it.each([
-    ["CODEX_TIMEOUT_MS", "0"],
-    ["CODEX_TIMEOUT_MS", "600001"],
-    ["CODEX_TIMEOUT_MS", "1.5"],
-    ["CODEX_TIMEOUT_MS", "not-a-number"],
-    ["CODEX_MAX_CONCURRENCY", "0"],
-    ["CODEX_MAX_CONCURRENCY", "9"],
-    ["CODEX_MAX_CONCURRENCY", "1.5"],
+    ["AI_RESEARCH_TIMEOUT_MS", "0"],
+    ["AI_RESEARCH_TIMEOUT_MS", "900001"],
+    ["AI_RESEARCH_TIMEOUT_MS", "1.5"],
+    ["AI_FAST_TIMEOUT_MS", "not-a-number"],
   ])("rejects invalid bounded integer %s=%s", (key, value) => {
     expect(() =>
+      resolveAIProviderConfig({ AI_PROVIDER: "chatgpt_desktop", [key]: value }),
+    ).toThrowError(AIProviderConfigurationError);
+  });
+
+  it("rejects a picker label that could not come from the app", () => {
+    expect(() =>
       resolveAIProviderConfig({
-        OPENAI_PROVIDER: "codex",
-        [key]: value,
+        AI_PROVIDER: "chatgpt_desktop",
+        AI_RESEARCH_MODEL: "x".repeat(121),
       }),
     ).toThrowError(AIProviderConfigurationError);
+  });
+
+  it("refuses hosted workflow execution, which has no desktop app to drive", () => {
+    expect(() =>
+      resolveAIProviderConfig({
+        AI_PROVIDER: "chatgpt_desktop",
+        WORKFLOW_PROVIDER: " trigger ",
+      }),
+    ).toThrowError(/local workflow execution/i);
+    expect(() =>
+      resolveAIProviderConfig({ WORKFLOW_PROVIDER: "trigger" }),
+    ).not.toThrow();
+  });
+
+  it.each([undefined, "", "local", "mock"])(
+    "allows local workflow execution (%s)",
+    (workflowProvider) => {
+      expect(
+        resolveAIProviderConfig({
+          AI_PROVIDER: "chatgpt_desktop",
+          WORKFLOW_PROVIDER: workflowProvider,
+        }),
+      ).toMatchObject({ mode: "chatgpt_desktop" });
+    },
+  );
+
+  it("keeps the operator command route alive for the slowest allowed call", () => {
+    const routeSource = readFileSync(
+      "src/app/api/operator/commands/[command]/route.ts",
+      "utf8",
+    );
+    const literal = routeSource.match(/export const maxDuration = (\d+);/)?.[1];
+
+    expect(literal).toBeDefined();
+    expect(Number(literal) * 1_000).toBeGreaterThanOrEqual(MAX_AI_TIMEOUT_MS);
   });
 });
 
-describe("live AI provider bundle", () => {
-  it("uses one Responses provider instance for both OpenAI lanes", () => {
-    const responsesProvider = providerDouble("responses");
-    const responses = vi.fn(() => responsesProvider);
-    const config = resolveAIProviderConfig({
-      OPENAI_PROVIDER: "openai",
-      OPENAI_API_KEY: "api-key",
-      OPENAI_RESEARCH_MODEL: "research-model",
-      OPENAI_FAST_MODEL: "fast-model",
+describe("AI provider bundle", () => {
+  it("keeps mock mode free of any provider construction", () => {
+    const chatGptDesktop = vi.fn();
+
+    expect(createProductionAIProviderBundle({}, { chatGptDesktop })).toEqual({
+      mode: "mock",
+      usesRealInfrastructure: false,
     });
-    if (config.mode !== "openai") throw new Error("unexpected test config");
+    expect(chatGptDesktop).not.toHaveBeenCalled();
+  });
+
+  it("shares one desktop provider between both lanes", () => {
+    const desktop = providerDouble("desktop");
+    const factory = vi.fn(() => desktop);
+    const config = resolveAIProviderConfig({
+      AI_PROVIDER: "chatgpt_desktop",
+      AI_RESEARCH_MODEL: "GPT-5.6 Sol",
+      AI_FAST_MODEL: "GPT-5.5",
+    });
+    if (config.mode !== "chatgpt_desktop") throw new Error("unexpected mode");
 
     const bundle: AIProviderBundle = createLiveAIProviderBundle(config, {
-      responses,
+      chatGptDesktop: factory,
     });
 
-    expect(responses).toHaveBeenCalledOnce();
-    expect(bundle).toMatchObject({
-      mode: "openai",
-      usesRealInfrastructure: true,
-      research: { model: "research-model" },
-      nonWeb: { model: "fast-model" },
-    });
-    expect(bundle.research.provider).toBe(responsesProvider);
-    expect(bundle.nonWeb.provider).toBe(responsesProvider);
-  });
-
-  it("uses one Codex instance for both lanes and never constructs Responses", () => {
-    const codexProvider = providerDouble("codex");
-    const responses = vi.fn(() => providerDouble("responses"));
-    const codex = vi.fn(() => codexProvider);
-    const config = resolveAIProviderConfig({
-      OPENAI_PROVIDER: "codex",
-      CODEX_RESEARCH_MODEL: "codex-research",
-      CODEX_FAST_MODEL: "codex-fast",
-    });
-    if (config.mode !== "codex") throw new Error("unexpected test config");
-
-    const bundle = createLiveAIProviderBundle(config, { responses, codex });
-
-    expect(responses).not.toHaveBeenCalled();
-    expect(codex).toHaveBeenCalledOnce();
-    expect(codex).toHaveBeenCalledWith(config.codex);
+    expect(factory).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledWith(config.chatGptDesktop);
     expect(bundle).toEqual({
-      mode: "codex",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
-        provider: codexProvider,
-        model: "codex-cli:codex-research",
-        operationTimeoutMs: 240_000,
+        provider: desktop,
+        model: "chatgpt-desktop:GPT-5.6 Sol",
+        operationTimeoutMs: 600_000,
       },
-      nonWeb: {
-        provider: codexProvider,
-        model: "codex-cli:codex-fast",
-      },
+      nonWeb: { provider: desktop, model: "chatgpt-desktop:GPT-5.5" },
     });
   });
 
-  it("rejects Codex configuration without an injected Codex factory", () => {
-    const config = resolveAIProviderConfig({
-      OPENAI_PROVIDER: "codex",
-    });
-    if (config.mode !== "codex") throw new Error("unexpected test config");
+  it("fails closed without a provider factory", () => {
+    const config = resolveAIProviderConfig({ AI_PROVIDER: "chatgpt_desktop" });
+    if (config.mode !== "chatgpt_desktop") throw new Error("unexpected mode");
 
-    expect(() =>
-      createLiveAIProviderBundle(config, {
-        responses: () => providerDouble("responses"),
-      }),
-    ).toThrowError(AIProviderConfigurationError);
+    expect(() => createLiveAIProviderBundle(config, {})).toThrowError(
+      AIProviderConfigurationError,
+    );
+  });
+
+  it("builds a real desktop provider in production wiring", () => {
+    const bundle = createProductionAIProviderBundle({
+      AI_PROVIDER: "chatgpt_desktop",
+    });
+
+    if (bundle.mode === "mock") throw new Error("unexpected mock bundle");
+    expect(bundle.research.provider).toBe(bundle.nonWeb.provider);
+    expect(bundle.research.model).toBe("chatgpt-desktop:GPT-5.6 Sol");
   });
 });

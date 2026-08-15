@@ -14,15 +14,27 @@ import {
   ProcessExecutionError,
   type ProcessRunner,
 } from "@/lib/codex/process-runner";
+import {
+  normalizeCitations,
+  portableJsonSchema,
+  webEnvelopeSchema,
+} from "@/lib/ai/web-envelope";
 import type {
   StructuredResponseSource,
   StructuredAIProvider,
   StructuredResponseRequest,
   StructuredResponseResult,
-} from "@/lib/openai/providers/types";
+} from "@/lib/ai/providers/types";
 
 export type CodexProviderFailureCode =
   "timeout" | "output_limit" | "spawn" | "exit";
+
+/**
+ * Kept in step with the CLI's own enum. Codex is retained but unplugged from
+ * the provider factory, so this type no longer travels through shared config.
+ */
+export type ReasoningEffort =
+  "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export class CodexProviderError extends Error {
   override readonly name = "CodexProviderError";
@@ -41,6 +53,8 @@ export class CodexOutputValidationError extends Error {
 
 type CodexProviderConfig = {
   executable: string;
+  researchReasoningEffort: ReasoningEffort;
+  fastReasoningEffort: ReasoningEffort;
   timeoutMs: number;
   maxConcurrency: number;
 };
@@ -99,49 +113,6 @@ const CODEX_CONFIG_OVERRIDES = [
   "project_doc_max_bytes=0",
 ] as const;
 
-const codexCitationSchema = z
-  .object({
-    url: z.url().refine((value) => {
-      const protocol = new URL(value).protocol;
-      return protocol === "http:" || protocol === "https:";
-    }, "URL must use HTTP or HTTPS"),
-    title: z.string().nullable(),
-  })
-  .strict();
-
-function webEnvelopeSchema<T>(outputSchema: z.ZodType<T>) {
-  return z
-    .object({
-      output: outputSchema,
-      sources: z.array(codexCitationSchema),
-    })
-    .strict();
-}
-
-const JSON_SCHEMA_REGEX_LOOKAROUND = /\(\?(?:[=!]|<[=!])/;
-
-function codexCompatibleJsonSchema(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(codexCompatibleJsonSchema);
-  }
-  if (typeof value !== "object" || value === null) return value;
-
-  const normalized = Object.fromEntries(
-    Object.entries(value).map(([key, nested]) => [
-      key,
-      codexCompatibleJsonSchema(nested),
-    ]),
-  );
-  if (normalized.format === "uri") delete normalized.format;
-  if (
-    typeof normalized.pattern === "string" &&
-    JSON_SCHEMA_REGEX_LOOKAROUND.test(normalized.pattern)
-  ) {
-    delete normalized.pattern;
-  }
-  return normalized;
-}
-
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
@@ -156,17 +127,24 @@ function rawModel(auditModel: string): string {
 
 function invocationArguments(
   model: string,
+  reasoningEffort: ReasoningEffort,
   schemaPath: string,
   workingDirectory: string,
   useWebSearch: boolean,
 ): string[] {
-  const configOverrides = useWebSearch
-    ? CODEX_CONFIG_OVERRIDES.filter(
-        (override) =>
-          override !== "tools.web_search=false" &&
-          override !== "features.code_mode_host=false",
-      )
-    : CODEX_CONFIG_OVERRIDES;
+  const configOverrides = [
+    // `--ignore-user-config` discards the operator's own effort setting, so the
+    // effort every call runs at must be stated here or the CLI silently falls
+    // back to the model default (`none` for gpt-5.6-sol: no reasoning at all).
+    `model_reasoning_effort=${reasoningEffort}`,
+    ...(useWebSearch
+      ? CODEX_CONFIG_OVERRIDES.filter(
+          (override) =>
+            override !== "tools.web_search=false" &&
+            override !== "features.code_mode_host=false",
+        )
+      : CODEX_CONFIG_OVERRIDES),
+  ];
   return [
     ...(useWebSearch ? ["--search"] : []),
     "exec",
@@ -316,24 +294,6 @@ function parseJsonl(stdout: string, requireWebSearch: boolean): ParsedJsonl {
   return { threadId, message, usage, completedWebSearchIds };
 }
 
-function normalizeCitations(
-  citations: Array<z.infer<typeof codexCitationSchema>>,
-): StructuredResponseSource[] {
-  const byUrl = new Map<string, StructuredResponseSource>();
-  for (const citation of citations) {
-    const parsed = new URL(citation.url);
-    parsed.hash = "";
-    const url = parsed.toString();
-    if (byUrl.has(url)) continue;
-    byUrl.set(url, {
-      url,
-      ...(citation.title === null ? {} : { title: citation.title }),
-      provenance: "model_declared_after_search",
-    });
-  }
-  return [...byUrl.values()];
-}
-
 function parseStructuredOutput<T>(
   request: StructuredResponseRequest<T>,
   rawOutput: unknown,
@@ -406,7 +366,7 @@ export class CodexCliStructuredAIProvider implements StructuredAIProvider {
         : request.outputSchema;
       await filesystem.writeFile(
         schemaPath,
-        JSON.stringify(codexCompatibleJsonSchema(z.toJSONSchema(wireSchema))),
+        JSON.stringify(portableJsonSchema(z.toJSONSchema(wireSchema))),
       );
       let result;
       try {
@@ -418,6 +378,9 @@ export class CodexCliStructuredAIProvider implements StructuredAIProvider {
           executable: this.config.executable,
           args: invocationArguments(
             request.model,
+            request.useWebSearch
+              ? this.config.researchReasoningEffort
+              : this.config.fastReasoningEffort,
             schemaPath,
             temporaryDirectory,
             request.useWebSearch,

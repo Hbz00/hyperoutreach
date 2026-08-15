@@ -263,7 +263,7 @@ console.log(JSON.stringify({ config, token: process.env.OPERATOR_API_TOKEN, port
     ).toThrowError(/absolute HTTP\(S\) URL/);
   });
 
-  it("uses the shared timing contract and Codex-aware request timeout", () => {
+  it("uses the shared timing contract and a research-aware request timeout", () => {
     expect(
       resolveLocalMaintenanceConfig({
         WORKFLOW_PROVIDER: "local",
@@ -280,7 +280,7 @@ console.log(JSON.stringify({ config, token: process.env.OPERATOR_API_TOKEN, port
       resolveLocalMaintenanceConfig({
         WORKFLOW_PROVIDER: "local",
         OPERATOR_API_TOKEN: TOKEN,
-        CODEX_TIMEOUT_MS: "900000",
+        AI_RESEARCH_TIMEOUT_MS: "900000",
       }).requestTimeoutMs,
     ).toBe(960_000);
   });

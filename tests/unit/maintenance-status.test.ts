@@ -14,7 +14,7 @@ import {
 
 const NOW = new Date("2026-08-14T10:00:00.000Z");
 const INTERVAL_MS = 60_000;
-const CODEX_TIMEOUT_MS = 240_000;
+const RESEARCH_TIMEOUT_MS = 240_000;
 const STALE_LEASE_MS = 120_000;
 
 const emptyProjection = (): MaintenanceStatusProjection => ({
@@ -32,18 +32,18 @@ function resolve(projection: Partial<MaintenanceStatusProjection>) {
     {
       now: NOW,
       intervalMs: INTERVAL_MS,
-      codeTimeoutMs: CODEX_TIMEOUT_MS,
+      codeTimeoutMs: RESEARCH_TIMEOUT_MS,
       staleLeaseMs: STALE_LEASE_MS,
     },
   );
 }
 
 describe("maintenance status", () => {
-  it("uses a five-minute overdue window for a 240-second Codex timeout", () => {
+  it("uses a five-minute overdue window for a 240-second research timeout", () => {
     expect(
       getMaintenanceOverdueWindowMs({
         intervalMs: INTERVAL_MS,
-        codeTimeoutMs: CODEX_TIMEOUT_MS,
+        codeTimeoutMs: RESEARCH_TIMEOUT_MS,
       }),
     ).toBe(300_000);
   });
@@ -147,32 +147,32 @@ describe("maintenance status presentation", () => {
   it("resolves workflow ownership independently from invalid AI configuration", () => {
     expect(
       resolveMaintenanceAutomationPresentation({
-        OPENAI_PROVIDER: "invalid-ai-provider",
+        AI_PROVIDER: "invalid-ai-provider",
         WORKFLOW_PROVIDER: "trigger",
       }),
     ).toEqual({ provider: "Trigger.dev", mode: "Scheduled aggregate cycle" });
     expect(
       resolveMaintenanceAutomationPresentation({
-        OPENAI_PROVIDER: "mock",
+        AI_PROVIDER: "mock",
         WORKFLOW_PROVIDER: "invalid-workflow-provider",
       }),
     ).toEqual({ provider: "Misconfigured", mode: "Unavailable" });
   });
 
-  it("uses the bounded provider parser and safely falls back to 240 seconds", () => {
-    expect(getMaintenanceCodeTimeoutMs({ CODEX_TIMEOUT_MS: "360000" })).toBe(
-      360_000,
-    );
-    expect(getMaintenanceCodeTimeoutMs({ CODEX_TIMEOUT_MS: "invalid" })).toBe(
-      240_000,
-    );
-    expect(getMaintenanceCodeTimeoutMs({ CODEX_TIMEOUT_MS: "999999" })).toBe(
-      240_000,
-    );
+  it("uses the bounded provider parser and safely falls back to 600 seconds", () => {
+    expect(
+      getMaintenanceCodeTimeoutMs({ AI_RESEARCH_TIMEOUT_MS: "360000" }),
+    ).toBe(360_000);
+    expect(
+      getMaintenanceCodeTimeoutMs({ AI_RESEARCH_TIMEOUT_MS: "invalid" }),
+    ).toBe(600_000);
+    expect(
+      getMaintenanceCodeTimeoutMs({ AI_RESEARCH_TIMEOUT_MS: "999999" }),
+    ).toBe(600_000);
     expect(
       getMaintenanceCodeTimeoutMs({
-        CODEX_TIMEOUT_MS: "360000",
-        CODEX_MAX_CONCURRENCY: "invalid unrelated value",
+        AI_RESEARCH_TIMEOUT_MS: "360000",
+        AI_FAST_TIMEOUT_MS: "invalid unrelated value",
       }),
     ).toBe(360_000);
   });

@@ -18,3 +18,4 @@ next-env.d.ts
 .claude/worktrees/
 
 # Local PostgreSQL data is stored in a named Docker volume.
+.gstack/

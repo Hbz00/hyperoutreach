@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  OpenAIAccountDiscoveryAgent,
-  OpenAIAccountResearchAgent,
-  OpenAIContactDiscoveryAgent,
-  OpenAIPersonalizationAgent,
-  OpenAIReplyClassifier,
+  StructuredAccountDiscoveryAgent,
+  StructuredAccountResearchAgent,
+  StructuredContactDiscoveryAgent,
+  StructuredPersonalizationAgent,
+  StructuredReplyClassifier,
   type StructuredAIProvider,
-} from "@/modules/agents/openai-agents";
+} from "@/modules/agents/structured-agents";
 import { MockAccountDiscoveryAgent } from "@/modules/agents/mock-agents";
 
 function providerReturning(
@@ -92,7 +92,10 @@ describe("narrow OpenAI agent contracts", () => {
         },
       ],
     });
-    const agent = new OpenAIAccountDiscoveryAgent(provider, "research-model");
+    const agent = new StructuredAccountDiscoveryAgent(
+      provider,
+      "research-model",
+    );
 
     const result = await agent.discover({
       icp: "French B2B software companies selling to finance teams",
@@ -134,7 +137,7 @@ describe("narrow OpenAI agent contracts", () => {
       ],
     });
     await expect(
-      new OpenAIAccountDiscoveryAgent(
+      new StructuredAccountDiscoveryAgent(
         unsupportedDomain.provider,
         "research-model",
       ).discover({ icp: "A precise ICP that is long enough", limit: 5 }),
@@ -179,7 +182,7 @@ describe("narrow OpenAI agent contracts", () => {
       researchedAt,
     });
 
-    const result = await new OpenAIAccountResearchAgent(
+    const result = await new StructuredAccountResearchAgent(
       provider,
       "research-model",
     ).research({
@@ -215,7 +218,7 @@ describe("narrow OpenAI agent contracts", () => {
       ],
     });
 
-    const result = await new OpenAIContactDiscoveryAgent(
+    const result = await new StructuredContactDiscoveryAgent(
       provider,
       "research-model",
     ).discover({
@@ -251,7 +254,7 @@ describe("narrow OpenAI agent contracts", () => {
       ],
     });
     await expect(
-      new OpenAIContactDiscoveryAgent(
+      new StructuredContactDiscoveryAgent(
         invalid.provider,
         "research-model",
       ).discover({
@@ -288,7 +291,7 @@ describe("narrow OpenAI agent contracts", () => {
       },
       [],
     );
-    const agent = new OpenAIPersonalizationAgent(provider, "fast-model");
+    const agent = new StructuredPersonalizationAgent(provider, "fast-model");
     const result = await agent.personalize({
       declaredFields: ["company_relevance"],
       trustedSourceUrls: ["https://acme.example/news"],
@@ -313,7 +316,7 @@ describe("narrow OpenAI agent contracts", () => {
       sources: [],
     });
     await expect(
-      new OpenAIPersonalizationAgent(
+      new StructuredPersonalizationAgent(
         unsupported.provider,
         "fast-model",
       ).personalize({
@@ -347,7 +350,7 @@ describe("narrow OpenAI agent contracts", () => {
       ],
     });
     await expect(
-      new OpenAIPersonalizationAgent(
+      new StructuredPersonalizationAgent(
         undeclared.provider,
         "fast-model",
       ).personalize({
@@ -369,7 +372,7 @@ describe("narrow OpenAI agent contracts", () => {
       confidence: 0.94,
       reason: "The recipient asks to schedule a call.",
     });
-    const classifier = new OpenAIReplyClassifier(provider, "fast-model");
+    const classifier = new StructuredReplyClassifier(provider, "fast-model");
     await expect(
       classifier.classify({
         sender: "alice@acme.example",
@@ -398,7 +401,7 @@ describe("narrow OpenAI agent contracts", () => {
       reason: "invalid",
     });
     await expect(
-      new OpenAIReplyClassifier(invalid.provider, "fast-model").classify({
+      new StructuredReplyClassifier(invalid.provider, "fast-model").classify({
         sender: "alice@acme.example",
         subject: "Re: intro",
         body: "Maybe.",

@@ -3,7 +3,7 @@ import nextEnvironment from "@next/env";
 import maintenanceTiming from "../config/maintenance.json" with { type: "json" };
 
 const DEFAULT_PORT = 3000;
-const DEFAULT_CODEX_TIMEOUT_MS = 240_000;
+const DEFAULT_AI_RESEARCH_TIMEOUT_MS = 600_000;
 const MINIMUM_TOKEN_LENGTH = 32;
 const HEALTH_RETRY_INTERVAL_MS = 1_000;
 const HEALTH_WAIT_TIMEOUT_MS = 120_000;
@@ -24,13 +24,13 @@ function parsePort(rawPort) {
   return port;
 }
 
-function parseCodexTimeout(rawTimeout) {
+function parseResearchTimeout(rawTimeout) {
   const value = rawTimeout?.trim();
-  if (!value) return DEFAULT_CODEX_TIMEOUT_MS;
+  if (!value) return DEFAULT_AI_RESEARCH_TIMEOUT_MS;
   const timeout = Number(value);
   if (!Number.isSafeInteger(timeout) || timeout < 1) {
     throw new LocalMaintenanceConfigurationError(
-      "CODEX_TIMEOUT_MS must be a positive integer",
+      "AI_RESEARCH_TIMEOUT_MS must be a positive integer",
     );
   }
   return timeout;
@@ -95,7 +95,7 @@ export function resolveLocalMaintenanceConfig(environment = process.env) {
     staleLeaseMs: maintenanceTiming.staleLeaseMs,
     requestTimeoutMs: Math.max(
       maintenanceTiming.aggregateBudgetMs,
-      parseCodexTimeout(environment.CODEX_TIMEOUT_MS) +
+      parseResearchTimeout(environment.AI_RESEARCH_TIMEOUT_MS) +
         maintenanceTiming.transportMarginMs,
     ),
     shutdownGraceMs: maintenanceTiming.workerShutdownGraceMs,

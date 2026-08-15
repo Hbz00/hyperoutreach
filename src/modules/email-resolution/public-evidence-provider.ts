@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { ObservableAgent } from "@/modules/agents/contracts";
-import type { StructuredAIProvider } from "@/modules/agents/openai-agents";
+import type { StructuredAIProvider } from "@/modules/agents/structured-agents";
 import { normalizeProvenanceUrl } from "@/modules/agents/provenance";
 import type { AgentResult } from "@/modules/agents/types";
 
@@ -87,8 +87,8 @@ export class StaticPublicEmailEvidenceProvider implements PublicEmailEvidencePro
   }
 }
 
-export class OpenAIPublicEmailEvidenceProvider implements ObservablePublicEmailEvidenceProvider {
-  readonly name = "openai-public-email-evidence";
+export class StructuredPublicEmailEvidenceProvider implements ObservablePublicEmailEvidenceProvider {
+  readonly name = "structured-public-email-evidence";
   readonly auditDescriptor: ObservableAgent;
 
   constructor(

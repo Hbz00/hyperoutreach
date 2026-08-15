@@ -1,5 +1,5 @@
-import { createProductionAIProviderBundle } from "@/lib/openai/production-provider-bundle";
-import type { AIProviderBundle } from "@/lib/openai/provider-bundle";
+import { createProductionAIProviderBundle } from "@/lib/ai/production-provider-bundle";
+import type { AIProviderBundle } from "@/lib/ai/provider-bundle";
 import type {
   AccountDiscoveryAgent,
   AccountResearchAgent,
@@ -12,11 +12,11 @@ import {
   MockContactDiscoveryAgent,
 } from "@/modules/agents/mock-agents";
 import {
-  OpenAIAccountDiscoveryAgent,
-  OpenAIAccountResearchAgent,
-  OpenAIContactDiscoveryAgent,
-  OpenAIPersonalizationAgent,
-} from "@/modules/agents/openai-agents";
+  StructuredAccountDiscoveryAgent,
+  StructuredAccountResearchAgent,
+  StructuredContactDiscoveryAgent,
+  StructuredPersonalizationAgent,
+} from "@/modules/agents/structured-agents";
 import type {
   PersonalizationInput,
   PersonalizationOutput,
@@ -73,19 +73,19 @@ export type AgentSet = {
 export function createAgentSetFromBundle(bundle: AIProviderBundle): AgentSet {
   if (bundle.usesRealInfrastructure) {
     return {
-      accountDiscovery: new OpenAIAccountDiscoveryAgent(
+      accountDiscovery: new StructuredAccountDiscoveryAgent(
         bundle.research.provider,
         bundle.research.model,
       ),
-      accountResearch: new OpenAIAccountResearchAgent(
+      accountResearch: new StructuredAccountResearchAgent(
         bundle.research.provider,
         bundle.research.model,
       ),
-      contactDiscovery: new OpenAIContactDiscoveryAgent(
+      contactDiscovery: new StructuredContactDiscoveryAgent(
         bundle.research.provider,
         bundle.research.model,
       ),
-      personalization: new OpenAIPersonalizationAgent(
+      personalization: new StructuredPersonalizationAgent(
         bundle.nonWeb.provider,
         bundle.nonWeb.model,
       ),

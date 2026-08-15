@@ -1,5 +1,12 @@
 # Architecture d’un outil agentique de prospection et customer discovery
 
+> Note du 2026-08-15, sur la seule surface IA : ce document décrit l’API Responses
+> d’OpenAI comme transport des agents. Ce n’est plus le cas. Toutes les tâches IA
+> passent désormais par l’app ChatGPT desktop de l’opérateur ; l’adaptateur API a
+> été supprimé et l’adaptateur Codex débranché. Les contrats d’agents, les schémas,
+> les preuves et le reste de l’architecture décrits ici restent valables ; `README.md`
+> fait foi pour le chemin IA courant.
+
 ## 1. Conclusion d’architecture
 
 L’architecture que je recommande est un monolithe modulaire TypeScript composé de :

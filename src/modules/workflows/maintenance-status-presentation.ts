@@ -1,11 +1,11 @@
-import { resolveAIProviderConfig } from "@/lib/openai/provider-config";
+import { resolveAIProviderConfig } from "@/lib/ai/provider-config";
 import {
   resolveWorkflowProvider,
   type WorkflowProvider,
 } from "@/modules/workflows/provider-config";
 import type { MaintenanceStatus } from "@/modules/workflows/maintenance-status";
 
-const DEFAULT_CODEX_TIMEOUT_MS = 240_000;
+const DEFAULT_AI_RESEARCH_TIMEOUT_MS = 600_000;
 
 export type MaintenanceAutomationPresentation = {
   provider: string;
@@ -94,14 +94,14 @@ export function getMaintenanceCodeTimeoutMs(
 ): number {
   try {
     const config = resolveAIProviderConfig({
-      OPENAI_PROVIDER: "codex",
+      AI_PROVIDER: "chatgpt_desktop",
       WORKFLOW_PROVIDER: "local",
-      CODEX_TIMEOUT_MS: environment.CODEX_TIMEOUT_MS,
+      AI_RESEARCH_TIMEOUT_MS: environment.AI_RESEARCH_TIMEOUT_MS,
     });
-    return config.mode === "codex"
-      ? config.codex.timeoutMs
-      : DEFAULT_CODEX_TIMEOUT_MS;
+    return config.mode === "chatgpt_desktop"
+      ? config.chatGptDesktop.research.timeoutMs
+      : DEFAULT_AI_RESEARCH_TIMEOUT_MS;
   } catch {
-    return DEFAULT_CODEX_TIMEOUT_MS;
+    return DEFAULT_AI_RESEARCH_TIMEOUT_MS;
   }
 }

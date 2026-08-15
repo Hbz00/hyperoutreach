@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { StructuredAIProvider } from "@/lib/openai/providers/types";
+import type { StructuredAIProvider } from "@/lib/ai/providers/types";
 
 vi.mock("server-only", () => ({}));
 
 const { createAgentSetFromBundle } = await import("@/modules/agents/factory");
-const { OpenAIPersonalizationAgent } =
-  await import("@/modules/agents/openai-agents");
+const { StructuredPersonalizationAgent } =
+  await import("@/modules/agents/structured-agents");
 
 function providerReturning(output: unknown) {
   const run = vi.fn().mockResolvedValue({
@@ -56,27 +56,29 @@ describe("agent provider routing", () => {
       costUsd: null,
       costAvailability: "unavailable" as const,
     }));
-    const codex = {
+    const desktop = {
       provider: { run } as unknown as StructuredAIProvider,
       run,
     };
     const agents = createAgentSetFromBundle({
-      mode: "codex",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
-        provider: codex.provider,
-        model: "codex-cli:codex-research",
+        provider: desktop.provider,
+        model: "chatgpt-desktop:GPT-5.6 Sol",
         operationTimeoutMs: 120_000,
       },
       nonWeb: {
-        provider: codex.provider,
-        model: "codex-cli:codex-model",
+        provider: desktop.provider,
+        model: "chatgpt-desktop:GPT-5.6 Sol",
       },
     });
 
-    expect(agents.accountDiscovery.model).toBe("codex-cli:codex-research");
-    expect(agents.personalization).toBeInstanceOf(OpenAIPersonalizationAgent);
-    expect(agents.personalization.model).toBe("codex-cli:codex-model");
+    expect(agents.accountDiscovery.model).toBe("chatgpt-desktop:GPT-5.6 Sol");
+    expect(agents.personalization).toBeInstanceOf(
+      StructuredPersonalizationAgent,
+    );
+    expect(agents.personalization.model).toBe("chatgpt-desktop:GPT-5.6 Sol");
 
     await agents.accountDiscovery.discover({
       icp: "European B2B software companies with a growing sales team",
@@ -85,10 +87,10 @@ describe("agent provider routing", () => {
       industries: [],
       requiredSignals: [],
     });
-    expect(codex.run).toHaveBeenCalledWith(
+    expect(desktop.run).toHaveBeenCalledWith(
       expect.objectContaining({
         useWebSearch: true,
-        model: "codex-cli:codex-research",
+        model: "chatgpt-desktop:GPT-5.6 Sol",
       }),
     );
 
@@ -102,32 +104,35 @@ describe("agent provider routing", () => {
         research: {},
       },
     });
-    expect(codex.run).toHaveBeenCalledWith(
+    expect(desktop.run).toHaveBeenCalledWith(
       expect.objectContaining({
         useWebSearch: false,
-        model: "codex-cli:codex-model",
+        model: "chatgpt-desktop:GPT-5.6 Sol",
       }),
     );
-    expect(codex.run).toHaveBeenCalledTimes(2);
+    expect(desktop.run).toHaveBeenCalledTimes(2);
   });
 
-  it("uses the two configured lanes in OpenAI mode", () => {
-    const responses = providerReturning({});
+  it("routes each agent to the lane its work belongs to", () => {
+    const surface = providerReturning({});
     const agents = createAgentSetFromBundle({
-      mode: "openai",
+      mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
-        provider: responses.provider,
-        model: "research-model",
-        operationTimeoutMs: 30_000,
+        provider: surface.provider,
+        model: "chatgpt-desktop:research-lane",
+        operationTimeoutMs: 600_000,
       },
-      nonWeb: { provider: responses.provider, model: "fast-model" },
+      nonWeb: {
+        provider: surface.provider,
+        model: "chatgpt-desktop:fast-lane",
+      },
     });
 
-    expect(agents.accountDiscovery.model).toBe("research-model");
-    expect(agents.accountResearch.model).toBe("research-model");
-    expect(agents.contactDiscovery.model).toBe("research-model");
-    expect(agents.personalization.model).toBe("fast-model");
+    expect(agents.accountDiscovery.model).toBe("chatgpt-desktop:research-lane");
+    expect(agents.accountResearch.model).toBe("chatgpt-desktop:research-lane");
+    expect(agents.contactDiscovery.model).toBe("chatgpt-desktop:research-lane");
+    expect(agents.personalization.model).toBe("chatgpt-desktop:fast-lane");
   });
 
   it("keeps deterministic agents in mock mode", () => {

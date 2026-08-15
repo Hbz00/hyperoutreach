@@ -1,6 +1,6 @@
-import { createProductionAIProviderBundle } from "@/lib/openai/production-provider-bundle";
-import type { AIProviderBundle } from "@/lib/openai/provider-bundle";
-import { OpenAIReplyClassifier } from "@/modules/agents/openai-agents";
+import { createProductionAIProviderBundle } from "@/lib/ai/production-provider-bundle";
+import type { AIProviderBundle } from "@/lib/ai/provider-bundle";
+import { StructuredReplyClassifier } from "@/modules/agents/structured-agents";
 import {
   DeterministicReplyClassifier,
   type ReplyClassifier,
@@ -10,10 +10,10 @@ export function createReplyClassifierFromBundle(
   bundle: AIProviderBundle,
 ): ReplyClassifier {
   if (bundle.usesRealInfrastructure) {
-    return new OpenAIReplyClassifier(
+    return new StructuredReplyClassifier(
       bundle.nonWeb.provider,
       bundle.nonWeb.model,
-      bundle.mode === "codex" ? "codex-cli-reply-v1" : undefined,
+      "chatgpt-desktop-reply-v1",
     );
   }
   return new DeterministicReplyClassifier();

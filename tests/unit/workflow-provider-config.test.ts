@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { AIProviderConfigurationError } from "@/lib/openai/provider-config";
+import { AIProviderConfigurationError } from "@/lib/ai/provider-config";
 import {
   WorkflowProviderConfigurationError,
   resolveWorkflowProvider,
@@ -39,7 +39,10 @@ describe("workflow provider configuration", () => {
       await import("@/modules/workflows/dispatcher-factory");
 
     expect(() =>
-      createWorkflowDispatcher({ WORKFLOW_PROVIDER: " trigger " }),
+      createWorkflowDispatcher({
+        AI_PROVIDER: "mock",
+        WORKFLOW_PROVIDER: " trigger ",
+      }),
     ).toThrowError(/TRIGGER_SECRET_KEY is required/);
   });
 
@@ -51,7 +54,7 @@ describe("workflow provider configuration", () => {
       createWorkflowDispatcher({
         WORKFLOW_PROVIDER: "trigger",
         TRIGGER_SECRET_KEY: "trigger-secret",
-        OPENAI_PROVIDER: "codex",
+        AI_PROVIDER: "chatgpt_desktop",
       }),
     ).toThrowError(AIProviderConfigurationError);
   });

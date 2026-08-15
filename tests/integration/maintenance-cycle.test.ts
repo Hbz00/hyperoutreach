@@ -250,7 +250,7 @@ describe("aggregate maintenance dispatch", () => {
     if (!mailbox) throw new Error("Graph mailbox fixture missing");
     try {
       const services = createWorkflowTaskServices(db, {
-        OPENAI_PROVIDER: "mock",
+        AI_PROVIDER: "mock",
       });
       services["reconcile-due-follow-ups"] = vi.fn(async () => {
         order.push("followups");
@@ -308,7 +308,7 @@ describe("aggregate maintenance dispatch", () => {
       .returning({ id: schema.mailboxConnections.id });
     try {
       const services = createWorkflowTaskServices(db, {
-        OPENAI_PROVIDER: "mock",
+        AI_PROVIDER: "mock",
       });
       services["reconcile-due-follow-ups"] = vi.fn(async () => {
         order.push("followups");
@@ -402,7 +402,7 @@ describe("aggregate maintenance dispatch", () => {
     slowMailboxId = sortedIds[0] ?? "";
     try {
       const services = createWorkflowTaskServices(db, {
-        OPENAI_PROVIDER: "mock",
+        AI_PROVIDER: "mock",
       });
       services["reconcile-due-follow-ups"] = vi.fn(async () => {
         order.push("followups");
@@ -475,7 +475,7 @@ describe("aggregate maintenance dispatch", () => {
       .returning({ id: schema.mailboxConnections.id });
     try {
       const services = createWorkflowTaskServices(db, {
-        OPENAI_PROVIDER: "mock",
+        AI_PROVIDER: "mock",
       });
 
       const outcome = (await services["reconcile-inbound-mailboxes"]({

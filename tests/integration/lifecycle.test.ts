@@ -7,9 +7,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as schema from "@/lib/db/schema";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
 import {
-  OpenAIReplyClassifier,
+  StructuredReplyClassifier,
   type StructuredAIProvider,
-} from "@/modules/agents/openai-agents";
+} from "@/modules/agents/structured-agents";
 import { createOrGetAccount } from "@/modules/accounts/service";
 import {
   createDraftCampaign,
@@ -579,7 +579,7 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
 
   it("audits the real observed classifier through inbound ingestion and links the reply", async () => {
     const f = await fixture();
-    const aiClassifier = new OpenAIReplyClassifier(
+    const aiClassifier = new StructuredReplyClassifier(
       {
         run: async () => ({
           responseId: "resp_inbound_success",
@@ -640,7 +640,7 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
   it("reuses an audited unmatched classification across repeated scans and a later rematch", async () => {
     const f = await fixture({ send: false });
     let classifierCalls = 0;
-    const aiClassifier = new OpenAIReplyClassifier(
+    const aiClassifier = new StructuredReplyClassifier(
       {
         run: async () => {
           classifierCalls += 1;
@@ -782,7 +782,7 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
 
   it("finalizes a sanitized failed agent run when inbound AI classification fails", async () => {
     const f = await fixture();
-    const aiClassifier = new OpenAIReplyClassifier(
+    const aiClassifier = new StructuredReplyClassifier(
       {
         run: async () => {
           throw new Error("sk-secret-classifier-failure");
