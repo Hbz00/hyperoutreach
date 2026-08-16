@@ -22,6 +22,7 @@
  * from another process, and a turn's deadline counts the time it spends
  * queued — run both at once and one of them dies without ever being sent.
  */
+import { config } from "dotenv";
 import { eq } from "drizzle-orm";
 
 import { getDatabase } from "@/lib/db/client-core";
@@ -31,6 +32,13 @@ import { createAgentSetFromBundle } from "@/modules/agents/factory";
 import { AgentProvenanceError } from "@/modules/agents/provenance";
 import { validatePersonalizationPostconditions } from "@/modules/agents/provenance";
 import type { PersonalizationInput } from "@/modules/agents/schemas";
+
+// Same bootstrap as `migrate.ts` and `seed.ts`. Without it this script reads a
+// bare `process.env`: `AI_PROVIDER` is unset, the bundle reports itself as the
+// mock, and the probe exits before its first turn — which is what it did every
+// time until somebody ran the command the plan hands the operator.
+config({ path: ".env.local" });
+config({ path: ".env" });
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);

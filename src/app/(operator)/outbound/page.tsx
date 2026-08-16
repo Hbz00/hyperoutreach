@@ -93,7 +93,15 @@ export default async function OutboundPage({
             <dt>Runs every</dt>
             <dd>{maintenanceConfig.intervalMs / 1000} seconds</dd>
           </div>
-          {maintenance.lastError ? (
+          {/* Only while it is still the latest word. The cycle records
+              `lastError` on failure and never clears it on success, so
+              rendering on truthiness alone left a months-old failure sitting
+              under a healthy badge, reading as a live problem. */}
+          {maintenance.lastError &&
+          maintenance.lastFailedAt &&
+          (!maintenance.lastSucceededAt ||
+            maintenance.lastFailedAt.getTime() >
+              maintenance.lastSucceededAt.getTime()) ? (
             <div>
               <dt>Last failure</dt>
               <dd>{maintenance.lastError}</dd>

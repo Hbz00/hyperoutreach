@@ -108,6 +108,11 @@ async function approveAndSend(card: Locator) {
   await expect(card.getByText("Current", { exact: true })).toBeVisible();
   await card.getByRole("button", { name: "Approve", exact: true }).click();
   await expect(card.getByText("approved", { exact: true })).toBeVisible();
+  // The card says what the send would do, before the click. This is the half
+  // of "say what happened" that happens *first*: with the shipped per-mailbox
+  // delay, approving five and sending five had four of them refused in
+  // silence, and the operator had no way to see it coming.
+  await expect(card.getByText("Would go out now")).toBeVisible();
   await card.getByRole("button", { name: "Send approved message" }).click();
 }
 
@@ -374,6 +379,13 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     );
     await expect(
       probeCard.getByText("approved", { exact: true }),
+    ).toBeVisible();
+    // And the other half of the verdict: the card now reads as held, naming
+    // the same cause the notice gave, before any further click. Deliberately
+    // anchored on the verdict line — the card also carries the last attempt's
+    // error, which says the same thing about the past rather than the present.
+    await expect(
+      probeCard.getByText(/^Held — .*\(RECIPIENT_SUPPRESSED\)$/),
     ).toBeVisible();
 
     await page.getByRole("link", { name: "Settings", exact: true }).click();

@@ -364,4 +364,70 @@ describe("the agent writes part of the message", () => {
       code: "AWAITING_RESEARCH",
     });
   });
+
+  // The manual "Generate step N" control carries a fresh request token per
+  // render, so every click queues a new command. Clicking it on a step that
+  // already has a message used to spend a turn on the operator's window before
+  // the generator, from inside its write transaction, answered "existing".
+  it("does not ask the agent again for a message it already wrote", async () => {
+    const seeded = await fixture({
+      declared: { fields: ["personalized_opening"], minConfidence: 0.5 },
+    });
+    const first = await generate(seeded.enrollment.id);
+    expect(first).toMatchObject({ ok: true, disposition: "created" });
+
+    let calls = 0;
+    const countingAgent: PersonalizationAgent = {
+      ...deterministicAgent,
+      async personalize(input) {
+        calls += 1;
+        return deterministicAgent.personalize(input);
+      },
+    };
+    const second = await generate(seeded.enrollment.id, countingAgent);
+
+    expect(second).toMatchObject({ ok: true, disposition: "existing" });
+    expect(calls).toBe(0);
+    expect(
+      await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.enrollmentId, seeded.enrollment.id)),
+    ).toHaveLength(1);
+  });
+
+  // The other waiting state, and the expensive one. The queue parks
+  // `REPLY_PENDING` and asks again every five minutes; the generator only
+  // reported it from inside its own write transaction, which is after the
+  // agent turn. A prospect whose reply sat in manual review therefore spent
+  // one turn on the operator's single ChatGPT window every five minutes, for
+  // as long as it sat there, to be told to wait.
+  it("waits for a held reply without spending an agent turn", async () => {
+    const seeded = await fixture({
+      declared: { fields: ["personalized_opening"], minConfidence: 0.5 },
+    });
+    await db
+      .update(schema.enrollments)
+      .set({ inboundHoldCount: 1 })
+      .where(eq(schema.enrollments.id, seeded.enrollment.id));
+    let called = false;
+    const watchfulAgent: PersonalizationAgent = {
+      ...deterministicAgent,
+      async personalize(input) {
+        called = true;
+        return deterministicAgent.personalize(input);
+      },
+    };
+
+    const result = await generate(seeded.enrollment.id, watchfulAgent);
+
+    expect(result).toMatchObject({ ok: false, code: "REPLY_PENDING" });
+    expect(called).toBe(false);
+    expect(
+      await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.enrollmentId, seeded.enrollment.id)),
+    ).toHaveLength(0);
+  });
 });

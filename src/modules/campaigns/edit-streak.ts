@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { AppDatabase } from "@/lib/db/types";
+import { AUTOMATIC_FOLLOW_UP_ACTOR } from "@/modules/workflows/follow-up-policy";
 
 export type EditFreeStreak = {
   campaignId: string;
@@ -46,6 +47,13 @@ export async function readEditFreeStreaks(
       join messages on messages.id = workflow_events.entity_id
       join enrollments on enrollments.id = messages.enrollment_id
       where workflow_events.event = 'message.approved'
+        -- Human approvals only. An automatic follow-up approves its own
+        -- message through the same path, always unedited, so a campaign with
+        -- automatic follow-ups on would otherwise grow an unbroken streak out
+        -- of approvals nobody read — and this counter is the evidence meant
+        -- to justify, one day, letting a first email go unread.
+        and coalesce(workflow_events.payload ->> 'actor', '')
+              <> ${AUTOMATIC_FOLLOW_UP_ACTOR}
     ),
     last_rewrite as (
       select version_id, max(created_at) as at

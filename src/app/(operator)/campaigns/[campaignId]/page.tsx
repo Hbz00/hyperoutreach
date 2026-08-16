@@ -223,39 +223,53 @@ export default async function CampaignDetailPage({
                     defaultValue={step.bodyTemplate}
                   />
                 </label>
-                <label className="span-all check">
-                  <input
-                    type="checkbox"
-                    name={`step${step.stepIndex}AiOpening`}
-                    defaultChecked={declaredFields(step).includes(
-                      "personalized_opening",
-                    )}
-                  />
-                  AI-written opening sentence — reference it as{" "}
-                  <code>{"{{personalized_opening}}"}</code>
-                </label>
-                <label className="span-all check">
-                  <input
-                    type="checkbox"
-                    name={`step${step.stepIndex}AiRelevance`}
-                    defaultChecked={declaredFields(step).includes(
-                      "company_relevance",
-                    )}
-                  />
-                  AI-written company relevance — reference it as{" "}
-                  <code>{"{{company_relevance}}"}</code>
-                </label>
-                <label>
-                  Minimum AI confidence
-                  <input
-                    name={`step${step.stepIndex}MinConfidence`}
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    defaultValue={minConfidence(step)}
-                  />
-                </label>
+                {/* Only the first step. Later steps are written by the
+                    automatic follow-up, which does not call the agent, so a
+                    declaration there fails to interpolate at generation —
+                    against a version nobody can edit afterwards. The schema
+                    refuses it; the form does not offer it. */}
+                {step.stepIndex === 0 ? (
+                  <>
+                    <label className="span-all check">
+                      <input
+                        type="checkbox"
+                        name={`step${step.stepIndex}AiOpening`}
+                        defaultChecked={declaredFields(step).includes(
+                          "personalized_opening",
+                        )}
+                      />
+                      AI-written opening sentence — reference it as{" "}
+                      <code>{"{{personalized_opening}}"}</code>
+                    </label>
+                    <label className="span-all check">
+                      <input
+                        type="checkbox"
+                        name={`step${step.stepIndex}AiRelevance`}
+                        defaultChecked={declaredFields(step).includes(
+                          "company_relevance",
+                        )}
+                      />
+                      AI-written company relevance — reference it as{" "}
+                      <code>{"{{company_relevance}}"}</code>
+                    </label>
+                    <label>
+                      Minimum AI confidence
+                      <input
+                        name={`step${step.stepIndex}MinConfidence`}
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        defaultValue={minConfidence(step)}
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <p className="muted span-all">
+                    Follow-up steps are written from the template alone. Only
+                    the first step can ask the agent for a sentence.
+                  </p>
+                )}
               </div>
             </fieldset>
           ))}

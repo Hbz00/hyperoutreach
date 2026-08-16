@@ -547,4 +547,127 @@ describe("populated migration upgrades", () => {
     `;
     expect(projectionCount).toBe(1);
   });
+
+  it("gives every in-flight message a send request clock, and no other message one", async () => {
+    for (const migration of [
+      "0000_sturdy_kid_colt.sql",
+      "0001_pink_luminals.sql",
+      "0002_exotic_wind_dancer.sql",
+      "0003_woozy_fenris.sql",
+      "0004_brief_firedrake.sql",
+      "0005_rainy_warbound.sql",
+      "0006_sleepy_blade.sql",
+      "0007_quiet_scrambler.sql",
+      "0008_material_gunslinger.sql",
+      "0009_parallel_venom.sql",
+      "0010_fancy_quasimodo.sql",
+      "0011_sweet_misty_knight.sql",
+      "0012_futuristic_meltdown.sql",
+      "0013_powerful_viper.sql",
+      "0014_futuristic_jean_grey.sql",
+      "0015_spooky_the_fallen.sql",
+      "0016_first_sersi.sql",
+      "0017_wonderful_nekra.sql",
+      "0018_colorful_arclight.sql",
+      "0019_nice_black_tarantula.sql",
+      "0020_brief_gideon.sql",
+      "0021_overrated_salo.sql",
+      "0022_long_exodus.sql",
+      "0023_complete_piledriver.sql",
+      "0024_smooth_impossible_man.sql",
+      "0025_friendly_maverick.sql",
+      "0026_maintenance_state.sql",
+    ]) {
+      await applyMigration(migration);
+    }
+
+    const [{ accountId }] = await client<[{ accountId: string }]>`
+      insert into accounts (name, normalized_name, domain)
+      values ('In Flight', 'in flight', 'in-flight.example')
+      returning id as "accountId"
+    `;
+    const [{ contactId }] = await client<[{ contactId: string }]>`
+      insert into contacts (
+        account_id, first_name, last_name, full_name, normalized_full_name
+      ) values (${accountId}, 'In', 'Flight', 'In Flight', 'in flight')
+      returning id as "contactId"
+    `;
+    const [{ campaignId }] = await client<[{ campaignId: string }]>`
+      insert into campaigns (name, type, target_description, status)
+      values ('In Flight', 'other', 'Backfill validation', 'active')
+      returning id as "campaignId"
+    `;
+    const [{ versionId }] = await client<[{ versionId: string }]>`
+      insert into campaign_versions (campaign_id, version, configuration, published_at)
+      values (${campaignId}, 1, '{}', now()) returning id as "versionId"
+    `;
+    const [{ enrollmentId }] = await client<[{ enrollmentId: string }]>`
+      insert into enrollments (campaign_id, campaign_version_id, contact_id)
+      values (${campaignId}, ${versionId}, ${contactId})
+      returning id as "enrollmentId"
+    `;
+
+    // The clock the backfill has to approximate is "when a send was
+    // requested", and the only two columns that can stand in for it before it
+    // existed are `drafted_at` and, failing that, `updated_at`.
+    const draftedAt = new Date("2026-08-16T09:00:00.000Z");
+    const updatedAt = new Date("2026-08-16T11:58:00.000Z");
+    let step = 0;
+    async function legacyMessage(
+      status: string,
+      stamps: { draftedAt: Date | null },
+    ): Promise<string> {
+      step += 1;
+      const [{ id }] = await client<[{ id: string }]>`
+        insert into messages (
+          enrollment_id, step_index, direction, outreach_id, subject, body,
+          recipient, status, contact_account_id, employment_version,
+          drafted_at, updated_at
+        ) values (
+          ${enrollmentId}, ${step}, 'outbound', ${`in-flight-${step}`},
+          'Hello', 'Body', 'in@in-flight.example', ${status}::message_status,
+          ${accountId}::uuid, 1,
+          ${stamps.draftedAt?.toISOString() ?? null}::timestamptz,
+          ${updatedAt.toISOString()}::timestamptz
+        ) returning id
+      `;
+      return id;
+    }
+
+    const draftedWithDraft = await legacyMessage("drafted", { draftedAt });
+    const draftedWithoutDraft = await legacyMessage("drafted", {
+      draftedAt: null,
+    });
+    const draftCreating = await legacyMessage("draft_creating", {
+      draftedAt: null,
+    });
+    const sending = await legacyMessage("sending", { draftedAt });
+    const approved = await legacyMessage("approved", { draftedAt: null });
+    const proposed = await legacyMessage("proposed", { draftedAt: null });
+    const sent = await legacyMessage("sent", { draftedAt });
+
+    await applyMigration("0027_message_send_requested_at.sql");
+
+    const rows = await client<
+      Array<{ id: string; requestedAt: string | null }>
+    >`
+      select id,
+        to_char(send_requested_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          as "requestedAt"
+      from messages
+    `;
+    const requestedAt = new Map(rows.map((row) => [row.id, row.requestedAt]));
+
+    // In flight when the column shipped: approximated, best source first.
+    expect(requestedAt.get(draftedWithDraft)).toBe(draftedAt.toISOString());
+    expect(requestedAt.get(sending)).toBe(draftedAt.toISOString());
+    // No provider draft ever existed, so the row's last movement stands in.
+    expect(requestedAt.get(draftedWithoutDraft)).toBe(updatedAt.toISOString());
+    expect(requestedAt.get(draftCreating)).toBe(updatedAt.toISOString());
+    // Not in flight: no send is being completed, so there is no request to
+    // date. An `approved` row carrying a clock would contradict the column.
+    expect(requestedAt.get(approved)).toBeNull();
+    expect(requestedAt.get(proposed)).toBeNull();
+    expect(requestedAt.get(sent)).toBeNull();
+  });
 });

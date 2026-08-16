@@ -6,7 +6,6 @@ import { operatorCommands } from "@/lib/db/schema";
 import { sanitizeMaintenanceError } from "@/modules/workflows/maintenance-error";
 import type { AppDatabase } from "@/lib/db/types";
 import {
-  AI_WORKFLOW_TASKS,
   classifyCommandOutcome,
   QUEUED_OPERATOR_COMMANDS,
   type QueuedOperatorCommand,
@@ -166,7 +165,12 @@ export async function drainOperatorCommands(
     // One AI turn per pass. The bound exists because that turn holds the
     // operator's single ChatGPT window and can last ten minutes — it is not a
     // reason to make a deterministic generation wait a minute for its turn.
-    if ((AI_WORKFLOW_TASKS as readonly string[]).includes(claimed.task)) break;
+    // Whether this command took a turn is answered by `prepareCommand`, not by
+    // the task name: `generate-message` is deterministic interpolation until a
+    // step declares an agent-written field, and reading the name alone let a
+    // burst of enrolments on a personalized campaign spend the window once per
+    // command in a single pass.
+    if (prepared.usesAi) break;
   }
   return drained;
 }

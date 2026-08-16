@@ -1,3 +1,14 @@
+/**
+ * The actor an automatic follow-up records when it approves its own message.
+ *
+ * Named rather than repeated as a literal because two places have to agree on
+ * it: the follow-up path that writes it, and the edit-free streak that must
+ * not count it. The streak exists to say whether a *human's* review has
+ * stopped changing the outcome — an approval the machine gave itself, always
+ * with `edited: false`, would answer that question with its own echo.
+ */
+export const AUTOMATIC_FOLLOW_UP_ACTOR = "automatic_follow_up_policy";
+
 export function calculateNextActionAt(
   sentAt: Date,
   delayMinutes: number,

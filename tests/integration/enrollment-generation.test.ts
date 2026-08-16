@@ -40,12 +40,31 @@ function drain(now = NOW) {
   );
 }
 
-async function prospect(options: { acceptedEmail?: boolean } = {}) {
+async function prospect(
+  options: { acceptedEmail?: boolean; personalized?: boolean } = {},
+) {
   const suffix = crypto.randomUUID().slice(0, 8);
   const [account] = await db
     .insert(schema.accounts)
-    .values({ name: `Auto ${suffix}`, normalizedName: `auto-${suffix}` })
+    .values({
+      name: `Auto ${suffix}`,
+      normalizedName: `auto-${suffix}`,
+      ...(options.personalized
+        ? {
+            researchStatus: "complete" as const,
+            researchSnapshot: { summary: "Builds measurement tooling" },
+            researchedAt: NOW,
+          }
+        : {}),
+    })
     .returning();
+  if (options.personalized) {
+    await db.insert(schema.evidenceSources).values({
+      accountId: account!.id,
+      url: `https://evidence.example/${suffix}`,
+      sourceType: "website",
+    });
+  }
   const [contact] = await db
     .insert(schema.contacts)
     .values({
@@ -87,7 +106,17 @@ async function prospect(options: { acceptedEmail?: boolean } = {}) {
     stepIndex: 0,
     delayMinutes: 0,
     subjectTemplate: "Hello {{first_name}}",
-    bodyTemplate: "A note for {{company}}",
+    bodyTemplate: options.personalized
+      ? "{{personalized_opening}} — about {{company}}"
+      : "A note for {{company}}",
+    ...(options.personalized
+      ? {
+          personalizationSchema: {
+            fields: ["personalized_opening"],
+            minConfidence: 0.5,
+          },
+        }
+      : {}),
   });
   await db
     .update(schema.campaignVersions)
@@ -252,5 +281,52 @@ describe("the first message is written without being asked twice", () => {
     expect(await commandsFor(enrollment.id)).toHaveLength(1);
     await drain();
     expect(await messagesFor(enrollment.id)).toHaveLength(1);
+  });
+
+  // The pass drains freely and stops at its first AI turn, so that ten
+  // enrolments do not take ten minutes. Which commands take a turn is a
+  // property of the data, not of the task name: `generate-message` is
+  // deterministic interpolation until a step declares a field for the agent
+  // to write. Reading the name alone let a burst of enrolments on a
+  // personalized campaign spend the operator's single ChatGPT window once per
+  // enrolment inside one pass.
+  it("stops a pass at the first generation that asks the agent for a sentence", async () => {
+    const first = await prospect({ acceptedEmail: true, personalized: true });
+    const second = await prospect({ acceptedEmail: true, personalized: true });
+    const firstEnrollment = await enroll(first);
+    const secondEnrollment = await enroll(second);
+
+    const drained = await drain();
+
+    expect(drained).toHaveLength(1);
+    const written = [
+      ...(await messagesFor(firstEnrollment.id)),
+      ...(await messagesFor(secondEnrollment.id)),
+    ];
+    expect(written).toHaveLength(1);
+
+    // The one left behind is still queued, not lost, and the next pass takes
+    // it.
+    await drain(new Date(NOW.getTime() + 60_000));
+    expect([
+      ...(await messagesFor(firstEnrollment.id)),
+      ...(await messagesFor(secondEnrollment.id)),
+    ]).toHaveLength(2);
+  });
+
+  // The other half of the same rule: a deterministic generation costs no turn,
+  // so a pass must not stop for it.
+  it("drains several deterministic generations in one pass", async () => {
+    const first = await prospect({ acceptedEmail: true });
+    const second = await prospect({ acceptedEmail: true });
+    const firstEnrollment = await enroll(first);
+    const secondEnrollment = await enroll(second);
+
+    await drain();
+
+    expect([
+      ...(await messagesFor(firstEnrollment.id)),
+      ...(await messagesFor(secondEnrollment.id)),
+    ]).toHaveLength(2);
   });
 });

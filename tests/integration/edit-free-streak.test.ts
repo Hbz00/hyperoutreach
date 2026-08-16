@@ -8,6 +8,7 @@ import * as schema from "@/lib/db/schema";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
 import { readEditFreeStreaks } from "@/modules/campaigns/edit-streak";
 import { reviewMessage } from "@/modules/messages/review-service";
+import { AUTOMATIC_FOLLOW_UP_ACTOR } from "@/modules/workflows/follow-up-policy";
 
 const { testUrl } = resolveDatabaseUrls(process.env);
 const client = postgres(testUrl, { max: 4 });
@@ -51,7 +52,7 @@ async function campaignVersion(name: string) {
 /** One approval, on its own prospect, so each review is a real transition. */
 async function approve(
   fixture: Awaited<ReturnType<typeof campaignVersion>>,
-  options: { edited: boolean },
+  options: { edited: boolean; actor?: string },
 ) {
   const suffix = crypto.randomUUID();
   const [contact] = await db
@@ -90,7 +91,7 @@ async function approve(
     .returning();
   const result = await reviewMessage(db, {
     messageId: message!.id,
-    actor: "operator",
+    actor: options.actor ?? "operator",
     action: options.edited
       ? { kind: "edit_and_approve", subject: "Rewritten", body: "Rewritten" }
       : { kind: "approve" },
@@ -153,6 +154,28 @@ describe("edit-free approval streak", () => {
     expect(
       streaks.find((row) => row.campaignName === "Just rewritten"),
     ).toMatchObject({ streak: 0, total: 2 });
+  });
+
+  // The counter answers "has a human's review stopped changing the outcome".
+  // An automatic follow-up approves its own message through the same
+  // function, always unedited, so counting it would let a campaign build an
+  // unbroken streak out of approvals nobody ever read — and this is the
+  // number meant to justify, one day, letting a first email go unread.
+  it("ignores approvals the automatic follow-up gave itself", async () => {
+    const fixture = await campaignVersion("Machine approved");
+    await approve(fixture, { edited: false });
+    for (let index = 0; index < 5; index += 1) {
+      await approve(fixture, {
+        edited: false,
+        actor: AUTOMATIC_FOLLOW_UP_ACTOR,
+      });
+    }
+
+    const streaks = await readEditFreeStreaks(db);
+
+    expect(
+      streaks.find((row) => row.campaignName === "Machine approved"),
+    ).toMatchObject({ version: 1, streak: 1, total: 1 });
   });
 
   it("keeps every campaign version on its own count", async () => {

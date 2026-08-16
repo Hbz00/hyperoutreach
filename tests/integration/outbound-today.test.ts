@@ -163,6 +163,12 @@ describe("what goes out today", () => {
 
   // A step that asks the AI for a sentence has no text to preview: the
   // sentence is written when the message is generated, not before.
+  // The declaration is written straight into the row here, deliberately.
+  // `sequenceStepsSchema` refuses an AI field on any step after the first,
+  // because follow-up generation does not call the agent — so no campaign
+  // published through the product can currently reach this state. The
+  // projection keeps the branch, and this keeps it honest, for when follow-up
+  // generation moves into the queue.
   it("does not invent a preview for a step that will be personalized", async () => {
     const fixture = await campaignFixture({ personalized: true });
 
@@ -269,6 +275,63 @@ describe("what goes out today", () => {
     );
     expect(forCampaign).toHaveLength(1);
     expect(forCampaign[0]).toMatchObject({ used: 2 });
+  });
+
+  // The count is per campaign, but the cap the policy reads is per version.
+  // Two live versions can carry different overrides, so there is no single
+  // true number — the honest one is the newest published version's, which is
+  // what every send from here on is measured against. Taking the largest
+  // announced capacity the policy had already refused to grant.
+  // The count is per campaign, but the cap the policy reads is per version.
+  // Versions are immutable, so tightening a cap means publishing a new one and
+  // leaving the old one live — and the two then disagree. There is no single
+  // true number; the honest one is the newest published version's, which every
+  // send from here on is measured against. Taking the largest announced
+  // capacity the policy had already stopped granting.
+  it("shows the newest published version's cap, not the most generous one", async () => {
+    const fixture = await campaignFixture();
+    const enrolOn = async (version: number, campaignDailyCap: number) => {
+      const [published] = await db
+        .insert(schema.campaignVersions)
+        .values({
+          campaignId: fixture.campaign.id,
+          version,
+          publishedAt: NOW,
+          configuration: { campaignDailyCap },
+        })
+        .returning();
+      const [contact] = await db
+        .insert(schema.contacts)
+        .values({
+          accountId: fixture.account.id,
+          firstName: "Katherine",
+          lastName: "Johnson",
+          fullName: "Katherine Johnson",
+          normalizedFullName: `katherine-${crypto.randomUUID()}`,
+        })
+        .returning();
+      // A version nobody is enrolled on cannot spend anything, so it is rightly
+      // invisible here. The cap becomes the operator's reality with the first
+      // prospect on it.
+      await db.insert(schema.enrollments).values({
+        campaignId: fixture.campaign.id,
+        campaignVersionId: published!.id,
+        contactId: contact!.id,
+        mailboxId: fixture.mailbox.id,
+        state: "active",
+      });
+    };
+    await enrolOn(2, 200);
+    await enrolOn(3, 20);
+
+    const budgets = await readSendBudgets(db, NOW);
+
+    expect(
+      budgets.find(
+        (budget) =>
+          budget.scope === "campaign" && budget.name === fixture.campaign.name,
+      ),
+    ).toMatchObject({ cap: 20 });
   });
 
   it("lists work the cycle has not finished with, and what stopped it", async () => {

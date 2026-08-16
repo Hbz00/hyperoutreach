@@ -106,6 +106,51 @@ describe("a step that asks the agent for a sentence", () => {
       ).success,
     ).toBe(false);
   });
+
+  // Only the first step is generated through the operator-command queue, the
+  // one path wired to the personalizing generator. Every later step is written
+  // by `processFollowUpInvocation`, which calls the deterministic generator —
+  // so a declaration there reaches interpolation with no such value and fails
+  // on MISSING_VARIABLE, one prospect at a time, against an immutable version.
+  it("refuses a follow-up step that asks the agent for a sentence", () => {
+    const result = createCampaignSchema.safeParse({
+      name: "Campaign",
+      type: "commercial_outreach",
+      targetDescription: "Leaders at relevant companies",
+      configuration: {},
+      steps: [
+        step(),
+        step({
+          delayMinutes: 4_320,
+          bodyTemplate: "{{personalized_opening}} — following up",
+          personalizationSchema: { fields: ["personalized_opening"] },
+        }),
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result.error?.issues)).toContain(
+      "Only the first step",
+    );
+  });
+
+  it("still accepts an AI sentence on the first step of a multi-step sequence", () => {
+    expect(
+      createCampaignSchema.safeParse({
+        name: "Campaign",
+        type: "commercial_outreach",
+        targetDescription: "Leaders at relevant companies",
+        configuration: {},
+        steps: [
+          step({
+            bodyTemplate: "{{personalized_opening}} — about {{company}}",
+            personalizationSchema: { fields: ["personalized_opening"] },
+          }),
+          step({ delayMinutes: 4_320 }),
+        ],
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe("what a refused campaign tells the operator", () => {

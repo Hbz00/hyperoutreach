@@ -23,7 +23,10 @@ import { isTerminalEnrollmentState } from "@/modules/campaigns/enrollment-state"
 import { generateOutreachProposal } from "@/modules/messages/generation-service";
 import { reviewMessage } from "@/modules/messages/review-service";
 import { sendApprovedMessage } from "@/modules/messages/send-service";
-import { validateWorkflowInvocation } from "@/modules/workflows/follow-up-policy";
+import {
+  AUTOMATIC_FOLLOW_UP_ACTOR,
+  validateWorkflowInvocation,
+} from "@/modules/workflows/follow-up-policy";
 
 const invocationSchema = z.object({
   enrollmentId: z.uuid(),
@@ -590,7 +593,7 @@ export async function processFollowUpInvocation(
       const reviewed = await reviewMessage(db, {
         messageId: generated.message.id,
         action: { kind: "approve" },
-        actor: "automatic_follow_up_policy",
+        actor: AUTOMATIC_FOLLOW_UP_ACTOR,
         workflowClaimId: claim.claimId,
       });
       if (!reviewed.ok) {

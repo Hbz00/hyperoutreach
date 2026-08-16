@@ -15,7 +15,10 @@ import {
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import { normalizeEmail } from "@/modules/prospects/normalization";
-import { interpolateStrict } from "@/modules/messages/interpolation";
+import {
+  interpolateStrict,
+  type InterpolationError,
+} from "@/modules/messages/interpolation";
 
 /**
  * Sentences an agent already wrote and that provenance already validated. The
@@ -210,10 +213,26 @@ export async function generateOutreachProposal(
       const subject = interpolateStrict(context.subjectTemplate, values);
       const body = interpolateStrict(context.bodyTemplate, values);
       if (typeof subject !== "string" || typeof body !== "string") {
+        // Name the variable and why it could not be filled. Generation is no
+        // longer a click the operator watches: it happens on enrolment and
+        // this sentence is all that reaches `/outbound`. "Template variables
+        // could not be resolved" cannot be acted on — the most reachable case
+        // is a prospect saved without a job title against the default template
+        // that names `{{job_title}}`, and knowing that is the difference
+        // between filling one field and reading the code.
+        const failure = (
+          typeof subject === "string" ? body : subject
+        ) as InterpolationError;
+        const where = typeof subject === "string" ? "body" : "subject line";
         return {
           ok: false,
           code: "TEMPLATE_ERROR",
-          message: "Template variables could not be resolved",
+          message:
+            failure.code === "MALFORMED_TEMPLATE"
+              ? `The ${where} template is malformed`
+              : failure.code === "UNKNOWN_VARIABLE"
+                ? `The ${where} uses {{${failure.variable}}}, which is not a variable this campaign can fill`
+                : `The ${where} uses {{${failure.variable}}}, and this prospect has no value for it`,
         } as const;
       }
 

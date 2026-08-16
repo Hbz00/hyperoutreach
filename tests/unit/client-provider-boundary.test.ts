@@ -152,17 +152,30 @@ describe("client/provider module boundary", () => {
     ).toEqual([]);
   });
 
-  // Stated rather than fixed. The Microsoft webhook still drains its own
-  // notifications in the request, and draining classifies replies. It is
-  // reachable only with `MAIL_PROVIDER=microsoft_graph`, which this checkout
-  // has never verified live, and moving it into the queue is a change to a
-  // provider path nobody here can exercise. Recorded so it is a known gap
-  // rather than an oversight.
-  it("records the one request handler still able to issue an AI turn", () => {
-    const webhook = sources.get(
-      join(sourceRoot, "app/api/webhooks/microsoft/route.ts"),
-    );
-    expect(webhook).toContain('task: "drain-graph-webhooks"');
+  // Stated rather than fixed, and there are two of them, not one. Both drain
+  // Microsoft Graph work inside the request, and draining classifies replies —
+  // an AI turn from a request handler. Both are reachable only with
+  // `MAIL_PROVIDER=microsoft_graph`, which this checkout has never verified
+  // live, and moving them into the queue changes a provider path nobody here
+  // can exercise. Enumerated exhaustively so that a third one cannot appear
+  // unnoticed: the assertion is the whole list, not an example from it.
+  it("records every request handler still able to issue an AI turn", () => {
+    const classifierEntryPoints = allFiles
+      .filter((file) => /app\/api\/.*route\.ts$/.test(file))
+      .filter((file) => {
+        const source = sources.get(file) ?? "";
+        return (
+          source.includes("createReplyClassifier") ||
+          source.includes('task: "drain-graph-webhooks"')
+        );
+      })
+      .map((file) => relative(sourceRoot, file))
+      .sort();
+
+    expect(classifierEntryPoints).toEqual([
+      "app/api/internal/microsoft/reconcile/route.ts",
+      "app/api/webhooks/microsoft/route.ts",
+    ]);
   });
 
   it("keeps client component import graphs away from Node-only AI factories", () => {

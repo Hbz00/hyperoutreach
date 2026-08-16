@@ -111,12 +111,20 @@ export async function readSendBudgets(
   // — turning on personalization does it. Grouping on the version would split
   // one campaign's spend into two half-counts, each announcing capacity the
   // policy has already spent.
+  //
+  // The cap, though, is read per version by the policy, and two live versions
+  // can carry different overrides. There is no single true number, so this
+  // takes the newest published version's — the one every send from now on is
+  // measured against. `max()` over the overrides was the wrong choice: with an
+  // older version set to 200 and the current one to 20, it announced 200 while
+  // the policy refused at 20.
   const byCampaign = await db
     .select({
       name: campaigns.name,
-      cap: sql<
-        number | null
-      >`max((${campaignVersions.configuration} ->> 'campaignDailyCap')::int)`,
+      cap: sql<number | null>`(array_agg(
+        (${campaignVersions.configuration} ->> 'campaignDailyCap')::int
+        order by ${campaignVersions.version} desc
+      ))[1]`,
       used: sql<number>`count(${messages.id})::int`,
     })
     .from(campaigns)

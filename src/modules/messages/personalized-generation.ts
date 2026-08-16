@@ -6,6 +6,7 @@ import {
   contacts,
   enrollments,
   evidenceSources,
+  messages,
   sequenceSteps,
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
@@ -21,7 +22,11 @@ export type PersonalizedGenerationResult =
   | GenerateOutreachResult
   | {
       ok: false;
-      code: "AWAITING_RESEARCH" | "LOW_CONFIDENCE" | "AGENT_ERROR";
+      code:
+        | "AWAITING_RESEARCH"
+        | "LOW_CONFIDENCE"
+        | "AGENT_ERROR"
+        | "REPLY_PENDING";
       message: string;
     };
 
@@ -73,6 +78,7 @@ export async function generateWithPersonalization(
       jobTitle: contacts.jobTitle,
       researchStatus: accounts.researchStatus,
       researchSnapshot: accounts.researchSnapshot,
+      inboundHoldCount: enrollments.inboundHoldCount,
     })
     .from(enrollments)
     .innerJoin(contacts, eq(contacts.id, enrollments.contactId))
@@ -94,6 +100,42 @@ export async function generateWithPersonalization(
   const declared = context ? declaration(context.declared) : null;
   if (!context || !declared) {
     return generateOutreachProposal(db, input);
+  }
+
+  // Already written. `generateOutreachProposal` answers `existing` for this,
+  // but only from inside its write transaction — after the agent turn. The
+  // manual "Generate step N" control on the prospect page carries a fresh
+  // request token per render, so every click is a new command row: clicking it
+  // on a step that already has a message spent a turn on the operator's window
+  // to be told the message was there all along. The generator still owns the
+  // rule under its row lock; this only declines to pay for the answer twice.
+  const [already] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.enrollmentId, input.enrollmentId),
+        eq(messages.stepIndex, input.stepIndex),
+        eq(messages.direction, "outbound"),
+      ),
+    )
+    .limit(1);
+  if (already) return generateOutreachProposal(db, input);
+
+  // A held reply is the one waiting state that repeats. The queue parks
+  // `REPLY_PENDING` and asks again every five minutes, which is right — but
+  // the generator only reports it from inside its own write transaction, well
+  // after the agent turn. Left alone, a prospect whose reply sits in manual
+  // review would spend one turn on the operator's ChatGPT window every five
+  // minutes, indefinitely, to be told to wait. The rule still belongs to
+  // `generateOutreachProposal`, which re-reads it under a row lock; this only
+  // declines to pay for the answer twice.
+  if (context.inboundHoldCount > 0) {
+    return {
+      ok: false,
+      code: "REPLY_PENDING",
+      message: "A reply is pending classification",
+    };
   }
 
   const sources = await db
