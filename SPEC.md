@@ -1332,6 +1332,19 @@ Au début, je ne lancerais absolument pas le système en autonomie complète.
 
 Je créerais trois modes.
 
+> Note du 2026-08-16 : les trois modes n'ont jamais été construits. Le réglage
+> `reviewMode` était enregistré, affiché dans un menu à une seule valeur, et lu
+> par aucune décision — la campagne de l'incident du 2026-08-14 portait
+> `"manual"` sans que cela change quoi que ce soit. Il a été supprimé. Ce qu'il
+> prétendait configurer est désormais un **invariant appliqué** : aucun premier
+> envoi ne peut être d'origine système, et le schéma de configuration rejette
+> explicitement la clé. Le mode « assisté » supposait par ailleurs une variance
+> par message qui n'existe pas tant que le texte est un gabarit à quatre
+> variables. Le réglage reviendra le jour où il aura deux comportements réels à
+> départager, et le tableau de bord affiche déjà le seul signal empirique qui
+> puisse le justifier : le nombre d'approbations consécutives sans réécriture,
+> par version de campagne.
+
 ### Manual
 
 ```text

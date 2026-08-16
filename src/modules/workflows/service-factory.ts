@@ -33,7 +33,7 @@ import {
   runMicrosoftGraphMaintenance,
 } from "@/modules/mailboxes/microsoft-graph-sync-service";
 import { createMailboxGraphClient } from "@/modules/mailboxes/microsoft-oauth-service";
-import { generateOutreachProposal } from "@/modules/messages/generation-service";
+import { generateWithPersonalization } from "@/modules/messages/personalized-generation";
 import { sendApprovedMessage } from "@/modules/messages/send-service";
 import { createReplyClassifierFromBundle } from "@/modules/replies/classifier-factory";
 import {
@@ -44,13 +44,24 @@ import { discoverAccounts } from "@/modules/research/account-discovery-service";
 import { researchAccount } from "@/modules/research/account-research-service";
 import { discoverContacts } from "@/modules/research/contact-discovery-service";
 import { personalizeReasoningFields } from "@/modules/research/personalization-service";
-import type { WorkflowTaskServices } from "@/modules/workflows/runtime";
+import {
+  WorkflowRuntime,
+  type WorkflowTaskServices,
+} from "@/modules/workflows/runtime";
+import {
+  drainOperatorCommands,
+  type OperatorCommandExecutor,
+} from "@/modules/workflows/operator-command-queue";
+import type { WorkflowTaskName } from "@/modules/workflows/task-contracts";
 import { runMaintenanceCycle } from "@/modules/workflows/maintenance-cycle-service";
 import {
   findDueEnrollments,
   processFollowUpInvocation,
 } from "@/modules/workflows/follow-up-service";
-import { findStaleRecoveryCandidates } from "@/modules/workflows/recovery-service";
+import {
+  findStaleRecoveryCandidates,
+  releaseExpiredSendRequests,
+} from "@/modules/workflows/recovery-service";
 
 function observedDate(value: string | undefined): Date {
   return value ? new Date(value) : new Date();
@@ -251,7 +262,8 @@ export function createWorkflowTaskServices(
     "email-resolution": runEmailResolution,
     "personalize-message": (payload) =>
       personalizeReasoningFields(db, agents.personalization, payload),
-    "generate-message": (payload) => generateOutreachProposal(db, payload),
+    "generate-message": (payload) =>
+      generateWithPersonalization(db, agents.personalization, payload),
     "send-approved-message": async (payload) =>
       sendApprovedMessage(
         db,
@@ -391,6 +403,12 @@ export function createWorkflowTaskServices(
       // intentionally tiny so one scheduled run stays within maxDuration and
       // every class makes progress on every tick.
       const recoveryLimit = Math.min(payload.limit ?? 1, 1);
+      // Before looking for work to finish, give back the work this worker is
+      // no longer allowed to finish. Running it first means an expired request
+      // is never both excluded from recovery and hidden from the operator.
+      const sendRequestsReleased = await releaseExpiredSendRequests(db, {
+        now,
+      });
       const candidates = await findStaleRecoveryCandidates(db, {
         now,
         limit: recoveryLimit,
@@ -438,6 +456,7 @@ export function createWorkflowTaskServices(
       }
       return {
         inbound,
+        sendRequestsReleased,
         messagesRecovered,
         researchRecovered,
         resolutionsRecovered,
@@ -445,6 +464,15 @@ export function createWorkflowTaskServices(
       };
     },
   } as WorkflowTaskServices;
+  // Queued operator work runs through the same audited path a dispatched task
+  // would, so a command has the same trail as everything else; the queue only
+  // decides when there is an attempt and when to stop making them.
+  const runQueuedCommand: OperatorCommandExecutor = (input) =>
+    new WorkflowRuntime(db, services).execute(
+      input.task as WorkflowTaskName,
+      input.payload,
+      { runId: input.runId, attempt: input.attempt },
+    );
   services["maintenance-cycle"] = (payload) =>
     runMaintenanceCycle(
       db,
@@ -452,6 +480,13 @@ export function createWorkflowTaskServices(
         "reconcile-inbound-mailboxes": services["reconcile-inbound-mailboxes"],
         "reconcile-due-follow-ups": services["reconcile-due-follow-ups"],
         "recover-stale-work": services["recover-stale-work"],
+        // Deliberately the wall clock, not the cycle's observed instant. This
+        // stage runs last, after upstream stages that can each take minutes,
+        // so the tick's `observedAt` is stale by then — back-dating a claim
+        // would shorten its lease, and back-dating a backoff would shorten the
+        // wait it exists to impose.
+        "drain-operator-commands": () =>
+          drainOperatorCommands(db, runQueuedCommand),
       },
       payload,
     );

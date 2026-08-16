@@ -3,6 +3,8 @@ import { dirname, extname, join, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { AI_WORKFLOW_TASKS as aiWorkflowTasks } from "@/modules/workflows/operator-command-policy";
+
 const sourceRoot = resolve(process.cwd(), "src");
 const forbiddenServerModules = [
   "lib/codex/",
@@ -66,7 +68,103 @@ const sources = new Map(
   ),
 );
 
+/**
+ * Everything that takes a turn on the operator's single ChatGPT window, which
+ * is serialized process-wide. A page render that reaches any of these can be
+ * parked behind a ten-minute research turn before it paints. The devtools port
+ * probe (`lib/chatgpt-desktop/cdp`) is deliberately absent: it is a plain HTTP
+ * request with its own timeout and never queues, which is why the settings
+ * health line is allowed to use it.
+ */
+const aiSerializationQueueModules = [
+  "lib/chatgpt-desktop/client",
+  "lib/chatgpt-desktop/index",
+  "lib/chatgpt-desktop/structured-provider",
+  "lib/ai/production-provider-bundle",
+  "modules/agents/factory",
+  "modules/replies/classifier-factory",
+  "modules/workflows/service-factory",
+];
+
+function reachesAny(entry: string, forbidden: string[]): string[] {
+  const violations: string[] = [];
+  const pending = [entry];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const file = pending.pop()!;
+    if (visited.has(file)) continue;
+    visited.add(file);
+    for (const specifier of importedSpecifiers(sources.get(file) ?? "")) {
+      const resolved = resolveLocalImport(file, specifier);
+      const normalized = specifier.startsWith("@/")
+        ? specifier.slice(2)
+        : resolved
+          ? relative(sourceRoot, resolved)
+          : specifier;
+      if (
+        forbidden.some(
+          (name) => normalized === name || normalized.startsWith(`${name}/`),
+        )
+      ) {
+        violations.push(`${relative(sourceRoot, entry)} reaches ${normalized}`);
+      }
+      if (resolved) pending.push(resolved);
+    }
+  }
+  return violations;
+}
+
 describe("client/provider module boundary", () => {
+  // A page must paint from the database alone. Route handlers are covered by
+  // the next test, which asks a different question about them.
+  it("keeps page renders out of the AI serialization queue", () => {
+    const pages = allFiles.filter((file) => file.endsWith("/page.tsx"));
+    expect(pages.length).toBeGreaterThan(0);
+    const violations = pages.flatMap((page) =>
+      reachesAny(page, aiSerializationQueueModules),
+    );
+    expect(violations).toEqual([]);
+  });
+
+  /**
+   * The import graph is the wrong instrument for route handlers and the right
+   * one for pages. A route legitimately imports the workflow dispatcher — that
+   * is how it sends mail and reconciles follow-ups — and the dispatcher can
+   * build every service including the AI ones. What matters is not what a
+   * route can reach but what it actually asks for, so this reads the dispatch
+   * itself.
+   */
+  it("dispatches no AI task from an operator command handler", () => {
+    const handlers = allFiles.filter((file) =>
+      file.includes("/app/api/operator/"),
+    );
+    expect(handlers.length).toBeGreaterThan(0);
+    const dispatched = handlers.flatMap((file) =>
+      [...(sources.get(file) ?? "").matchAll(/task:\s*"([a-z-]+)"/g)].map(
+        (match) => ({ file: relative(sourceRoot, file), task: match[1]! }),
+      ),
+    );
+    expect(dispatched.length).toBeGreaterThan(0);
+    expect(
+      dispatched.filter((entry) =>
+        (aiWorkflowTasks as readonly string[]).includes(entry.task),
+      ),
+    ).toEqual([]);
+  });
+
+  // Stated rather than fixed. The Microsoft webhook still drains its own
+  // notifications in the request, and draining classifies replies. It is
+  // reachable only with `MAIL_PROVIDER=microsoft_graph`, which this checkout
+  // has never verified live, and moving it into the queue is a change to a
+  // provider path nobody here can exercise. Recorded so it is a known gap
+  // rather than an oversight.
+  it("records the one request handler still able to issue an AI turn", () => {
+    const webhook = sources.get(
+      join(sourceRoot, "app/api/webhooks/microsoft/route.ts"),
+    );
+    expect(webhook).toContain('task: "drain-graph-webhooks"');
+  });
+
   it("keeps client component import graphs away from Node-only AI factories", () => {
     const clientEntries = allFiles.filter((file) =>
       /^\s*["']use client["'];/m.test(sources.get(file) ?? ""),

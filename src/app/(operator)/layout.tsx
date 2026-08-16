@@ -6,6 +6,7 @@ const links = [
   ["/prospects", "Prospects"],
   ["/campaigns", "Campaigns"],
   ["/review", "Review queue"],
+  ["/outbound", "What goes out"],
   ["/inbox", "Inbox"],
   ["/settings", "Settings"],
 ] as const;

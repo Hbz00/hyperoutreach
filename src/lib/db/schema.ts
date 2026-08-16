@@ -685,6 +685,16 @@ export const messages = pgTable(
     attemptCount: integer("attempt_count").default(0).notNull(),
     sendAttemptToken: text("send_attempt_token"),
     sendClaimedAt: timestamp("send_claimed_at", { withTimezone: true }),
+    /**
+     * When somebody asked for this message to go out. Stamped inside the send
+     * claim, and only when the pre-claim status is `approved` — the one status
+     * a request can start from, and the one recovery never claims from. A
+     * request stamps it; a resumption does not. Recovery reads it to bound how
+     * long it may keep completing a request, so it must never be confused with
+     * `draftedAt` (when a provider draft first existed, never refreshed) or
+     * with `scheduledAt` (reserved for a request pending a future instant).
+     */
+    sendRequestedAt: timestamp("send_requested_at", { withTimezone: true }),
     sendAttemptedAt: timestamp("send_attempted_at", { withTimezone: true }),
     lastError: text("last_error"),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
@@ -973,6 +983,120 @@ export const maintenanceState = pgTable(
     ...timestamps,
   },
   (table) => [check("maintenance_state_singleton_check", sql`${table.id} = 1`)],
+);
+
+/**
+ * There is no separate `failed`. A failure with attempts left is `queued`
+ * again with a later `next_attempt_at`; a failure with none left is
+ * `abandoned` and carries its reason. A second terminal-failure state would
+ * be indistinguishable from the first, to the operator and to the code.
+ */
+export const operatorCommandStatus = pgEnum("operator_command_status", [
+  "queued",
+  "waiting",
+  "running",
+  "succeeded",
+  "abandoned",
+]);
+
+/**
+ * Work an operator asked for, executed by the maintenance cycle rather than
+ * inside their request.
+ *
+ * Its own table rather than `workflow_events`: that log's unique idempotency
+ * key makes a second attempt a conflict rather than a retry, and the one
+ * mechanism in this tree that genuinely retries on a schedule —
+ * `reconcilePendingInboundRecords` — polls dedicated columns exactly like
+ * these. `workflow_events` still records every attempt; this table decides
+ * when there is one.
+ */
+export const operatorCommands = pgTable(
+  "operator_commands",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** The operator-facing command name, for display. */
+    command: text("command").notNull(),
+    /** The workflow task that does the work. */
+    task: text("task").notNull(),
+    payload: jsonb("payload")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    status: operatorCommandStatus("status").default("queued").notNull(),
+    /** Why the work cannot start yet. Null unless `status` is `waiting`. */
+    waitingReason: text("waiting_reason"),
+    attempt: integer("attempt").default(0).notNull(),
+    maxAttempts: integer("max_attempts").default(3).notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    claimId: text("claim_id"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    /** Links a run to its `workflow_events` audit trail. */
+    runId: text("run_id"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    error: text("error"),
+    requestedBy: text("requested_by").notNull(),
+    dedupeKey: text("dedupe_key"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("operator_commands_dedupe_key_unique")
+      .on(table.dedupeKey)
+      .where(sql`${table.dedupeKey} is not null`),
+    index("operator_commands_drain_idx").on(table.status, table.nextAttemptAt),
+    check(
+      "operator_commands_attempt_check",
+      sql`${table.attempt} >= 0 and ${table.maxAttempts} > 0`,
+    ),
+    check(
+      "operator_commands_waiting_reason_check",
+      sql`(${table.status} = 'waiting') = (${table.waitingReason} is not null)`,
+    ),
+  ],
+);
+
+/**
+ * What an agent wrote into one message, with the confidence it claimed and the
+ * sources it cited.
+ *
+ * Its own table rather than columns on `messages`: a step declares up to two
+ * fields, each with its own confidence and its own evidence, and the review
+ * card has to be able to show the operator which sentence came from where.
+ * `agent_run_id` follows the `replies` precedent — every generated sentence
+ * points back at the run that produced it.
+ */
+export const messagePersonalizationFields = pgTable(
+  "message_personalization_fields",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    value: text("value").notNull(),
+    confidence: numeric("confidence", { precision: 4, scale: 3 }).notNull(),
+    sourceUrls: jsonb("source_urls")
+      .$type<string[]>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    agentRunId: uuid("agent_run_id").references(() => agentRuns.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("message_personalization_fields_message_name_unique").on(
+      table.messageId,
+      table.name,
+    ),
+    check(
+      "message_personalization_fields_confidence_check",
+      sql`${table.confidence} >= 0 and ${table.confidence} <= 1`,
+    ),
+  ],
 );
 
 export const stateTransitions = pgTable(

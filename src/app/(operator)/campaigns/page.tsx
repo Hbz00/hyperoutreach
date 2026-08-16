@@ -73,12 +73,6 @@ export default async function CampaignsPage({
               />
             </label>
             <label>
-              Review mode
-              <select name="reviewMode" defaultValue="manual">
-                <option value="manual">Manual</option>
-              </select>
-            </label>
-            <label>
               Campaign daily cap
               <input
                 type="number"
@@ -140,6 +134,27 @@ export default async function CampaignsPage({
                         : "Hello {{first_name}},\n\nI wanted to follow up on my previous note."
                     }
                     required={index === 0}
+                  />
+                </label>
+                <label className="span-all check">
+                  <input type="checkbox" name={`step${index}AiOpening`} />
+                  AI-written opening sentence — reference it as{" "}
+                  <code>{"{{personalized_opening}}"}</code>
+                </label>
+                <label className="span-all check">
+                  <input type="checkbox" name={`step${index}AiRelevance`} />
+                  AI-written company relevance — reference it as{" "}
+                  <code>{"{{company_relevance}}"}</code>
+                </label>
+                <label>
+                  Minimum AI confidence
+                  <input
+                    name={`step${index}MinConfidence`}
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    defaultValue={0.5}
                   />
                 </label>
               </div>

@@ -3,7 +3,7 @@ import { createWorkflowDispatcher } from "@/modules/workflows/dispatcher-factory
 import { dispatchMaintenanceTick } from "@/modules/workflows/maintenance-service";
 
 export const runtime = "nodejs";
-export const maxDuration = 840;
+export const maxDuration = 1500;
 
 export async function POST(request: Request) {
   const authorization = authorizeOperatorRequest(request);
@@ -17,10 +17,15 @@ export async function POST(request: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
   const now = new Date();
+  // `?immediate=1` runs a cycle now instead of deduplicating against the
+  // minute the scheduler may already have used. The singleton lease still
+  // decides whether it actually runs.
+  const immediate = new URL(request.url).searchParams.get("immediate") === "1";
   try {
     const outcomes = await dispatchMaintenanceTick(
       createWorkflowDispatcher(),
       now,
+      { immediate },
     );
     return Response.json(
       { outcomes },

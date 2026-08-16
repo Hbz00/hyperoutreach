@@ -1187,6 +1187,61 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
     ]);
   });
 
+  // Automatic follow-ups approve and send in one pass. A message carrying a
+  // sentence an agent wrote would therefore go out unread — and the whole
+  // point of persisting that sentence with its confidence and its sources is
+  // that the operator sees it. Personalized text and unattended sending are
+  // mutually exclusive, and this is the one place the two paths meet.
+  it("never sends an agent-written sentence unread, whatever the campaign asks", async () => {
+    await setPolicySettings();
+    const f = await fixture({ automatic: true });
+    const invocation = {
+      enrollmentId: f.enrollment.id,
+      expectedStep: 1,
+      expectedVersionId: f.version.id,
+      expectedDueAt: f.enrollment.nextActionAt!,
+      expectedToken: f.enrollment.nextActionToken!,
+    };
+    // The operator pre-generated the follow-up to read it ahead of time, and
+    // the step declared an agent-written field.
+    const generated = await generateOutreachProposal(db, {
+      enrollmentId: f.enrollment.id,
+      stepIndex: 1,
+      recipient: `ada-${crypto.randomUUID()}@example.com`,
+      personalization: {
+        agentRunId: null,
+        fields: [
+          {
+            name: "personalized_opening",
+            value: "A sentence the agent wrote.",
+            confidence: 0.9,
+            sourceUrls: ["https://evidence.example/one"],
+          },
+        ],
+      },
+    });
+    expect(generated).toMatchObject({ ok: true });
+    // The fixture already sent step zero; only a *new* send would be the bug.
+    const sendsBefore = f.provider.sendDraftCalls.length;
+
+    const result = await processFollowUpInvocation(db, f.provider, invocation, {
+      now: new Date("2026-08-11T11:01:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      disposition: "awaiting_review",
+    });
+    expect(f.provider.sendDraftCalls).toHaveLength(sendsBefore);
+    const followUp = (
+      await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.enrollmentId, f.enrollment.id))
+    ).find((row) => row.stepIndex === 1);
+    expect(followUp).toMatchObject({ status: "proposed" });
+  });
+
   it("recovers an automatic follow-up after approval but before send", async () => {
     await setPolicySettings();
     const f = await fixture({ automatic: true });

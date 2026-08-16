@@ -9,9 +9,14 @@ import {
   enrollments,
   emailCandidates,
   evidenceSources,
+  mailboxConnections,
+  messagePersonalizationFields,
+  operatorCommands,
   messages,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { sendBlockNotice } from "@/modules/messages/send-block-notice";
+import { readSendPolicyVerdict } from "@/modules/messages/send-service";
 
 export default async function ReviewPage({
   searchParams,
@@ -28,6 +33,7 @@ export default async function ReviewPage({
       account: accounts,
       campaign: campaigns,
       acceptedEmail: emailCandidates,
+      mailboxProvider: mailboxConnections.provider,
     })
     .from(messages)
     .innerJoin(enrollments, eq(enrollments.id, messages.enrollmentId))
@@ -41,6 +47,9 @@ export default async function ReviewPage({
         eq(emailCandidates.normalizedEmail, sql`lower(${messages.recipient})`),
       ),
     )
+    // Joined on the message's own mailbox, which is the column the send
+    // service resolves its provider from. The enrollment's can drift from it.
+    .leftJoin(mailboxConnections, eq(mailboxConnections.id, messages.mailboxId))
     .where(
       inArray(messages.status, [
         "proposed",
@@ -53,6 +62,17 @@ export default async function ReviewPage({
       ]),
     )
     .orderBy(asc(messages.createdAt));
+  const personalization = rows.length
+    ? await getDatabase()
+        .select()
+        .from(messagePersonalizationFields)
+        .where(
+          inArray(
+            messagePersonalizationFields.messageId,
+            rows.map((row) => row.message.id),
+          ),
+        )
+    : [];
   const accountIds = [...new Set(rows.map((row) => row.account.id))];
   const contactIds = [...new Set(rows.map((row) => row.contact.id))];
   const evidence =
@@ -72,6 +92,47 @@ export default async function ReviewPage({
           )
           .orderBy(desc(evidenceSources.retrievedAt))
       : [];
+  // "Would this go out right now?" is a different question from what
+  // `lastError` answers, which is "what did the last attempt say?" — an
+  // emergency pause lifted after a refusal leaves that older sentence behind.
+  // Both are shown, each labelled for what it is.
+  //
+  // Only `approved` and `drafted` cards get a verdict: on a `proposed` card
+  // the answer is always MESSAGE_NOT_APPROVED and says nothing. The check
+  // costs about a dozen queries per card, which one operator reviewing a
+  // handful of messages can afford, and it contacts nothing — it reads the
+  // mailbox's provider kind rather than building a provider.
+  // "Nothing to review" and "nothing has been written yet" are different
+  // answers, and only one of them means the operator can stop looking.
+  const [{ count: pendingGenerations = 0 } = { count: 0 }] = await getDatabase()
+    .select({ count: sql<number>`count(*)::int` })
+    .from(operatorCommands)
+    .where(
+      and(
+        eq(operatorCommands.task, "generate-message"),
+        inArray(operatorCommands.status, ["queued", "waiting", "running"]),
+      ),
+    );
+  const now = new Date();
+  const sendChecks = new Map<string, string>();
+  for (const row of rows) {
+    if (row.message.status !== "approved" && row.message.status !== "drafted") {
+      continue;
+    }
+    const verdict = await readSendPolicyVerdict(
+      getDatabase(),
+      row.message.id,
+      row.mailboxProvider ?? "mock",
+      now,
+    );
+    if (!verdict) continue;
+    sendChecks.set(
+      row.message.id,
+      verdict.ok
+        ? "Would go out now"
+        : `Held — ${sendBlockNotice(verdict.code)}`,
+    );
+  }
   return (
     <main className="page-shell">
       <header className="page-header">
@@ -83,10 +144,9 @@ export default async function ReviewPage({
             service receives.
           </p>
         </div>
-        <form action="/api/operator/commands/reconcile-followups" method="post">
-          <input type="hidden" name="csrf" value={session.csrfToken} />
-          <button className="button-secondary">Process due follow-ups</button>
-        </form>
+        <Link className="button-link" href="/outbound">
+          See what goes out
+        </Link>
       </header>
       {notice ? (
         <p className="alert" role="status">
@@ -107,6 +167,9 @@ export default async function ReviewPage({
               "stopped",
               "completed",
             ].includes(row.enrollment.state);
+          const written = personalization.filter(
+            (field) => field.messageId === row.message.id,
+          );
           const sources = evidence.filter(
             (item) =>
               item.accountId === row.account.id ||
@@ -198,6 +261,12 @@ export default async function ReviewPage({
                 <aside>
                   <h3>Evidence & confidence</h3>
                   <dl className="facts">
+                    {sendChecks.has(row.message.id) ? (
+                      <div>
+                        <dt>Send check</dt>
+                        <dd>{sendChecks.get(row.message.id)}</dd>
+                      </div>
+                    ) : null}
                     <div>
                       <dt>Enrollment</dt>
                       <dd>
@@ -231,8 +300,9 @@ export default async function ReviewPage({
                     <div>
                       <dt>Personalization</dt>
                       <dd>
-                        Deterministic template fields only; no AI reasoning
-                        field was requested for this step.
+                        {written.length === 0
+                          ? "Deterministic template fields only; no AI reasoning field was requested for this step."
+                          : `${written.length} sentence${written.length > 1 ? "s" : ""} written by the agent, shown below.`}
                       </dd>
                     </div>
                   </dl>
@@ -296,14 +366,50 @@ export default async function ReviewPage({
                   <button>Send approved message</button>
                 </form>
               ) : null}
+              {written.length > 0 ? (
+                <section className="evidence-list compact">
+                  <h3>Written by the agent</h3>
+                  {written.map((field) => (
+                    <article key={field.id}>
+                      <p>
+                        <strong>{field.name}</strong> · confidence{" "}
+                        {Number(field.confidence).toFixed(2)}
+                      </p>
+                      <p>{field.value}</p>
+                      {field.sourceUrls.map((url) => (
+                        <a
+                          key={url}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {url}
+                        </a>
+                      ))}
+                    </article>
+                  ))}
+                </section>
+              ) : null}
               {row.message.lastError ? (
-                <p className="alert alert-error">{row.message.lastError}</p>
+                <p className="alert alert-error">
+                  Last attempt: {row.message.lastError}
+                </p>
               ) : null}
             </article>
           );
         })}
         {rows.length === 0 ? (
-          <section className="panel empty">Review queue is clear.</section>
+          <section className="panel empty">
+            {pendingGenerations === 0 ? (
+              "Review queue is clear."
+            ) : (
+              <>
+                Nothing to review yet — {pendingGenerations} message
+                {pendingGenerations > 1 ? "s are" : " is"} still being written.{" "}
+                <Link href="/outbound">See what goes out</Link>
+              </>
+            )}
+          </section>
         ) : null}
       </section>
     </main>

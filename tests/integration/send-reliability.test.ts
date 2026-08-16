@@ -572,9 +572,17 @@ describe("reliable send attempt ownership and provider confirmation", () => {
   });
 
   it("releases every session lock after an injected unlock failure", async () => {
+    // Scoped to this test's own key. Counting every advisory lock in the
+    // cluster was not a stronger assertion, only a flakier one: test files run
+    // in parallel against one database and every send takes action locks, so
+    // the count reported other files' work. Acquiring the key from a separate
+    // connection is the direct question — is it free? — and the individual
+    // unlock is injected to throw, so it can only be free if the blanket
+    // `pg_advisory_unlock_all` release ran.
+    const releasedKey = actionLockKey.campaign(randomUUID());
     await withActionLocks(
       db,
-      [actionLockKey.settings(), actionLockKey.campaign(randomUUID())],
+      [actionLockKey.settings(), releasedKey],
       async () => undefined,
       {
         async unlock() {
@@ -582,10 +590,13 @@ describe("reliable send attempt ownership and provider confirmation", () => {
         },
       },
     );
-    const [{ count }] = await lockProbeClient<[{ count: number }]>`
-      select count(*)::int as count from pg_locks where locktype = 'advisory'
+    const [{ acquired }] = await lockProbeClient<[{ acquired: boolean }]>`
+      select pg_try_advisory_lock(hashtextextended(${releasedKey}, 0)) as acquired
     `;
-    expect(count).toBe(0);
+    expect(acquired).toBe(true);
+    await lockProbeClient`
+      select pg_advisory_unlock(hashtextextended(${releasedKey}, 0))
+    `;
     expect(await db.execute(sql`select 1 as healthy`)).toBeTruthy();
   });
 

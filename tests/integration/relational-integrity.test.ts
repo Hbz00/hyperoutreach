@@ -208,12 +208,41 @@ describe("committed PostgreSQL migration", () => {
     `;
     expect(Date.parse(updatedAt)).toBeGreaterThan(Date.parse("2000-01-01"));
 
-    const [{ triggerCount }] = await client<[{ triggerCount: number }]>`
-      select count(*)::int as "triggerCount"
-      from pg_trigger
-      where not tgisinternal and tgname like '%_set_updated_at'
+    // Asserted as a rule rather than a tally: every table that carries
+    // `updated_at` must let the database own it. A count would only say a
+    // number changed, and would have to be edited by hand each time a table
+    // is added — which is exactly when the trigger gets forgotten.
+    //
+    // Two singleton tables opt out on purpose. Their writers set the timestamp
+    // inside the same transaction that moves the row, from the clock the
+    // caller was given, so the value means "as of this cycle's `now`" rather
+    // than "as of the write" — a trigger would overwrite exactly that.
+    const applicationOwnedTimestamps = [
+      "maintenance_state",
+      "operator_sending_settings",
+    ];
+    const untriggered = await client<Array<{ table: string }>>`
+      select c.relname as "table"
+      from pg_attribute a
+      join pg_class c on c.oid = a.attrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public'
+        and c.relkind = 'r'
+        and a.attname = 'updated_at'
+        and not a.attisdropped
+        and not exists (
+          select 1 from pg_trigger t
+          where t.tgrelid = c.oid
+            and not t.tgisinternal
+            and t.tgname = c.relname || '_set_updated_at'
+        )
+      order by c.relname
     `;
-    expect(triggerCount).toBe(7);
+    expect(
+      [...untriggered]
+        .map((row) => row.table)
+        .filter((table) => !applicationOwnedTimestamps.includes(table)),
+    ).toEqual([]);
   });
 
   it("rejects enrolling one contact twice in the same campaign across versions", async () => {

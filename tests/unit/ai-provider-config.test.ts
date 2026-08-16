@@ -130,7 +130,22 @@ describe("AI provider configuration", () => {
     },
   );
 
-  it("keeps the operator command route alive for the slowest allowed call", () => {
+  // The AI-sized ceiling moved with the AI. Operator commands that would take
+  // a turn are queued and drained by the maintenance cycle, so the request no
+  // longer has to outlive a ten-minute research call — and the maintenance
+  // route now has to.
+  it("keeps the maintenance route alive for the slowest allowed AI call", () => {
+    const routeSource = readFileSync(
+      "src/app/api/internal/workflows/reconcile/route.ts",
+      "utf8",
+    );
+    const literal = routeSource.match(/export const maxDuration = (\d+);/)?.[1];
+
+    expect(literal).toBeDefined();
+    expect(Number(literal) * 1_000).toBeGreaterThanOrEqual(MAX_AI_TIMEOUT_MS);
+  });
+
+  it("no longer sizes the operator command route for an AI call", () => {
     const routeSource = readFileSync(
       "src/app/api/operator/commands/[command]/route.ts",
       "utf8",
@@ -138,7 +153,7 @@ describe("AI provider configuration", () => {
     const literal = routeSource.match(/export const maxDuration = (\d+);/)?.[1];
 
     expect(literal).toBeDefined();
-    expect(Number(literal) * 1_000).toBeGreaterThanOrEqual(MAX_AI_TIMEOUT_MS);
+    expect(Number(literal) * 1_000).toBeLessThan(MAX_AI_TIMEOUT_MS);
   });
 });
 

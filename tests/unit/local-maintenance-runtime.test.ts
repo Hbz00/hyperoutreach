@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import maintenanceConfig from "../../config/maintenance.json";
+
 // The production runtime intentionally remains dependency-free Node ESM.
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore -- the runtime is JavaScript by design
@@ -34,7 +36,7 @@ function enabledConfig(overrides: Record<string, unknown> = {}) {
     healthUrl: "http://127.0.0.1:3000/api/health",
     maintenanceUrl: "http://127.0.0.1:3000/api/internal/workflows/reconcile",
     intervalMs: 60_000,
-    requestTimeoutMs: 840_000,
+    requestTimeoutMs: 1_500_000,
     shutdownGraceMs: 30_000,
     healthRetryIntervalMs: 1_000,
     healthWaitTimeoutMs: 120_000,
@@ -273,16 +275,20 @@ console.log(JSON.stringify({ config, token: process.env.OPERATOR_API_TOKEN, port
       intervalMs: 60_000,
       heartbeatIntervalMs: 30_000,
       staleLeaseMs: 120_000,
-      requestTimeoutMs: 840_000,
+      requestTimeoutMs: 1_500_000,
       shutdownGraceMs: 30_000,
     });
+    // The worker waits for whichever is longer: the whole cycle's budget, or
+    // one research call plus its transport margin. Since the cycle gained a
+    // stage that runs operator-requested AI, the budget is the larger of the
+    // two even at the maximum allowed research deadline.
     expect(
       resolveLocalMaintenanceConfig({
         WORKFLOW_PROVIDER: "local",
         OPERATOR_API_TOKEN: TOKEN,
         AI_RESEARCH_TIMEOUT_MS: "900000",
       }).requestTimeoutMs,
-    ).toBe(960_000);
+    ).toBe(Math.max(maintenanceConfig.aggregateBudgetMs, 900_000 + 60_000));
   });
 });
 
@@ -330,6 +336,34 @@ describe("local maintenance worker", () => {
     const starting = worker.start();
     const expected = expect(starting).rejects.toThrowError(
       /application health check did not succeed within 2000ms/i,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expected;
+  });
+
+  it("names the outdated schema that kept the health wait from succeeding", async () => {
+    vi.useFakeTimers();
+    const worker = createLocalMaintenanceWorker({
+      config: enabledConfig({ healthWaitTimeoutMs: 2_000 }),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              status: "error",
+              database: "reachable",
+              schema: "outdated",
+              appliedMigrations: 27,
+              expectedMigrations: 30,
+            }),
+            { status: 503, headers: { "content-type": "application/json" } },
+          ),
+      ),
+      logger: { info: vi.fn(), error: vi.fn() },
+    });
+
+    const starting = worker.start();
+    const expected = expect(starting).rejects.toThrowError(
+      /database schema is outdated \(27\/30 migrations applied\); run npm run db:migrate/i,
     );
     await vi.advanceTimersByTimeAsync(2_000);
     await expected;

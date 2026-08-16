@@ -347,7 +347,7 @@ describe("database-backed reliable outreach vertical slice", () => {
       name: "Operations discovery",
       type: "customer_discovery",
       targetDescription: "COOs at European B2B software companies",
-      configuration: { reviewMode: "manual" },
+      configuration: { automaticFollowUps: false },
       steps: [
         {
           delayMinutes: 0,
@@ -379,7 +379,7 @@ describe("database-backed reliable outreach vertical slice", () => {
     const revised = await reviseCampaignVersion(db, {
       campaignId: draft.campaign.id,
       baseVersionId: draft.version.id,
-      configuration: { reviewMode: "manual", variant: "short" },
+      configuration: { automaticFollowUps: false, variant: "short" },
       steps: [
         {
           delayMinutes: 0,

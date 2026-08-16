@@ -34,7 +34,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:check": "drizzle-kit check",
     "db:seed": "npm run db:seed:mock",
-    "db:seed:mock": "tsx scripts/seed.ts"
+    "db:seed:mock": "tsx scripts/seed.ts",
+    "probe:personalization": "tsx scripts/personalization-probe.ts"
   },
   "dependencies": {
     "@next/env": "16.3.0",

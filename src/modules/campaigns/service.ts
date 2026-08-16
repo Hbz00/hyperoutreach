@@ -1,10 +1,12 @@
 import { and, desc, eq, sql } from "drizzle-orm";
+import type { ZodError } from "zod";
 
 import {
   campaigns,
   campaignVersions,
   contacts,
   enrollments,
+  operatorCommands,
   mailboxConnections,
   sequenceSteps,
   stateTransitions,
@@ -24,7 +26,7 @@ type SequenceStep = typeof sequenceSteps.$inferSelect;
 type Enrollment = typeof enrollments.$inferSelect;
 
 type CampaignError =
-  | { ok: false; code: "INVALID_INPUT"; message: "Invalid campaign input" }
+  | { ok: false; code: "INVALID_INPUT"; message: string }
   | { ok: false; code: "NOT_FOUND"; message: "Campaign resource not found" }
   | {
       ok: false;
@@ -33,11 +35,22 @@ type CampaignError =
     }
   | { ok: false; code: "DATABASE_ERROR"; message: "Could not save campaign" };
 
-function invalidInput(): CampaignError {
+/**
+ * Says which rule the input broke, when the schema knows.
+ *
+ * A campaign version is immutable, so a refusal at this boundary is the last
+ * cheap moment to fix the mistake — and "Invalid campaign input" tells an
+ * operator that something is wrong without telling them what. The step rules
+ * that pair an agent-written field with the template that uses it phrase
+ * themselves; those sentences are the ones worth passing through.
+ */
+function invalidInput(error?: ZodError): CampaignError {
+  const detail = error?.issues[0]?.message;
   return {
     ok: false,
     code: "INVALID_INPUT",
-    message: "Invalid campaign input",
+    message:
+      detail && detail !== "Invalid input" ? detail : "Invalid campaign input",
   };
 }
 
@@ -62,7 +75,7 @@ export async function createDraftCampaign(
   | CampaignError
 > {
   const parsed = createCampaignSchema.safeParse(rawInput);
-  if (!parsed.success) return invalidInput();
+  if (!parsed.success) return invalidInput(parsed.error);
   const input = parsed.data;
 
   try {
@@ -115,7 +128,7 @@ export async function publishCampaignVersion(
   | CampaignError
 > {
   const parsed = publishCampaignSchema.safeParse(rawInput);
-  if (!parsed.success) return invalidInput();
+  if (!parsed.success) return invalidInput(parsed.error);
   const input = parsed.data;
 
   try {
@@ -177,7 +190,7 @@ export async function reviseCampaignVersion(
   | CampaignError
 > {
   const parsed = reviseCampaignSchema.safeParse(rawInput);
-  if (!parsed.success) return invalidInput();
+  if (!parsed.success) return invalidInput(parsed.error);
   const input = parsed.data;
 
   try {
@@ -280,7 +293,7 @@ export async function enrollContact(
   | CampaignError
 > {
   const parsed = enrollContactSchema.safeParse(rawInput);
-  if (!parsed.success) return invalidInput();
+  if (!parsed.success) return invalidInput(parsed.error);
   const input = parsed.data;
 
   try {
@@ -349,6 +362,24 @@ export async function enrollContact(
           idempotencyKey: `enrollment:${created.id}:created`,
           status: "succeeded",
           completedAt: new Date(),
+        });
+        // The first message is queued here, in the same transaction, rather
+        // than left to a click on a third page. Generation produces a
+        // `proposed` message, which the send policy cannot send — so this
+        // automates the typing, never the sending.
+        //
+        // Written with `tx` instead of the queue's own helper on purpose: an
+        // enrollment that exists without its generation queued would sit
+        // waiting for a message nobody asked for. It deliberately does not go
+        // through `nextActionAt`/`nextActionToken`, which would route step
+        // zero into the follow-up executor — that path joins the previous
+        // step's message and has none to join.
+        await tx.insert(operatorCommands).values({
+          command: "generate-message",
+          task: "generate-message",
+          payload: { enrollmentId: created.id, stepIndex: 0 },
+          requestedBy: "operator",
+          dedupeKey: `enrollment:${created.id}:generate:0`,
         });
         return {
           ok: true,

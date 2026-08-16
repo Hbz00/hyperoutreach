@@ -1,9 +1,35 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 
 import {
+  E2E_OPERATOR_API_TOKEN,
   E2E_OPERATOR_EMAIL,
   E2E_OPERATOR_PASSWORD,
 } from "./support/environment";
+
+/**
+ * Runs one maintenance cycle, which is what executes queued operator work.
+ *
+ * Commands that take an AI turn no longer run inside the operator's request —
+ * a request cannot compete with the cycle for the single ChatGPT window, and
+ * cannot show progress in an application with no client JavaScript. So the
+ * test does what the resident worker does in production: it ticks. One tick
+ * drains one command, deliberately, so each queued command gets its own.
+ */
+async function runMaintenanceCycle(
+  browser: Awaited<ReturnType<typeof playwrightRequest.newContext>>,
+  passes = 5,
+): Promise<void> {
+  // One pass drains one queued command on purpose, so the cycle stays bounded
+  // when a command is a ten-minute research turn. Several passes stand in for
+  // the several minutes the resident worker would take.
+  for (let pass = 0; pass < passes; pass += 1) {
+    const response = await browser.post(
+      "/api/internal/workflows/reconcile?immediate=1",
+      { headers: { authorization: `Bearer ${E2E_OPERATOR_API_TOKEN}` } },
+    );
+    expect([200, 202]).toContain(response.status());
+  }
+}
 
 function hidden(html: string, name: string): string {
   const pattern = new RegExp(`name=["']${name}["'][^>]*value=["']([^"']+)["']`);
@@ -125,6 +151,7 @@ test("operates the mock outreach lifecycle through authenticated application end
       returnTo: `/prospects/${contactId}`,
     },
   });
+  await runMaintenanceCycle(browser);
   prospectDetail = await (await browser.get(`/prospects/${contactId}`)).text();
   expect(prospectDetail).toContain("Deterministic local research fixture");
   expect(prospectDetail).toContain(
@@ -196,6 +223,7 @@ test("operates the mock outreach lifecycle through authenticated application end
       })
     ).status(),
   ).toBe(303);
+  await runMaintenanceCycle(browser);
 
   let reviewHtml = await (await browser.get("/review")).text();
   expect(reviewHtml).toContain("A question for");
@@ -207,6 +235,7 @@ test("operates the mock outreach lifecycle through authenticated application end
   await browser.post("/api/operator/commands/review-message", {
     form: { csrf, messageId, reviewAction: "unexpected-action" },
   });
+  await runMaintenanceCycle(browser);
   reviewHtml = await (await browser.get("/review")).text();
   const unreviewedCard = reviewHtml
     .split('class="review-card"')
@@ -256,6 +285,7 @@ test("operates the mock outreach lifecycle through authenticated application end
   await browser.post("/api/operator/commands/generate-message", {
     form: { csrf, enrollmentId, stepIndex: "2" },
   });
+  await runMaintenanceCycle(browser);
   const afterTerminalReconcile = await (await browser.get("/review")).text();
   const terminalCards = afterTerminalReconcile
     .split('class="review-card"')
@@ -310,6 +340,7 @@ test("operates the mock outreach lifecycle through authenticated application end
   await browser.post("/api/operator/commands/generate-message", {
     form: { csrf, enrollmentId: probeEnrollmentId, stepIndex: "0" },
   });
+  await runMaintenanceCycle(browser);
   const probeReview = await (await browser.get("/review")).text();
   const probeMessageId = hiddenNear(
     probeReview,

@@ -25,6 +25,7 @@ export const MAINTENANCE_FAILURE_MESSAGES = {
   inbound: "Maintenance inbound stage failed",
   followup: "Maintenance follow-up stage failed",
   recovery: "Maintenance recovery stage failed",
+  commands: "Maintenance operator command stage failed",
   finalization: "Maintenance finalization failed",
 } as const;
 

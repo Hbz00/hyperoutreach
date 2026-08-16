@@ -14,13 +14,7 @@ import {
 } from "@/lib/operator-auth";
 import { createOrGetAccount } from "@/modules/accounts/service";
 import { createOrGetContact } from "@/modules/contacts/service";
-import {
-  contacts,
-  emailCandidates,
-  enrollments,
-  mailboxConnections,
-  messages,
-} from "@/lib/db/schema";
+import { mailboxConnections, messages, workflowEvents } from "@/lib/db/schema";
 import {
   pauseCampaign,
   resumeCampaign,
@@ -40,7 +34,9 @@ import {
   type ConnectSmtpImapMailboxResult,
 } from "@/modules/mailboxes/smtp-imap-connection-service";
 import { reviewMessage } from "@/modules/messages/review-service";
-import { createReplyClassifier } from "@/modules/replies/classifier-factory";
+import { sendOutcomeNotice } from "@/modules/messages/send-outcome";
+import type { SendMessageResult } from "@/modules/messages/send-service";
+import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
 import { ingestInboundMessage } from "@/modules/replies/inbound-service";
 import { updateOperatorSendingSettings } from "@/modules/settings/service";
 import {
@@ -48,13 +44,19 @@ import {
   removeSuppression,
 } from "@/modules/suppression/service";
 import { createWorkflowDispatcher } from "@/modules/workflows/dispatcher-factory";
+import type { QueuedOperatorCommand } from "@/modules/workflows/operator-command-policy";
+import {
+  enqueueOperatorCommand,
+  requeueOperatorCommand,
+} from "@/modules/workflows/operator-command-queue";
 
 export const runtime = "nodejs";
-// Operator commands run their workflow task inside this request, so the ceiling
-// must cover the slowest configurable AI call (MAX_AI_TIMEOUT_MS) plus a
-// transport margin; anything lower would kill a long web-research command that
-// the provider itself still considers in budget.
-export const maxDuration = 960;
+// No operator command issues an AI turn any more: the ones that would are
+// queued and drained by the maintenance cycle. What is left runs in the
+// request — an SMTP send, bounded to 150 seconds by its provider, and plain
+// database work — so the ceiling is a transport margin over that rather than
+// a window wide enough for a ten-minute research call.
+export const maxDuration = 300;
 
 const createProspectSchema = z.object({
   companyName: z.string().trim().min(1).max(300),
@@ -138,36 +140,114 @@ const CONNECT_SMTP_MAILBOX_NOTICES: Record<
     "Mailbox connection failed: the mailbox could not be saved — try again. (DATABASE_ERROR)",
 };
 
+/**
+ * Which sentences a step asks an agent to write, if any.
+ *
+ * Declared per step because a first email and a third follow-up do not need
+ * the same thing, and because the campaign version that carries it is
+ * immutable: turning personalization on is a new published version, which is
+ * what makes "this text came from that decision" answerable later.
+ */
+function stepPersonalization(formData: FormData, index: number) {
+  const fields = [
+    ...(boolean(formData, `step${index}AiOpening`)
+      ? (["personalized_opening"] as const)
+      : []),
+    ...(boolean(formData, `step${index}AiRelevance`)
+      ? (["company_relevance"] as const)
+      : []),
+  ];
+  if (fields.length === 0) return undefined;
+  const raw = Number(value(formData, `step${index}MinConfidence`) ?? "0.5");
+  return {
+    fields,
+    minConfidence: Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5,
+  };
+}
+
 function campaignSteps(formData: FormData) {
   const steps = [];
   for (let index = 0; index < 20; index += 1) {
     const subjectTemplate = value(formData, `step${index}Subject`);
     const bodyTemplate = value(formData, `step${index}Body`);
     if (!subjectTemplate && !bodyTemplate) continue;
+    const personalizationSchema = stepPersonalization(formData, index);
     steps.push({
       delayMinutes: integer(formData, `step${index}DelayMinutes`) ?? 0,
       subjectTemplate: subjectTemplate ?? "",
       bodyTemplate: bodyTemplate ?? "",
+      ...(personalizationSchema ? { personalizationSchema } : {}),
     });
   }
   return steps;
 }
 
-async function acceptedRecipient(enrollmentId: string) {
-  const [row] = await getDatabase()
-    .select({ email: emailCandidates.normalizedEmail })
-    .from(enrollments)
-    .innerJoin(contacts, eq(contacts.id, enrollments.contactId))
-    .innerJoin(
-      emailCandidates,
+/**
+ * What the send actually did, read back from the audit row the local executor
+ * just wrote. The dispatcher's contract returns a run id, not an outcome — a
+ * hosted executor could not return one — so the audit is where the answer
+ * lives. A missing row is reported as such rather than assumed successful.
+ */
+async function recordedSendOutcome(
+  runId: string,
+): Promise<SendMessageResult | undefined> {
+  // Two rows carry this run id — the dispatcher's and the executor's. Only
+  // the executor's records what the send returned.
+  const [event] = await getDatabase()
+    .select({ payload: workflowEvents.payload })
+    .from(workflowEvents)
+    .where(
       and(
-        eq(emailCandidates.contactId, contacts.id),
-        eq(emailCandidates.status, "accepted"),
+        eq(workflowEvents.runId, runId),
+        eq(workflowEvents.event, "send-approved-message.attempt"),
       ),
     )
-    .where(eq(enrollments.id, enrollmentId))
     .limit(1);
-  return row?.email ?? null;
+  const output = (event?.payload as { output?: unknown } | undefined)?.output;
+  return output && typeof output === "object"
+    ? (output as SendMessageResult)
+    : undefined;
+}
+
+/**
+ * Records AI work and hands the page straight back.
+ *
+ * These commands used to run their agent inside the request, with
+ * `maxDuration` at sixteen minutes and no way to show progress — the
+ * application ships no client JavaScript. Worse, an agent turn issued from a
+ * request competes with the maintenance cycle for the operator's single
+ * ChatGPT window, and the loser dies on a deadline it spent entirely in a
+ * queue. The notice says queued rather than done, because that is what
+ * happened.
+ */
+async function queued(
+  request: Request,
+  input: {
+    command: QueuedOperatorCommand;
+    label: string;
+    actor: string;
+    returnTo: string;
+    dedupeKey: string;
+    payload: Record<string, unknown>;
+  },
+): Promise<Response> {
+  try {
+    const enqueued = await enqueueOperatorCommand(getDatabase(), {
+      command: input.command,
+      payload: input.payload,
+      requestedBy: input.actor,
+      dedupeKey: input.dedupeKey,
+    });
+    return destination(
+      request,
+      input.returnTo,
+      enqueued.duplicate
+        ? `${input.label} is already queued`
+        : `${input.label} queued — it runs on the next maintenance pass`,
+    );
+  } catch {
+    return destination(request, input.returnTo, `${input.label} not queued`);
+  }
 }
 
 export async function POST(
@@ -247,26 +327,20 @@ export async function POST(
     const icp = value(formData, "icp");
     const limit = integer(formData, "limit") ?? 10;
     if (!icp) return destination(request, "/prospects", "ICP is required");
-    try {
-      const result = await createWorkflowDispatcher().dispatch({
-        task: "account-discovery",
-        payload: {
-          icp,
-          limit,
-          countries: list(formData, "countries"),
-          industries: list(formData, "industries"),
-          requiredSignals: list(formData, "requiredSignals"),
-        },
-        idempotencyKey: `ui:account-discovery:${value(formData, "requestToken") ?? randomUUID()}`,
-      });
-      return destination(
-        request,
-        "/prospects",
-        result.duplicate ? "Discovery already queued" : "Discovery executed",
-      );
-    } catch {
-      return destination(request, "/prospects", "Discovery failed safely");
-    }
+    return queued(request, {
+      command: "discover-accounts",
+      label: "Account discovery",
+      actor: session.email,
+      returnTo: "/prospects",
+      dedupeKey: `ui:account-discovery:${value(formData, "requestToken") ?? randomUUID()}`,
+      payload: {
+        icp,
+        limit,
+        countries: list(formData, "countries"),
+        industries: list(formData, "industries"),
+        requiredSignals: list(formData, "requiredSignals"),
+      },
+    });
   }
 
   if (command === "research-account") {
@@ -274,24 +348,14 @@ export async function POST(
     if (!uuidSchema.safeParse(accountId).success) {
       return destination(request, "/prospects", "Invalid account");
     }
-    try {
-      await createWorkflowDispatcher().dispatch({
-        task: "account-research",
-        payload: { accountId: accountId!, force: boolean(formData, "force") },
-        idempotencyKey: `ui:account-research:${accountId}:${value(formData, "requestToken") ?? randomUUID()}`,
-      });
-      return destination(
-        request,
-        value(formData, "returnTo") ?? "/prospects",
-        "Account research executed",
-      );
-    } catch {
-      return destination(
-        request,
-        value(formData, "returnTo") ?? "/prospects",
-        "Account research failed safely",
-      );
-    }
+    return queued(request, {
+      command: "research-account",
+      label: "Account research",
+      actor: session.email,
+      returnTo: value(formData, "returnTo") ?? "/prospects",
+      dedupeKey: `ui:account-research:${accountId}:${value(formData, "requestToken") ?? randomUUID()}`,
+      payload: { accountId: accountId!, force: boolean(formData, "force") },
+    });
   }
 
   if (command === "discover-contacts") {
@@ -304,28 +368,18 @@ export async function POST(
         "Invalid contact discovery input",
       );
     }
-    try {
-      await createWorkflowDispatcher().dispatch({
-        task: "contact-discovery",
-        payload: {
-          accountId: accountId!,
-          roles,
-          limit: integer(formData, "limit") ?? 10,
-        },
-        idempotencyKey: `ui:contact-discovery:${accountId}:${value(formData, "requestToken") ?? randomUUID()}`,
-      });
-      return destination(
-        request,
-        value(formData, "returnTo") ?? "/prospects",
-        "Contact discovery executed",
-      );
-    } catch {
-      return destination(
-        request,
-        value(formData, "returnTo") ?? "/prospects",
-        "Contact discovery failed safely",
-      );
-    }
+    return queued(request, {
+      command: "discover-contacts",
+      label: "Contact discovery",
+      actor: session.email,
+      returnTo: value(formData, "returnTo") ?? "/prospects",
+      dedupeKey: `ui:contact-discovery:${accountId}:${value(formData, "requestToken") ?? randomUUID()}`,
+      payload: {
+        accountId: accountId!,
+        roles,
+        limit: integer(formData, "limit") ?? 10,
+      },
+    });
   }
 
   if (command === "resolve-email") {
@@ -333,29 +387,19 @@ export async function POST(
     if (!uuidSchema.safeParse(contactId).success) {
       return destination(request, "/prospects", "Invalid contact");
     }
-    try {
-      await createWorkflowDispatcher().dispatch({
-        task: "email-resolution",
-        payload: {
-          contactId: contactId!,
-          confidenceThreshold: Number(
-            value(formData, "confidenceThreshold") ?? "0.85",
-          ),
-        },
-        idempotencyKey: `ui:email-resolution:${contactId}:${value(formData, "requestToken") ?? randomUUID()}`,
-      });
-      return destination(
-        request,
-        `/prospects/${contactId}`,
-        "Email resolution executed",
-      );
-    } catch {
-      return destination(
-        request,
-        `/prospects/${contactId}`,
-        "Email resolution failed safely",
-      );
-    }
+    return queued(request, {
+      command: "resolve-email",
+      label: "Email resolution",
+      actor: session.email,
+      returnTo: `/prospects/${contactId}`,
+      dedupeKey: `ui:email-resolution:${contactId}:${value(formData, "requestToken") ?? randomUUID()}`,
+      payload: {
+        contactId: contactId!,
+        confidenceThreshold: Number(
+          value(formData, "confidenceThreshold") ?? "0.85",
+        ),
+      },
+    });
   }
 
   if (command === "accept-manual-email") {
@@ -381,7 +425,13 @@ export async function POST(
       type: type.success ? type.data : undefined,
       targetDescription: value(formData, "targetDescription"),
       configuration: {
-        reviewMode: value(formData, "reviewMode") ?? "manual",
+        // Passed through on purpose so the schema can refuse it out loud. The
+        // key is not a setting any more, and a request still carrying it is
+        // asking for something this build does not do — silently dropping it
+        // would let the caller believe otherwise.
+        ...(formData.has("reviewMode")
+          ? { reviewMode: value(formData, "reviewMode") }
+          : {}),
         automaticFollowUps: boolean(formData, "automaticFollowUps"),
         holdNonTerminalReplies: boolean(formData, "holdNonTerminalReplies"),
         requireProfessionalRelevance: boolean(
@@ -407,7 +457,13 @@ export async function POST(
       campaignId,
       baseVersionId: value(formData, "campaignVersionId"),
       configuration: {
-        reviewMode: value(formData, "reviewMode") ?? "manual",
+        // Passed through on purpose so the schema can refuse it out loud. The
+        // key is not a setting any more, and a request still carrying it is
+        // asking for something this build does not do — silently dropping it
+        // would let the caller believe otherwise.
+        ...(formData.has("reviewMode")
+          ? { reviewMode: value(formData, "reviewMode") }
+          : {}),
         automaticFollowUps: boolean(formData, "automaticFollowUps"),
         holdNonTerminalReplies: boolean(formData, "holdNonTerminalReplies"),
         requireProfessionalRelevance: boolean(
@@ -477,7 +533,7 @@ export async function POST(
       result.ok
         ? result.disposition === "existing"
           ? "Contact already enrolled"
-          : "Contact enrolled"
+          : "Contact enrolled — their first message is queued for the next maintenance pass"
         : result.message,
     );
   }
@@ -501,27 +557,19 @@ export async function POST(
     if (!uuidSchema.safeParse(enrollmentId).success) {
       return destination(request, "/review", "Invalid enrollment");
     }
-    const recipient = await acceptedRecipient(enrollmentId!);
-    if (!recipient)
-      return destination(
-        request,
-        "/review",
-        "No accepted email for this contact",
-      );
-    try {
-      await createWorkflowDispatcher().dispatch({
-        task: "generate-message",
-        payload: { enrollmentId: enrollmentId!, stepIndex, recipient },
-        idempotencyKey: `ui:generate:${enrollmentId}:${stepIndex}`,
-      });
-      return destination(request, "/review", "Message generated");
-    } catch {
-      return destination(
-        request,
-        "/review",
-        "Message generation failed safely",
-      );
-    }
+    // The recipient is resolved when the work runs, not here: a prospect whose
+    // address is still being resolved is something to wait for, not an error
+    // to show. The old key was `ui:generate:<enrollment>:<step>` with no
+    // request token, so every later attempt on the same step deduplicated into
+    // a permanent no-op.
+    return queued(request, {
+      command: "generate-message",
+      label: "Message generation",
+      actor: session.email,
+      returnTo: "/review",
+      dedupeKey: `ui:generate:${enrollmentId}:${stepIndex}:${value(formData, "requestToken") ?? randomUUID()}`,
+      payload: { enrollmentId: enrollmentId!, stepIndex },
+    });
   }
 
   if (command === "review-message") {
@@ -567,7 +615,7 @@ export async function POST(
     if (!uuidSchema.safeParse(messageId).success)
       return destination(request, "/review", "Invalid message");
     try {
-      await createWorkflowDispatcher().dispatch({
+      const dispatched = await createWorkflowDispatcher().dispatch({
         task: "send-approved-message",
         payload: { messageId: messageId! },
         // Per rendered form, like every other operator command: a send the
@@ -577,10 +625,29 @@ export async function POST(
         // The send service's own claim keeps concurrent clicks safe.
         idempotencyKey: `ui:send:${messageId}:${value(formData, "requestToken") ?? randomUUID()}`,
       });
-      return destination(request, "/review", "Send execution completed");
+      return destination(
+        request,
+        "/review",
+        sendOutcomeNotice(await recordedSendOutcome(dispatched.runId)),
+      );
     } catch {
       return destination(request, "/review", "Send execution failed safely");
     }
+  }
+
+  if (command === "retry-command") {
+    const commandId = value(formData, "commandId");
+    if (!uuidSchema.safeParse(commandId).success) {
+      return destination(request, "/outbound", "Invalid command");
+    }
+    const requeued = await requeueOperatorCommand(db, { id: commandId! });
+    return destination(
+      request,
+      "/outbound",
+      requeued
+        ? "Queued again — it runs on the next maintenance pass"
+        : "That command is not waiting for a retry",
+    );
   }
 
   if (command === "reconcile-followups") {
@@ -624,19 +691,29 @@ export async function POST(
     ) {
       return destination(request, "/inbox", "Outbound message not found");
     }
-    const result = await ingestInboundMessage(db, createReplyClassifier(), {
-      mailboxId: outbound.mailbox.id,
-      providerMessageId: `mock_reply_${randomUUID()}`,
-      outreachId: outbound.message.outreachId ?? undefined,
-      conversationId: outbound.message.conversationId ?? undefined,
-      inReplyTo: outbound.message.internetMessageId ?? undefined,
-      sender: outbound.message.recipient,
-      recipient: outbound.mailbox.email,
-      subject: value(formData, "subject") ?? `Re: ${outbound.message.subject}`,
-      body: value(formData, "body") ?? "",
-      receivedAt: new Date(),
-      metadata: { injectedBy: session.email },
-    });
+    // The injector runs in the request, so it uses the deterministic
+    // classifier rather than the configured one. A live classification here
+    // would take a turn on the operator's ChatGPT window while the maintenance
+    // cycle may be holding it, and a turn's deadline counts its queue wait —
+    // one of the two would die. Determinism is also what a test injector wants.
+    const result = await ingestInboundMessage(
+      db,
+      new DeterministicReplyClassifier(),
+      {
+        mailboxId: outbound.mailbox.id,
+        providerMessageId: `mock_reply_${randomUUID()}`,
+        outreachId: outbound.message.outreachId ?? undefined,
+        conversationId: outbound.message.conversationId ?? undefined,
+        inReplyTo: outbound.message.internetMessageId ?? undefined,
+        sender: outbound.message.recipient,
+        recipient: outbound.mailbox.email,
+        subject:
+          value(formData, "subject") ?? `Re: ${outbound.message.subject}`,
+        body: value(formData, "body") ?? "",
+        receivedAt: new Date(),
+        metadata: { injectedBy: session.email },
+      },
+    );
     return destination(
       request,
       "/inbox",
@@ -677,16 +754,14 @@ export async function POST(
     const mailboxId = value(formData, "mailboxId");
     if (!uuidSchema.safeParse(mailboxId).success)
       return destination(request, "/settings", "Invalid mailbox");
-    try {
-      await createWorkflowDispatcher().dispatch({
-        task: "reconcile-inbound-mailbox",
-        payload: { mailboxId: mailboxId! },
-        idempotencyKey: `ui:inbound-sync:${mailboxId}:${randomUUID()}`,
-      });
-      return destination(request, "/settings", "Mailbox sync executed");
-    } catch {
-      return destination(request, "/settings", "Mailbox sync failed safely");
-    }
+    return queued(request, {
+      command: "sync-mailbox",
+      label: "Mailbox sync",
+      actor: session.email,
+      returnTo: "/settings",
+      dedupeKey: `ui:inbound-sync:${mailboxId}:${randomUUID()}`,
+      payload: { mailboxId: mailboxId! },
+    });
   }
 
   if (command === "disconnect-mailbox") {

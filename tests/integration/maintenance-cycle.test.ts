@@ -102,6 +102,7 @@ function stages(
     "reconcile-inbound-mailboxes": vi.fn(async () => ({ processed: 0 })),
     "reconcile-due-follow-ups": vi.fn(async () => []),
     "recover-stale-work": vi.fn(async () => ({ recovered: 0 })),
+    "drain-operator-commands": vi.fn(async () => []),
     ...overrides,
   };
 }

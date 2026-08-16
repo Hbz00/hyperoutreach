@@ -12,6 +12,7 @@ import {
   suppressionEntries,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { readEditFreeStreaks } from "@/modules/campaigns/edit-streak";
 import { resolveAIProviderConfig } from "@/lib/ai/provider-config";
 import { getProviderPresentation } from "@/modules/settings/provider-presentation";
 import { resolveWorkflowProvider } from "@/modules/workflows/provider-config";
@@ -35,6 +36,7 @@ export default async function DashboardPage() {
     [{ count: followUpCount = 0 } = { count: 0 }],
     [{ count: replyCount = 0 } = { count: 0 }],
     [{ count: suppressionCount = 0 } = { count: 0 }],
+    editFreeStreaks,
   ] = await Promise.all([
     db
       .select({
@@ -70,6 +72,7 @@ export default async function DashboardPage() {
       ),
     countRows(replies),
     countRows(suppressionEntries),
+    readEditFreeStreaks(db),
   ]);
   const liveMailboxes = mailboxes.filter(
     (mailbox) => mailbox.provider !== "mock" && mailbox.status === "available",
@@ -190,6 +193,44 @@ export default async function DashboardPage() {
           <span className="metric-value">{suppressionCount}</span>
           <small>Checked immediately before every send</small>
         </Link>
+      </section>
+      <section className="panel">
+        <h2>Review is still changing the outcome</h2>
+        <p className="muted">
+          Consecutive approvals where you changed nothing, per published
+          campaign version. A long unbroken run is the evidence — and the only
+          evidence this product has — that reading each first email has stopped
+          altering what goes out. One rewrite restarts the count.
+        </p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Campaign</th>
+                <th>Version</th>
+                <th>Approved without a rewrite</th>
+                <th>Approvals</th>
+              </tr>
+            </thead>
+            <tbody>
+              {editFreeStreaks.map((row) => (
+                <tr key={`${row.campaignId}-${row.version}`}>
+                  <td>{row.campaignName}</td>
+                  <td>v{row.version}</td>
+                  <td>{row.streak} in a row</td>
+                  <td>{row.total}</td>
+                </tr>
+              ))}
+              {editFreeStreaks.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="empty">
+                    Nothing approved yet.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
   );

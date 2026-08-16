@@ -57,4 +57,23 @@ describe("self-hosted maintenance tick", () => {
       }),
     );
   });
+
+  // The minute key silently swallows a cycle asked for on demand inside a
+  // minute the scheduler already used, which reads exactly like a cycle that
+  // ran and found nothing. An explicit request is not a duplicate firing.
+  it("does not deduplicate a cycle asked for on demand", async () => {
+    const { dispatcher, dispatch } = recordingDispatcher();
+
+    await dispatchMaintenanceTick(dispatcher, now, { immediate: true });
+    await dispatchMaintenanceTick(dispatcher, now, { immediate: true });
+
+    const keys = dispatch.mock.calls.map(
+      ([request]) => (request as { idempotencyKey: string }).idempotencyKey,
+    );
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    for (const key of keys) {
+      expect(key).not.toBe("maintenance:cycle:2026-08-14T10:42");
+    }
+  });
 });

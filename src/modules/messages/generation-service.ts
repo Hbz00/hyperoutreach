@@ -7,6 +7,7 @@ import {
   accounts,
   contacts,
   enrollments,
+  messagePersonalizationFields,
   messages,
   sequenceSteps,
   stateTransitions,
@@ -16,11 +17,33 @@ import type { AppDatabase } from "@/lib/db/types";
 import { normalizeEmail } from "@/modules/prospects/normalization";
 import { interpolateStrict } from "@/modules/messages/interpolation";
 
+/**
+ * Sentences an agent already wrote and that provenance already validated. The
+ * generator interpolates them like any other field; it never calls an agent
+ * itself, because an agent turn must not be held inside the transaction that
+ * writes the message.
+ */
+const resolvedPersonalizationSchema = z.object({
+  agentRunId: z.uuid().nullable().optional(),
+  fields: z
+    .array(
+      z.object({
+        name: z.enum(["company_relevance", "personalized_opening"]),
+        value: z.string().trim().min(1),
+        confidence: z.number().min(0).max(1),
+        sourceUrls: z.array(z.string()).default([]),
+      }),
+    )
+    .min(1)
+    .max(2),
+});
+
 const generationInputSchema = z.object({
   enrollmentId: z.uuid(),
   stepIndex: z.number().int().min(0),
   recipient: z.string().trim().min(1),
   workflowClaimId: z.uuid().optional(),
+  personalization: resolvedPersonalizationSchema.optional(),
 });
 
 type Message = typeof messages.$inferSelect;
@@ -171,11 +194,18 @@ export async function generateOutreachProposal(
         } as const;
       }
 
+      const personalization = parsed.data.personalization;
       const values = {
         first_name: context.firstName,
         last_name: context.lastName,
         company: context.company,
         job_title: context.jobTitle,
+        ...Object.fromEntries(
+          (personalization?.fields ?? []).map((field) => [
+            field.name,
+            field.value,
+          ]),
+        ),
       };
       const subject = interpolateStrict(context.subjectTemplate, values);
       const body = interpolateStrict(context.bodyTemplate, values);
@@ -206,6 +236,18 @@ export async function generateOutreachProposal(
         })
         .returning();
       if (!message) throw new Error("Message insert returned no row");
+      if (personalization) {
+        await tx.insert(messagePersonalizationFields).values(
+          personalization.fields.map((field) => ({
+            messageId: message.id,
+            name: field.name,
+            value: field.value,
+            confidence: field.confidence.toFixed(3),
+            sourceUrls: field.sourceUrls,
+            agentRunId: personalization.agentRunId ?? null,
+          })),
+        );
+      }
       await tx.insert(stateTransitions).values({
         entityType: "message",
         entityId: message.id,

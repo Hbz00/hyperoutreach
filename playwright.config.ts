@@ -17,6 +17,11 @@ const origin = `http://127.0.0.1:${port}`;
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
+  // These specs share one database, one mailbox set, and one maintenance
+  // singleton. Two files asking for a cycle at the same moment means one of
+  // them loses the lease and its queued operator work is never drained. They
+  // were never parallel-safe; this says so instead of relying on luck.
+  workers: 1,
   retries: process.env.CI ? 2 : 0,
   reporter: "html",
   use: {

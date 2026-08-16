@@ -39,6 +39,7 @@ import { isTerminalEnrollmentState } from "@/modules/campaigns/enrollment-state"
 import { DEFAULT_INBOUND_WORKFLOW_NAME } from "@/modules/mailboxes/inbound-reconciliation";
 import { GRAPH_DELTA_HEALTH_WORKFLOW_NAME } from "@/modules/mailboxes/microsoft-graph-inbound-naming";
 import { markMailboxAuthenticationFailed } from "@/modules/mailboxes/lifecycle-service";
+import { sendBlockNotice } from "@/modules/messages/send-block-notice";
 import { evaluateSendPolicy } from "@/modules/messages/send-policy";
 import type { SendPolicyBlockCode } from "@/modules/messages/send-policy";
 import { isWithinWorkingHours } from "@/modules/settings/service";
@@ -224,7 +225,7 @@ async function revokeMailboxOnAuthFailure(
 }
 
 function providerBindingCode(
-  provider: MailProvider,
+  providerKind: MailProviderKind,
   mailbox: {
     id: string | null;
     provider: MailProviderKind | null;
@@ -233,15 +234,24 @@ function providerBindingCode(
   requireAvailable = true,
 ): "MAILBOX_UNAVAILABLE" | "MAILBOX_PROVIDER_MISMATCH" | null {
   if (!mailbox.id) {
-    return provider.kind === "mock" ? null : "MAILBOX_UNAVAILABLE";
+    return providerKind === "mock" ? null : "MAILBOX_UNAVAILABLE";
   }
-  if (mailbox.provider !== provider.kind) return "MAILBOX_PROVIDER_MISMATCH";
+  if (mailbox.provider !== providerKind) return "MAILBOX_PROVIDER_MISMATCH";
   if (requireAvailable && mailbox.status !== "available") {
     return "MAILBOX_UNAVAILABLE";
   }
   return null;
 }
 
+/**
+ * A refusal has to leave two traces: an audit row, and a sentence on the
+ * message itself, because `messages.last_error` is the only thing the review
+ * card renders. That second write is also what rotates the recovery lane — a
+ * refusal taken inside the claim transaction updates no row at all, so without
+ * it the oldest permanently-refused message holds the single actionable slot
+ * forever. The database trigger turns this UPDATE into a fresh `updated_at`;
+ * writing that value here would be discarded.
+ */
 async function recordBlocked(
   db: AppDatabase,
   messageId: string,
@@ -255,12 +265,21 @@ async function recordBlocked(
       entityId: messageId,
       event: "message.send_blocked",
       workflowName: "send_message",
-      idempotencyKey: `send:${messageId}:blocked:${code}`,
+      // No idempotency key on purpose. This row is the record of one refusal,
+      // not an operation to run at most once: a key of
+      // `send:<id>:blocked:<code>` collapsed every later refusal of the same
+      // cause into the first, so an audit could not answer whether a block was
+      // still happening.
+      idempotencyKey: null,
       status: "skipped",
       completedAt: now,
       payload: { code },
     })
     .onConflictDoNothing();
+  await db
+    .update(messages)
+    .set({ lastError: sendBlockNotice(code) })
+    .where(eq(messages.id, messageId));
 }
 
 async function recordProviderFailure(
@@ -306,6 +325,11 @@ async function recordProviderFailure(
           status: safeStatus,
           sendAttemptToken: null,
           sendClaimedAt: null,
+          // A non-null request clock means "a send is still in flight". Going
+          // back to `approved` ends that flight, so the clock goes with it;
+          // a release into `drafted` keeps it, because the worker is still
+          // allowed to finish that same request inside its window.
+          ...(safeStatus === "approved" ? { sendRequestedAt: null } : {}),
           lastError: "Mail provider operation failed",
         })
         .where(eq(messages.id, messageId));
@@ -707,9 +731,37 @@ async function reconcileProvider(
 
 type Transaction = Parameters<Parameters<AppDatabase["transaction"]>[0]>[0];
 
+/**
+ * What the send policy would answer for this message right now, without
+ * claiming it, touching it, or contacting anything. The review queue shows it
+ * so an operator can tell a message that will go out from one that will be
+ * refused *before* clicking, instead of after.
+ *
+ * It takes the mailbox's provider kind rather than a built provider: the
+ * policy only ever compares kinds, and constructing a real provider to render
+ * a page would need credentials and can fail closed on a disconnected mailbox.
+ * Returns `null` when the message is gone.
+ */
+export async function readSendPolicyVerdict(
+  db: AppDatabase,
+  messageId: string,
+  providerKind: MailProviderKind,
+  now: Date = new Date(),
+): Promise<ReturnType<typeof evaluateSendPolicy> | null> {
+  return db.transaction(async (tx) => {
+    const stored = await evaluateStoredSendPolicy(
+      tx,
+      providerKind,
+      messageId,
+      now,
+    );
+    return stored.kind === "not_found" ? null : stored.result;
+  });
+}
+
 async function evaluateStoredSendPolicy(
   tx: Transaction,
-  provider: MailProvider,
+  providerKind: MailProviderKind,
   messageId: string,
   now: Date,
 ): Promise<
@@ -784,7 +836,7 @@ async function evaluateStoredSendPolicy(
     }
   }
 
-  const bindingCode = providerBindingCode(provider, {
+  const bindingCode = providerBindingCode(providerKind, {
     id: context.mailboxId,
     provider: context.mailboxProvider,
     status: context.mailboxStatus,
@@ -1147,7 +1199,7 @@ export async function sendApprovedMessage(
         context.message.sendAttemptToken
       ) {
         const identityCode = providerBindingCode(
-          provider,
+          provider.kind,
           {
             id: context.mailboxId,
             provider: context.mailboxProvider,
@@ -1173,7 +1225,7 @@ export async function sendApprovedMessage(
 
       const storedPolicy = await evaluateStoredSendPolicy(
         tx,
-        provider,
+        provider.kind,
         messageId,
         now,
       );
@@ -1186,12 +1238,20 @@ export async function sendApprovedMessage(
       const nextStatus = context.message.providerDraftId
         ? "sending"
         : "draft_creating";
+      // `approved` is the only status a send request can start from: the
+      // review card's button renders on it, and the automatic follow-up path
+      // approves before it sends. Recovery, by contrast, only ever claims from
+      // `drafted`/`draft_creating`/`sending`. So the pre-claim status is the
+      // origin discriminator, and it needs no extra plumbing to read: a
+      // request stamps the clock, a resumption leaves it alone.
+      const requested = context.message.status === "approved";
       const [updated] = await tx
         .update(messages)
         .set({
           status: nextStatus,
           sendAttemptToken: claimToken,
           sendClaimedAt: now,
+          ...(requested ? { sendRequestedAt: now } : {}),
         })
         .where(eq(messages.id, messageId))
         .returning();
@@ -1260,7 +1320,7 @@ export async function sendApprovedMessage(
       // credential-free `mock` provider path (no mailbox at all) exempt,
       // so this can never fire for those tests.
       const availabilityCode = providerBindingCode(
-        provider,
+        provider.kind,
         {
           id: claimed.mailboxId,
           provider: claimed.mailboxProvider,
@@ -1526,6 +1586,9 @@ export async function sendApprovedMessage(
                 : current.providerDraftId,
             sendAttemptToken: null,
             sendClaimedAt: null,
+            // Same rule as every other return to `approved`: a non-null
+            // request clock means a send is still in flight, and this ends it.
+            ...(releasedStatus === "approved" ? { sendRequestedAt: null } : {}),
           })
           .where(eq(messages.id, messageId));
         const reason =
@@ -1810,7 +1873,7 @@ export async function sendApprovedMessage(
             }
             const storedPolicy = await evaluateStoredSendPolicy(
               tx,
-              provider,
+              provider.kind,
               messageId,
               finalNow,
             );

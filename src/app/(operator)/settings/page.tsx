@@ -1,6 +1,11 @@
 import { desc } from "drizzle-orm";
 
 import maintenanceConfig from "../../../../config/maintenance.json";
+import {
+  agentRunCost,
+  agentRunDuration,
+} from "@/modules/settings/agent-run-presentation";
+import { probeAiSurface } from "@/modules/settings/ai-surface-health";
 import { getDatabase } from "@/lib/db/client";
 import {
   agentRuns,
@@ -34,6 +39,7 @@ export default async function SettingsPage({
   const db = getDatabase();
   const [
     aiProvider,
+    aiSurface,
     settings,
     suppressions,
     mailboxes,
@@ -43,6 +49,7 @@ export default async function SettingsPage({
     maintenanceRows,
   ] = await Promise.all([
     resolveProviderPresentation(process.env),
+    probeAiSurface(),
     getOperatorSendingSettings(db),
     listSuppressions(db, {}),
     db
@@ -143,6 +150,10 @@ export default async function SettingsPage({
           <div>
             <dt>Non-web model</dt>
             <dd>{aiProvider.nonWebModel}</dd>
+          </div>
+          <div>
+            <dt>AI surface</dt>
+            <dd>{aiSurface.detail}</dd>
           </div>
           <div>
             <dt>Mail provider fallback</dt>
@@ -573,7 +584,11 @@ export default async function SettingsPage({
         </div>
       </section>
       <details className="panel">
-        <summary>Workflow and provider failures</summary>
+        <summary>Automation activity</summary>
+        <p className="muted">
+          Every workflow attempt and every AI run, successes included — not only
+          failures.
+        </p>
         <h3>Workflow events</h3>
         {workflows.map((event) => (
           <details className="audit-row" key={event.id}>
@@ -601,9 +616,45 @@ export default async function SettingsPage({
             </pre>
           </details>
         ))}
-        <h3>Agent runs</h3>
+        <h3>AI runs</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Agent</th>
+                <th>Lane</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((run) => (
+                <tr key={run.id}>
+                  <td>{run.createdAt.toISOString()}</td>
+                  <td>{run.agent}</td>
+                  <td>{run.model}</td>
+                  <td>
+                    {run.error ? `${run.status} — ${run.error}` : run.status}
+                  </td>
+                  <td>{agentRunDuration(run.startedAt, run.completedAt)}</td>
+                  <td>{agentRunCost(run.costAvailability, run.costUsd)}</td>
+                </tr>
+              ))}
+              {runs.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="empty">
+                    No AI runs recorded.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <h3>AI run detail</h3>
         {runs.map((run) => (
-          <details className="audit-row" key={run.id}>
+          <details className="audit-row" key={`detail-${run.id}`}>
             <summary>
               {run.createdAt.toISOString()} {run.agent}/{run.model} ·{" "}
               {run.status}
@@ -617,10 +668,6 @@ export default async function SettingsPage({
                   input: run.input,
                   output: run.output,
                   sources: run.sources,
-                  tokenUsage: run.tokenUsage,
-                  toolUsage: run.toolUsage,
-                  costAvailability: run.costAvailability,
-                  costUsd: run.costUsd,
                   startedAt: run.startedAt,
                   completedAt: run.completedAt,
                   error: run.error,

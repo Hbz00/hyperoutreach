@@ -17,13 +17,28 @@ export type MaintenanceCycleStages = Pick<
   | "reconcile-inbound-mailboxes"
   | "reconcile-due-follow-ups"
   | "recover-stale-work"
->;
+> & {
+  /**
+   * Work an operator asked for, run here rather than in their request. Last on
+   * purpose: it is the only stage whose duration is chosen by the operator,
+   * and the three ahead of it keep the mailbox, the sequence and the send
+   * queue moving on every tick regardless.
+   */
+  "drain-operator-commands": (payload: {
+    observedAt?: string;
+  }) => Promise<unknown>;
+};
 
 export type MaintenanceCycleResult =
   | { status: "busy" }
   | {
       status: "succeeded";
-      stages: { inbound: unknown; followups: unknown; recovery: unknown };
+      stages: {
+        inbound: unknown;
+        followups: unknown;
+        recovery: unknown;
+        commands: unknown;
+      };
     };
 
 export type MaintenanceCycleOptions = {
@@ -126,6 +141,9 @@ export async function runMaintenanceCycle(
     if (!(await renewLease())) return { status: "busy" };
     currentStage = "recovery";
     const recovery = await stages["recover-stale-work"](stagePayload);
+    if (!(await renewLease())) return { status: "busy" };
+    currentStage = "commands";
+    const commands = await stages["drain-operator-commands"](stagePayload);
     currentStage = "finalization";
     const completedAt = clock();
     const [completed] = await db
@@ -146,7 +164,7 @@ export async function runMaintenanceCycle(
     if (!completed) return { status: "busy" };
     return {
       status: "succeeded",
-      stages: { inbound, followups, recovery },
+      stages: { inbound, followups, recovery, commands },
     };
   } catch {
     const failedAt = clock();

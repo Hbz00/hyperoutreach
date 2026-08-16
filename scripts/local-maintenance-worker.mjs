@@ -21,6 +21,22 @@ function sanitizedMessage(error, token) {
   return token ? raw.replaceAll(token, "[redacted]") : raw;
 }
 
+// The health payload already carries a machine-readable reason. Repeating it in
+// the timeout message keeps the operator from having to probe the endpoint by
+// hand to learn why the application never came up.
+async function healthFailureReason(result) {
+  try {
+    const body = await result.json();
+    if (body?.schema === "outdated") {
+      return `database schema is outdated (${body.appliedMigrations}/${body.expectedMigrations} migrations applied); run npm run db:migrate`;
+    }
+    if (body?.database === "unreachable") return "database is unreachable";
+  } catch {
+    // A health response without a JSON body carries no extra detail.
+  }
+  return undefined;
+}
+
 export function createLocalMaintenanceWorker(options) {
   const { config } = options;
   if (config.mode !== "enabled") {
@@ -49,6 +65,7 @@ export function createLocalMaintenanceWorker(options) {
 
   async function waitForHealth() {
     const deadline = now() + config.healthWaitTimeoutMs;
+    let lastReason;
 
     while (!stopped) {
       const remainingMs = deadline - now();
@@ -65,6 +82,7 @@ export function createLocalMaintenanceWorker(options) {
           signal: healthController.signal,
         });
         if (result.ok) return;
+        lastReason = await healthFailureReason(result);
       } catch (error) {
         if (stopped && aborted(error)) return;
       } finally {
@@ -82,7 +100,9 @@ export function createLocalMaintenanceWorker(options) {
 
     if (stopped) return;
     throw new Error(
-      `Application health check did not succeed within ${config.healthWaitTimeoutMs}ms`,
+      `Application health check did not succeed within ${config.healthWaitTimeoutMs}ms${
+        lastReason ? `: ${lastReason}` : ""
+      }`,
     );
   }
 

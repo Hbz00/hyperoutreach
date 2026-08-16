@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import maintenanceConfig from "../../config/maintenance.json";
+
 import {
   TestWorkflowDispatcher,
   TriggerWorkflowDispatcher,
@@ -54,7 +56,11 @@ describe("workflow dispatcher contracts", () => {
     ]);
     for (const definition of Object.values(WORKFLOW_TASKS)) {
       expect(definition.maxDuration).toBeGreaterThanOrEqual(30);
-      expect(definition.maxDuration).toBeLessThanOrEqual(840);
+      // Read from the shared timing contract rather than repeated here, so a
+      // budget change cannot leave this bound silently stale.
+      expect(definition.maxDuration).toBeLessThanOrEqual(
+        maintenanceConfig.aggregateBudgetMs / 1_000,
+      );
       expect(definition.retry.maxAttempts).toBeGreaterThanOrEqual(1);
       expect(definition.retry.maxAttempts).toBeLessThanOrEqual(5);
     }

@@ -3,10 +3,11 @@
   "stageMaximumsMs": {
     "inbound": 300000,
     "followups": 180000,
-    "recovery": 300000
+    "recovery": 300000,
+    "commands": 600000
   },
   "transportMarginMs": 60000,
-  "aggregateBudgetMs": 840000,
+  "aggregateBudgetMs": 1500000,
   "heartbeatIntervalMs": 30000,
   "staleLeaseMs": 120000,
   "workerShutdownGraceMs": 30000,

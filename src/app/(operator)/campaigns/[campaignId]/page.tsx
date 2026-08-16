@@ -13,6 +13,19 @@ import {
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
 
+/** What a stored step already asks the agent to write. */
+function declaredFields(step: { personalizationSchema: unknown }): string[] {
+  const declared = step.personalizationSchema as { fields?: unknown };
+  return Array.isArray(declared?.fields) ? (declared.fields as string[]) : [];
+}
+
+function minConfidence(step: { personalizationSchema: unknown }): number {
+  const declared = step.personalizationSchema as { minConfidence?: unknown };
+  return typeof declared?.minConfidence === "number"
+    ? declared.minConfidence
+    : 0.5;
+}
+
 export default async function CampaignDetailPage({
   params,
   searchParams,
@@ -149,15 +162,6 @@ export default async function CampaignDetailPage({
           />
           <div className="form-grid">
             <label>
-              Review mode
-              <select
-                name="reviewMode"
-                defaultValue={String(config.reviewMode ?? "manual")}
-              >
-                <option value="manual">Manual</option>
-              </select>
-            </label>
-            <label>
               Daily cap
               <input
                 name="campaignDailyCap"
@@ -217,6 +221,39 @@ export default async function CampaignDetailPage({
                     name={`step${step.stepIndex}Body`}
                     rows={4}
                     defaultValue={step.bodyTemplate}
+                  />
+                </label>
+                <label className="span-all check">
+                  <input
+                    type="checkbox"
+                    name={`step${step.stepIndex}AiOpening`}
+                    defaultChecked={declaredFields(step).includes(
+                      "personalized_opening",
+                    )}
+                  />
+                  AI-written opening sentence — reference it as{" "}
+                  <code>{"{{personalized_opening}}"}</code>
+                </label>
+                <label className="span-all check">
+                  <input
+                    type="checkbox"
+                    name={`step${step.stepIndex}AiRelevance`}
+                    defaultChecked={declaredFields(step).includes(
+                      "company_relevance",
+                    )}
+                  />
+                  AI-written company relevance — reference it as{" "}
+                  <code>{"{{company_relevance}}"}</code>
+                </label>
+                <label>
+                  Minimum AI confidence
+                  <input
+                    name={`step${step.stepIndex}MinConfidence`}
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    defaultValue={minConfidence(step)}
                   />
                 </label>
               </div>

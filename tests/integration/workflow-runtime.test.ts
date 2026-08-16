@@ -347,6 +347,9 @@ describe("durable workflow execution audit", () => {
         contactAccountId: account!.id,
         employmentVersion: 1,
         status: "drafted",
+        // A `drafted` message is only actionable while the send somebody asked
+        // for is still inside its completion window.
+        sendRequestedAt: new Date(now.getTime() - 60_000),
       })
       .returning({ id: schema.messages.id });
 
@@ -430,6 +433,10 @@ describe("durable workflow execution audit", () => {
           contactAccountId: account!.id,
           employmentVersion: 1,
           status,
+          // Only a `drafted` row carries a request: `approved` is the state a
+          // message rests in precisely because nobody has asked yet.
+          sendRequestedAt:
+            status === "drafted" ? new Date(now.getTime() - 60_000) : null,
         })
         .returning({ id: schema.messages.id });
       return row!.id;
@@ -690,6 +697,7 @@ describe("durable workflow execution audit", () => {
       "messagesRecovered",
       "researchRecovered",
       "resolutionsRecovered",
+      "sendRequestsReleased",
     ]);
     // The message loop itself ran and reported per-message outcomes instead
     // of throwing out of the round.

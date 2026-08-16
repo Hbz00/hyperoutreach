@@ -1,0 +1,294 @@
+import maintenanceConfig from "../../../../config/maintenance.json";
+import { getDatabase } from "@/lib/db/client";
+import { maintenanceState } from "@/lib/db/schema";
+import { requireOperatorSession } from "@/lib/operator-session-server";
+import {
+  getMaintenanceCodeTimeoutMs,
+  getMaintenanceStatusPresentation,
+} from "@/modules/workflows/maintenance-status-presentation";
+import { resolveMaintenanceStatus } from "@/modules/workflows/maintenance-status";
+import {
+  readDueFollowUps,
+  readQueuedWork,
+  readRecentSends,
+  readSendBudgets,
+} from "@/modules/workflows/outbound-today";
+
+export default async function OutboundPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ notice?: string }>;
+}) {
+  const session = await requireOperatorSession();
+  const { notice } = await searchParams;
+  const db = getDatabase();
+  const now = new Date();
+  const [budgets, queuedWork, dueFollowUps, recentSends, maintenanceRows] =
+    await Promise.all([
+      readSendBudgets(db, now),
+      readQueuedWork(db),
+      readDueFollowUps(db, { now }),
+      readRecentSends(db, { now }),
+      db.select().from(maintenanceState).limit(1),
+    ]);
+  // Everything on this page is executed by the maintenance pass. If that
+  // stopped, a queue that is merely slow and a queue that is dead look
+  // identical — and this is the page the operator is on while waiting, so it
+  // is the page that has to tell them apart.
+  const maintenance = maintenanceRows[0] ?? {
+    ownerToken: null,
+    cycleStartedAt: null,
+    heartbeatAt: null,
+    lastSucceededAt: null,
+    lastFailedAt: null,
+    lastError: null,
+  };
+  const maintenanceStatus = resolveMaintenanceStatus(maintenance, {
+    now,
+    intervalMs: maintenanceConfig.intervalMs,
+    codeTimeoutMs: getMaintenanceCodeTimeoutMs(process.env),
+    staleLeaseMs: maintenanceConfig.staleLeaseMs,
+  });
+  const maintenancePresentation = getMaintenanceStatusPresentation(
+    maintenanceStatus.state,
+  );
+
+  return (
+    <main className="page-shell">
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">Next 24 hours</p>
+          <h1>What goes out</h1>
+          <p className="muted">
+            Everything the system will do on its own, before it does it — and
+            everything it is waiting on.
+          </p>
+        </div>
+      </header>
+      {notice ? (
+        <p className="alert" role="status">
+          {notice}
+        </p>
+      ) : null}
+
+      <section className="panel">
+        <h2>Maintenance pass</h2>
+        <dl className="facts">
+          <div>
+            <dt>State</dt>
+            <dd>
+              <span className="badge">{maintenancePresentation.label}</span>{" "}
+              {maintenancePresentation.detail}
+            </dd>
+          </div>
+          <div>
+            <dt>Last completed</dt>
+            <dd>
+              {maintenance.lastSucceededAt
+                ? maintenance.lastSucceededAt.toLocaleString()
+                : "Never"}
+            </dd>
+          </div>
+          <div>
+            <dt>Runs every</dt>
+            <dd>{maintenanceConfig.intervalMs / 1000} seconds</dd>
+          </div>
+          {maintenance.lastError ? (
+            <div>
+              <dt>Last failure</dt>
+              <dd>{maintenance.lastError}</dd>
+            </div>
+          ) : null}
+        </dl>
+        {maintenanceStatus.state === "stalled" ||
+        maintenanceStatus.state === "not_started" ? (
+          <p className="alert alert-error">
+            Nothing below will run until the maintenance worker is going. Start
+            the application with <code>npm run dev</code> or{" "}
+            <code>npm start</code>, which launches it alongside the web server.
+          </p>
+        ) : null}
+      </section>
+
+      <section className="panel">
+        <h2>Sending budget</h2>
+        <p className="muted">
+          Counted the way the send policy counts it: an attempt spends the
+          budget whether or not it was delivered.
+        </p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Scope</th>
+                <th>Name</th>
+                <th>Used in the last 24 hours</th>
+                <th>Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {budgets.map((budget) => (
+                <tr key={`${budget.scope}-${budget.name}`}>
+                  <td>{budget.scope}</td>
+                  <td>{budget.name}</td>
+                  <td>
+                    {budget.used} / {budget.cap}
+                  </td>
+                  <td>{Math.max(0, budget.cap - budget.used)}</td>
+                </tr>
+              ))}
+              {budgets.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="empty">
+                    No mailbox or active campaign yet.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Queued work</h2>
+        <p className="muted">
+          Research and discovery run on the maintenance pass, not in your
+          browser. This is where they are.
+        </p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>State</th>
+                <th>Attempts</th>
+                <th>Detail</th>
+                <th>Requested</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {queuedWork.map((work) => (
+                <tr key={work.id}>
+                  <td>{work.command}</td>
+                  <td>
+                    <span className="badge">{work.status}</span>
+                  </td>
+                  <td>
+                    {work.attempt} / {work.maxAttempts}
+                  </td>
+                  <td>{work.detail || "—"}</td>
+                  <td>{work.createdAt.toLocaleString()}</td>
+                  <td>
+                    {work.retryable ? (
+                      <form
+                        action="/api/operator/commands/retry-command"
+                        method="post"
+                      >
+                        <input
+                          type="hidden"
+                          name="csrf"
+                          value={session.csrfToken}
+                        />
+                        <input type="hidden" name="commandId" value={work.id} />
+                        <button className="button-secondary">Try again</button>
+                      </form>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {queuedWork.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="empty">
+                    Nothing queued.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Follow-ups due</h2>
+        <p className="muted">
+          These leave without another click. The text below is what the template
+          resolves to right now.
+        </p>
+        <div className="review-list">
+          {dueFollowUps.map((followUp) => (
+            <article className="review-card" key={followUp.enrollmentId}>
+              <header>
+                <div>
+                  <p className="eyebrow">
+                    {followUp.campaignName} · step {followUp.step}
+                  </p>
+                  <h3>
+                    {followUp.contactName} · {followUp.accountName}
+                  </h3>
+                  <p className="muted">Due {followUp.dueAt.toLocaleString()}</p>
+                </div>
+                <span className="badge">due</span>
+              </header>
+              {followUp.subject ? (
+                <>
+                  <p>
+                    <strong>{followUp.subject}</strong>
+                  </p>
+                  <pre>{followUp.body}</pre>
+                </>
+              ) : null}
+              <p className="muted">{followUp.note}</p>
+            </article>
+          ))}
+          {dueFollowUps.length === 0 ? (
+            <section className="panel empty">
+              No follow-up is due in the next 24 hours.
+            </section>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Just sent</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Recipient</th>
+                <th>Subject</th>
+                <th>Campaign</th>
+                <th>State</th>
+                <th>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentSends.map((send) => (
+                <tr key={send.messageId}>
+                  <td>{send.recipient}</td>
+                  <td>{send.subject}</td>
+                  <td>{send.campaignName}</td>
+                  <td>
+                    <span className="badge">{send.status}</span>
+                  </td>
+                  <td>
+                    {(send.sentAt ?? send.attemptedAt)?.toLocaleString() ?? "—"}
+                  </td>
+                </tr>
+              ))}
+              {recentSends.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="empty">
+                    Nothing has gone out in the last 24 hours.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  );
+}

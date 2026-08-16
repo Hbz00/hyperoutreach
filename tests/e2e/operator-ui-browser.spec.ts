@@ -1,9 +1,33 @@
 import { expect, type Locator, test } from "@playwright/test";
 
 import {
+  E2E_OPERATOR_API_TOKEN,
   E2E_OPERATOR_EMAIL,
   E2E_OPERATOR_PASSWORD,
 } from "./support/environment";
+
+/**
+ * Ticks the maintenance cycle, which is what runs queued operator work. AI
+ * commands no longer execute inside the operator's request: the request would
+ * compete with the cycle for the single ChatGPT window, and this application
+ * ships no client JavaScript to show progress while it waited.
+ */
+async function runMaintenanceCycle(
+  page: import("@playwright/test").Page,
+  passes = 5,
+): Promise<void> {
+  // One pass drains one queued command on purpose, so the cycle's duration
+  // stays bounded when a command is a ten-minute research turn. A test that
+  // wants a small backlog cleared waits for several passes, exactly as the
+  // resident worker would over several minutes.
+  for (let pass = 0; pass < passes; pass += 1) {
+    const response = await page.request.post(
+      "/api/internal/workflows/reconcile?immediate=1",
+      { headers: { authorization: `Bearer ${E2E_OPERATOR_API_TOKEN}` } },
+    );
+    expect([200, 202]).toContain(response.status());
+  }
+}
 
 test.skip(
   process.env.RUN_BROWSER_E2E !== "1",
@@ -21,6 +45,7 @@ async function createCampaign(
     followUpBody?: string;
     finalSubject?: string;
     finalBody?: string;
+    aiOpening?: boolean;
   },
 ) {
   await page.getByRole("link", { name: "Campaigns", exact: true }).click();
@@ -33,6 +58,12 @@ async function createCampaign(
   await form.getByLabel("Delay in minutes").nth(0).fill("0");
   await form.getByLabel("Subject").nth(0).fill(input.firstSubject);
   await form.getByLabel("Body").nth(0).fill(input.firstBody);
+  if (input.aiOpening) {
+    await form
+      .getByLabel(/AI-written opening sentence/)
+      .nth(0)
+      .check();
+  }
   await form.getByLabel("Delay in minutes").nth(1).fill("0");
   await form
     .getByLabel("Subject")
@@ -179,8 +210,9 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
       .first();
     await accountRow.getByRole("button", { name: "Research account" }).click();
     await expect(page.getByRole("status")).toContainText(
-      "Account research executed",
+      "Account research queued",
     );
+    await runMaintenanceCycle(page);
     await page.getByRole("link", { name: "Grace Hopper" }).click();
     await expect(
       page.getByText("Deterministic local research fixture"),
@@ -210,12 +242,11 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     });
     await enrollCurrentProspect(page, prospectOption);
 
-    await page.getByRole("link", { name: "Prospects", exact: true }).click();
-    await page.getByRole("link", { name: "Grace Hopper" }).click();
-    const enrollment = page
-      .locator("article.timeline-card")
-      .filter({ hasText: campaign });
-    await enrollment.getByRole("button", { name: "Generate step 1" }).click();
+    // No click generates the first message any more: enrolling queues it, and
+    // the maintenance pass writes it. What appears is `proposed`, which the
+    // send policy cannot send — the typing is automated, the sending is not.
+    await runMaintenanceCycle(page);
+    await page.getByRole("link", { name: "Review queue", exact: true }).click();
     const card = messageCard(page, campaign);
     await expect(card.getByLabel("Subject")).toHaveValue(firstSubject);
     await expect(card.getByLabel("Body")).toContainText("Hello Grace");
@@ -224,17 +255,24 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     ).toBeVisible();
     await expect(card.getByText("Deterministic local fixture")).toBeVisible();
     await approveAndSend(card);
-    await expect(page.getByRole("status")).toContainText(
-      "Send execution completed",
-    );
+    // The notice now reports what the send actually did, not that a command
+    // ran. This one goes out.
+    await expect(page.getByRole("status")).toContainText("Message sent");
     await expect(messageCard(page, campaign)).toHaveCount(0);
   });
 
   await test.step("process and send the due follow-up through the UI", async () => {
-    await page.getByRole("button", { name: "Process due follow-ups" }).click();
-    await expect(page.getByRole("status")).toContainText(
-      "Due follow-ups reconciled",
-    );
+    // The review queue no longer carries a control that sends. Due follow-ups
+    // are the maintenance cycle's job, and "What goes out" is where the
+    // operator sees them coming.
+    await page
+      .getByRole("link", { name: "What goes out", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "What goes out" }),
+    ).toBeVisible();
+    await runMaintenanceCycle(page);
+    await page.getByRole("link", { name: "Review queue" }).click();
     const card = messageCard(page, campaign);
     await expect(card.getByLabel("Subject")).toHaveValue(followUpSubject);
     await approveAndSend(card);
@@ -284,21 +322,34 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
       target:
         "Verify that a globally suppressed recipient cannot be sent another campaign",
       firstSubject: suppressionSubject,
-      firstBody: "Hello {{first_name}}, this message must be blocked.",
+      // The agent writes the opening; the template names the field it asked
+      // for. This is the only campaign in the flow that uses personalization.
+      firstBody:
+        "{{personalized_opening}} Hello {{first_name}}, this message must be blocked.",
+      aiOpening: true,
     });
     await enrollCurrentProspect(page, prospectOption);
-    await page.getByRole("link", { name: "Prospects", exact: true }).click();
-    await page.getByRole("link", { name: "Grace Hopper" }).first().click();
-    const probeEnrollment = page
-      .locator("article.timeline-card")
-      .filter({ hasText: suppressionCampaign });
-    await probeEnrollment
-      .getByRole("button", { name: "Generate step 1" })
-      .click();
+    await runMaintenanceCycle(page);
+    await page.getByRole("link", { name: "Review queue", exact: true }).click();
     const probeCard = messageCard(page, suppressionCampaign);
     await expect(probeCard.getByLabel("Subject")).toHaveValue(
       suppressionSubject,
     );
+    // The sentence the agent wrote is in the body, and shown separately with
+    // the confidence it claimed and the source it cited.
+    await expect(probeCard.getByLabel("Body")).toContainText("Your work as");
+    await expect(
+      probeCard.getByRole("heading", { name: "Written by the agent" }),
+    ).toBeVisible();
+    await expect(probeCard.getByText(/personalized_opening/)).toBeVisible();
+    // The confidence and the citation are the point of persisting the field at
+    // all: without them the operator cannot judge the sentence.
+    await expect(probeCard.getByText(/confidence 0\.50/)).toBeVisible();
+    await expect(
+      probeCard.getByRole("link", {
+        name: "https://example.invalid/hyperoutreach-mock-research",
+      }),
+    ).toBeVisible();
     await probeCard
       .getByRole("button", { name: "Approve", exact: true })
       .click();
@@ -314,8 +365,12 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await probeCard
       .getByRole("button", { name: "Send approved message" })
       .click();
+    // A refusal must say so, and say why. This is the whole point of the
+    // notice: before, a suppressed recipient and a delivered message produced
+    // the same sentence.
+    await expect(page.getByRole("status")).toContainText("Not sent");
     await expect(page.getByRole("status")).toContainText(
-      "Send execution completed",
+      "RECIPIENT_SUPPRESSED",
     );
     await expect(
       probeCard.getByText("approved", { exact: true }),
@@ -323,11 +378,9 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
 
     await page.getByRole("link", { name: "Settings", exact: true }).click();
     const failures = page.locator("details.panel").filter({
-      has: page.getByText("Workflow and provider failures", { exact: true }),
+      has: page.getByText("Automation activity", { exact: true }),
     });
-    await failures
-      .getByText("Workflow and provider failures", { exact: true })
-      .click();
+    await failures.getByText("Automation activity", { exact: true }).click();
     const audit = failures
       .locator("details.audit-row")
       .filter({ hasText: "send-approved-message" })
