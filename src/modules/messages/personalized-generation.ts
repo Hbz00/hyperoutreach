@@ -11,7 +11,7 @@ import {
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import type { PersonalizationAgent } from "@/modules/agents/contracts";
-import type { PersonalizationDeclaration } from "@/modules/campaigns/input";
+import { readPersonalizationDeclaration } from "@/modules/messages/personalization-declaration";
 import {
   generateOutreachProposal,
   type GenerateOutreachResult,
@@ -29,17 +29,6 @@ export type PersonalizedGenerationResult =
         | "REPLY_PENDING";
       message: string;
     };
-
-function declaration(value: unknown): PersonalizationDeclaration | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as { fields?: unknown; minConfidence?: unknown };
-  if (!Array.isArray(record.fields) || record.fields.length === 0) return null;
-  return {
-    fields: record.fields as PersonalizationDeclaration["fields"],
-    minConfidence:
-      typeof record.minConfidence === "number" ? record.minConfidence : 0.5,
-  };
-}
 
 /**
  * Writes one message, asking an agent for the sentences the step declared.
@@ -97,7 +86,9 @@ export async function generateWithPersonalization(
     .where(eq(enrollments.id, input.enrollmentId))
     .limit(1);
 
-  const declared = context ? declaration(context.declared) : null;
+  const declared = context
+    ? readPersonalizationDeclaration(context.declared)
+    : null;
   if (!context || !declared) {
     return generateOutreachProposal(db, input);
   }

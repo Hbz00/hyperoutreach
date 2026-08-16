@@ -146,37 +146,9 @@ export async function updateOperatorSendingSettings(
   }
 }
 
-export function isWithinWorkingHours(
-  now: Date,
-  settings: Pick<
-    SendingSettings,
-    "timezone" | "workingDays" | "workingStartMinute" | "workingEndMinute"
-  >,
-): boolean {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: settings.timezone,
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(now);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((item) => item.type === type)?.value ?? "";
-  const weekdays: Record<string, number> = {
-    Sun: 0,
-    Mon: 1,
-    Tue: 2,
-    Wed: 3,
-    Thu: 4,
-    Fri: 5,
-    Sat: 6,
-  };
-  const day = weekdays[part("weekday")];
-  const minute = Number(part("hour")) * 60 + Number(part("minute"));
-  return (
-    day !== undefined &&
-    settings.workingDays.includes(day) &&
-    minute >= settings.workingStartMinute &&
-    minute < settings.workingEndMinute
-  );
-}
+/**
+ * Re-exported so the send policy keeps importing it from here, while the rule
+ * itself lives beside the "when does it next open" search that has to agree
+ * with it to the minute.
+ */
+export { isWithinWorkingHours } from "@/modules/settings/working-hours";

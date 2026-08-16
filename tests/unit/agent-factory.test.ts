@@ -66,11 +66,13 @@ describe("agent provider routing", () => {
       research: {
         provider: desktop.provider,
         model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "High",
         operationTimeoutMs: 120_000,
       },
       nonWeb: {
         provider: desktop.provider,
         model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "Instant",
       },
     });
 
@@ -121,11 +123,13 @@ describe("agent provider routing", () => {
       research: {
         provider: surface.provider,
         model: "chatgpt-desktop:research-lane",
+        effort: "High",
         operationTimeoutMs: 600_000,
       },
       nonWeb: {
         provider: surface.provider,
         model: "chatgpt-desktop:fast-lane",
+        effort: "Instant",
       },
     });
 
@@ -145,5 +149,44 @@ describe("agent provider routing", () => {
     expect(agents.accountResearch.model).toBe("deterministic-mock");
     expect(agents.contactDiscovery.model).toBe("deterministic-mock");
     expect(agents.personalization.model).toBe("deterministic-mock");
+  });
+});
+
+// The chain that makes the column worth having: the effort resolved from the
+// environment has to survive the bundle and reach the agent, or every run
+// records a blank and the two lanes stay indistinguishable.
+describe("the lane an agent carries", () => {
+  it("gives each agent the effort of the lane it runs on", () => {
+    const provider = { run: vi.fn() } as never;
+    const agents = createAgentSetFromBundle({
+      mode: "chatgpt_desktop",
+      usesRealInfrastructure: true,
+      research: {
+        provider,
+        model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "High",
+        operationTimeoutMs: 600_000,
+      },
+      nonWeb: {
+        provider,
+        model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "Instant",
+      },
+    });
+
+    expect(agents.accountResearch.effort).toBe("High");
+    expect(agents.accountDiscovery.effort).toBe("High");
+    expect(agents.contactDiscovery.effort).toBe("High");
+    // The one agent on the fast lane, and the one item 6 depends on.
+    expect(agents.personalization.effort).toBe("Instant");
+  });
+
+  it("leaves the mock agents without a lane rather than inventing one", () => {
+    const agents = createAgentSetFromBundle({
+      mode: "mock",
+      usesRealInfrastructure: false,
+    });
+
+    expect(agents.personalization.effort).toBeUndefined();
   });
 });

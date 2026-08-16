@@ -76,18 +76,22 @@ export function createAgentSetFromBundle(bundle: AIProviderBundle): AgentSet {
       accountDiscovery: new StructuredAccountDiscoveryAgent(
         bundle.research.provider,
         bundle.research.model,
+        bundle.research.effort,
       ),
       accountResearch: new StructuredAccountResearchAgent(
         bundle.research.provider,
         bundle.research.model,
+        bundle.research.effort,
       ),
       contactDiscovery: new StructuredContactDiscoveryAgent(
         bundle.research.provider,
         bundle.research.model,
+        bundle.research.effort,
       ),
       personalization: new StructuredPersonalizationAgent(
         bundle.nonWeb.provider,
         bundle.nonWeb.model,
+        bundle.nonWeb.effort,
       ),
     };
   }

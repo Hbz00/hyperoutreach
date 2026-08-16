@@ -165,26 +165,42 @@ describe("operator command queue", () => {
     });
   });
 
-  it("retries a transient failure on a backoff, then gives up visibly", async () => {
+  // The ladder is 1, 5 then 15 minutes, and the run has to be long enough to
+  // climb all of it. At three attempts it ended after the second wait: the
+  // 15-minute step was unreachable and a command died six minutes into any
+  // outage — while the outage this transport actually has is the operator's
+  // ChatGPT desktop app closed, updating, or asleep with the laptop. Each
+  // wait is asserted on its exact value rather than by jumping an hour ahead,
+  // because the top of the ladder is the part that was never exercised.
+  it("climbs the whole retry ladder before giving up visibly", async () => {
     const queued = await queueResearch();
     const execute = async () => ({ ok: false, code: "AGENT_ERROR" });
 
     await drainOperatorCommands(db, execute, { now: NOW });
     const afterFirst = await readCommand(queued.id);
     expect(afterFirst).toMatchObject({ status: "queued", attempt: 1 });
-    expect(afterFirst.nextAttemptAt!.getTime()).toBeGreaterThan(NOW.getTime());
+    expect(afterFirst.nextAttemptAt).toEqual(later(60_000));
 
     // Too early: the backoff has not elapsed, so nothing is claimed.
     expect(
       await drainOperatorCommands(db, execute, { now: later(1_000) }),
     ).toEqual([]);
 
-    await drainOperatorCommands(db, execute, { now: later(3_600_000) });
-    await drainOperatorCommands(db, execute, { now: later(7_200_000) });
+    await drainOperatorCommands(db, execute, { now: later(60_000) });
+    const afterSecond = await readCommand(queued.id);
+    expect(afterSecond).toMatchObject({ status: "queued", attempt: 2 });
+    expect(afterSecond.nextAttemptAt).toEqual(later(60_000 + 300_000));
 
+    await drainOperatorCommands(db, execute, { now: later(360_000) });
+    const afterThird = await readCommand(queued.id);
+    expect(afterThird).toMatchObject({ status: "queued", attempt: 3 });
+    // The step that did not exist before: fifteen minutes, not abandonment.
+    expect(afterThird.nextAttemptAt).toEqual(later(360_000 + 900_000));
+
+    await drainOperatorCommands(db, execute, { now: later(1_260_000) });
     expect(await readCommand(queued.id)).toMatchObject({
       status: "abandoned",
-      attempt: 3,
+      attempt: 4,
       error: "AGENT_ERROR",
     });
 

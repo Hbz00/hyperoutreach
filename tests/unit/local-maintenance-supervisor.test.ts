@@ -9,7 +9,13 @@ import playwrightConfig from "../../playwright.config";
 // The production supervisor intentionally remains plain Node ESM.
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore -- the supervisor is JavaScript by design
-import { createLocalStackSupervisor } from "../../scripts/run-local-stack.mjs";
+import {
+  createLocalStackSupervisor,
+  ESCALATION_ARM_MS,
+  runLocalStackCli,
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore -- the supervisor is JavaScript by design
+} from "../../scripts/run-local-stack.mjs";
 
 const TOKEN = "a-valid-operator-api-token-with-32-characters";
 let nextFakePid = 48_000;
@@ -547,6 +553,141 @@ setInterval(() => {}, 1000);`,
       }
     },
   );
+});
+
+describe("local stack CLI signal handling", () => {
+  function cliHarness(children: FakeChildProcess[]) {
+    const allChildren = [...children];
+    const pending = [...children];
+    const signalTarget = new EventEmitter();
+    const logger = { info: vi.fn(), error: vi.fn() };
+    const run = runLocalStackCli(["dev"], {
+      projectDir: process.cwd(),
+      environment: { NODE_ENV: "development", PORT: "3000" },
+      logger,
+      signalTarget,
+      platform: "darwin",
+      loadConfig: vi.fn(() => enabledConfig()),
+      spawnProcess: vi.fn(() => {
+        const child = pending.shift();
+        if (!child) throw new Error("Unexpected spawn");
+        return child;
+      }),
+      signalProcess: vi.fn((target: number, signal: NodeJS.Signals) => {
+        const child = allChildren.find(({ pid }) => pid === Math.abs(target));
+        if (!child) {
+          const error = new Error("No such process") as NodeJS.ErrnoException;
+          error.code = "ESRCH";
+          throw error;
+        }
+        child.kill(signal);
+        return true;
+      }),
+    });
+    return { run, signalTarget, logger };
+  }
+
+  // Children that ignore graceful signals put the supervisor in the drain
+  // window — exactly where a terminal Ctrl+C leaves it sitting, silently.
+  function draining() {
+    return [
+      new FakeChildProcess("web", ["SIGKILL"]),
+      new FakeChildProcess("worker", ["SIGKILL"]),
+    ] as const;
+  }
+
+  it("stays registered after the first interrupt so a later one cannot bypass the supervisor", async () => {
+    vi.useFakeTimers();
+    const [web, worker] = draining();
+    const { run, signalTarget } = cliHarness([web, worker]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signalTarget.listenerCount("SIGINT")).toBe(1);
+
+    signalTarget.emit("SIGINT");
+
+    // Registering with `once` deregisters here, leaving the next SIGINT to
+    // Node's default action: the supervisor dies mid-drain and the detached
+    // Next.js group survives, still holding the port.
+    expect(signalTarget.listenerCount("SIGINT")).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(ESCALATION_ARM_MS);
+    signalTarget.emit("SIGINT");
+    await run;
+  });
+
+  it("handles SIGHUP from a closed terminal and drains with a signal the worker understands", async () => {
+    vi.useFakeTimers();
+    const [web, worker] = draining();
+    const { run, signalTarget } = cliHarness([web, worker]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signalTarget.listenerCount("SIGHUP")).toBe(1);
+
+    signalTarget.emit("SIGHUP");
+
+    // Unhandled, SIGHUP kills the supervisor outright and strands the detached
+    // children; forwarded raw, it kills the worker mid-cycle, since the worker
+    // only listens for SIGINT and SIGTERM.
+    expect(worker.kills).toEqual(["SIGTERM"]);
+    expect(signalTarget.listenerCount("SIGHUP")).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(ESCALATION_ARM_MS);
+    signalTarget.emit("SIGHUP");
+    await expect(run).resolves.toBe(130);
+  });
+
+  it("ignores the duplicate signal one Ctrl+C delivers via the tty and npm", async () => {
+    vi.useFakeTimers();
+    const [web, worker] = draining();
+    const { run, signalTarget } = cliHarness([web, worker]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A terminal Ctrl+C signals the whole process group AND npm forwards it,
+    // so the supervisor sees the same interrupt twice, measured ~1ms apart.
+    // That must not be mistaken for the user asking to force-kill.
+    signalTarget.emit("SIGINT");
+    await vi.advanceTimersByTimeAsync(1);
+    signalTarget.emit("SIGINT");
+
+    expect(worker.kills).toEqual(["SIGINT"]); // graceful drain, still running
+    expect(web.kills).toEqual([]); // Next not signalled until the worker drains
+
+    await vi.advanceTimersByTimeAsync(ESCALATION_ARM_MS);
+    signalTarget.emit("SIGINT");
+    await run;
+  });
+
+  it("force-kills both child groups and exits 130 on a deliberate second interrupt", async () => {
+    vi.useFakeTimers();
+    const [web, worker] = draining();
+    const { run, signalTarget } = cliHarness([web, worker]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    signalTarget.emit("SIGINT");
+    await vi.advanceTimersByTimeAsync(ESCALATION_ARM_MS);
+    signalTarget.emit("SIGINT");
+
+    await expect(run).resolves.toBe(130);
+    expect(worker.kills).toContain("SIGKILL");
+    expect(web.kills).toContain("SIGKILL");
+    expect(signalTarget.listenerCount("SIGINT")).toBe(0);
+    expect(signalTarget.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("announces the drain so the silent grace window does not invite a second interrupt", async () => {
+    vi.useFakeTimers();
+    const [web, worker] = draining();
+    const { run, signalTarget, logger } = cliHarness([web, worker]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    signalTarget.emit("SIGINT");
+
+    const announced = logger.info.mock.calls.map(([line]) => String(line));
+    expect(announced.some((line) => /60s.*force-kill/i.test(line))).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(ESCALATION_ARM_MS);
+    signalTarget.emit("SIGINT");
+    await run;
+  });
 });
 
 describe("local stack package contract", () => {

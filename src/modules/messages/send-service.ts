@@ -1251,7 +1251,20 @@ export async function sendApprovedMessage(
           status: nextStatus,
           sendAttemptToken: claimToken,
           sendClaimedAt: now,
-          ...(requested ? { sendRequestedAt: now } : {}),
+          // The claim consumes a scheduled intent along with stamping the
+          // request clock, and for the same reason: from here on this is a
+          // send in flight, not a send waiting for permission. One intent buys
+          // one attempt. If the attempt fails, the message comes back to the
+          // operator carrying its error rather than into an automatic retry
+          // loop nobody asked for — "never a silent permission granted to the
+          // worker" has to survive its own feature.
+          ...(requested
+            ? {
+                sendRequestedAt: now,
+                scheduledAt: null,
+                sendIntentExpiresAt: null,
+              }
+            : {}),
         })
         .where(eq(messages.id, messageId))
         .returning();

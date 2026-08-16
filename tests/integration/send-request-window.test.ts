@@ -430,6 +430,13 @@ describe("send request window", () => {
 
     // Next morning, sending is allowed again. Nothing about the policy stands
     // in the way any more — only the expiry of the request does.
+    //
+    // Item 5 later added a sanctioned way to cross this night: an operator who
+    // asks for the next legal slot gets an intent, and the lane dispatches it
+    // in the morning under a *fresh* request clock. That is not this test. Here
+    // the operator asked once, at 17:59, and nothing was scheduled — so the
+    // delay between that gesture and any delivery stays bounded by the window,
+    // which is what the criterion says and what this asserts.
     await permissiveSendingSettings();
     const services = createWorkflowTaskServices(db, {});
     const round = (await services["recover-stale-work"]({
@@ -466,6 +473,53 @@ describe("send request window", () => {
       status: "approved",
       sentAt: null,
     });
+  });
+
+  // The recovery stage runs third in the maintenance cycle, and its `now` is
+  // the instant the tick started — stale by however long inbound and follow-ups
+  // took. For most of that stage a late clock only makes the work late. Not
+  // here: completing a stuck request is a delivery, and a delivery judged
+  // against a window that has since shut is an email leaving after hours with
+  // nobody watching, which is the one thing this product may never do. The
+  // window's own expiry bounds *how long* a request may still be completed; the
+  // policy decides *whether* it may, and it has to be asked about now.
+  //
+  // Built from the wall clock rather than a calendar date so it means the same
+  // thing whenever the suite runs: a one-hour window around a tick six hours
+  // old cannot contain the present, wherever in the day the present is.
+  it("judges a recovered send on the wall clock, not on the instant the tick started", async () => {
+    const wallClock = new Date();
+    const observedAt = new Date(wallClock.getTime() - 6 * 60 * 60_000);
+    const minuteOfDay =
+      observedAt.getUTCHours() * 60 + observedAt.getUTCMinutes();
+    await permissiveSendingSettings({
+      timezone: "UTC",
+      workingStartMinute: Math.max(0, minuteOfDay - 5),
+      workingEndMinute: Math.min(24 * 60, minuteOfDay + 5),
+    });
+    const fixture = await seed();
+    const message = await fixture.message({
+      status: "drafted",
+      providerDraftId: `draft_${crypto.randomUUID()}`,
+      // Inside the completion window as measured from the tick, so the stage
+      // genuinely selects it. Only the clock the policy is asked on is at issue.
+      sendRequestedAt: new Date(observedAt.getTime() - 60_000),
+    });
+
+    const services = createWorkflowTaskServices(db, {});
+    await services["recover-stale-work"]({
+      observedAt: observedAt.toISOString(),
+      limit: 5,
+    });
+
+    const stored = await readMessage(message.id);
+    expect(stored.sentAt).toBeNull();
+    expect(stored.status).not.toBe("sent");
+    // The refusal, not a provider outcome. Judged on the tick's instant this
+    // reached the provider and came back with a transport error instead —
+    // which is only a mock away from a delivered email.
+    expect(stored.lastError).toContain("OUTSIDE_WORKING_HOURS");
+    expect(stored.attemptCount).toBe(0);
   });
 
   it("orders the actionable lane on the marker the database owns", async () => {

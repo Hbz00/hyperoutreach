@@ -6,17 +6,23 @@ import {
   accounts,
   campaigns,
   contacts,
-  enrollments,
   emailCandidates,
+  enrollments,
   evidenceSources,
   mailboxConnections,
   messagePersonalizationFields,
-  operatorCommands,
   messages,
+  operatorCommands,
+  operatorSendingSettings,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
 import { sendBlockNotice } from "@/modules/messages/send-block-notice";
+import {
+  scheduledInstantLabel,
+  scheduleOfferLabel,
+} from "@/modules/messages/scheduled-send";
 import { readSendPolicyVerdict } from "@/modules/messages/send-service";
+import { operatorClock } from "@/modules/settings/working-hours";
 
 export default async function ReviewPage({
   searchParams,
@@ -115,6 +121,21 @@ export default async function ReviewPage({
     );
   const now = new Date();
   const sendChecks = new Map<string, string>();
+  // The label of the "schedule this" control per card, empty when there is
+  // nothing to offer. The rule that decides it lives in `scheduleOfferLabel`,
+  // where it can be tested.
+  const scheduleOffers = new Map<string, string>();
+  const [sendingSettings] = await getDatabase()
+    .select()
+    .from(operatorSendingSettings)
+    .where(eq(operatorSendingSettings.id, 1))
+    .limit(1);
+  // A slot computed against a 09:00 calendar must not be announced as 07:00
+  // UTC, which is what the schema column says about itself and what the send
+  // notice already does. The card is the other place the operator reads it,
+  // and it reads it through the same helper so the two cannot drift.
+  const operatorInstant = (instant: Date | null) =>
+    instant ? operatorClock(instant, sendingSettings?.timezone) : "—";
   for (const row of rows) {
     if (row.message.status !== "approved" && row.message.status !== "drafted") {
       continue;
@@ -132,6 +153,16 @@ export default async function ReviewPage({
         ? "Would go out now"
         : `Held — ${sendBlockNotice(verdict.code)}`,
     );
+    if (sendingSettings) {
+      const offer = scheduleOfferLabel(verdict, now, sendingSettings, {
+        alreadyScheduled: Boolean(row.message.scheduledAt),
+        // The verdict is rendered for `drafted` cards too, and an intent can
+        // only be written for an `approved` one. Offering on the other is a
+        // button whose route answers "no longer waiting to be sent".
+        schedulable: row.message.status === "approved",
+      });
+      if (offer) scheduleOffers.set(row.message.id, offer);
+    }
   }
   return (
     <main className="page-shell">
@@ -347,7 +378,47 @@ export default async function ReviewPage({
                   </div>
                 </aside>
               </div>
-              {row.message.status === "approved" && bindingFresh ? (
+              {row.message.status === "approved" && row.message.scheduledAt ? (
+                // An intent is standing. The card says when it opens and
+                // offers the way out, rather than a Send button that would
+                // race the lane.
+                //
+                // Not gated on `bindingFresh`, unlike the Send button beside
+                // it. Stale binding is a reason to refuse a send, never a
+                // reason to trap one that is already scheduled: cancelling
+                // only ever removes a pending action.
+                <div className="scheduled-send">
+                  <p>
+                    {/* The instant is only named when it is a delivery time.
+                        A refusal on a delay stores the lane's next look, and
+                        printing that reads as an imminent send nobody asked
+                        for — see `scheduledInstantLabel`. */}
+                    Scheduled for{" "}
+                    {scheduledInstantLabel(
+                      row.message.scheduledAt,
+                      now,
+                      sendingSettings?.timezone,
+                    )}{" "}
+                    — expires {operatorInstant(row.message.sendIntentExpiresAt)}
+                  </p>
+                  <form
+                    action="/api/operator/commands/cancel-scheduled-send"
+                    method="post"
+                  >
+                    <input
+                      type="hidden"
+                      name="csrf"
+                      value={session.csrfToken}
+                    />
+                    <input
+                      type="hidden"
+                      name="messageId"
+                      value={row.message.id}
+                    />
+                    <button>Cancel scheduled send</button>
+                  </form>
+                </div>
+              ) : row.message.status === "approved" && bindingFresh ? (
                 <form
                   action="/api/operator/commands/send-message"
                   method="post"
@@ -364,6 +435,20 @@ export default async function ReviewPage({
                     value={crypto.randomUUID()}
                   />
                   <button>Send approved message</button>
+                </form>
+              ) : null}
+              {scheduleOffers.has(row.message.id) ? (
+                <form
+                  action="/api/operator/commands/schedule-send"
+                  method="post"
+                >
+                  <input type="hidden" name="csrf" value={session.csrfToken} />
+                  <input
+                    type="hidden"
+                    name="messageId"
+                    value={row.message.id}
+                  />
+                  <button>{scheduleOffers.get(row.message.id)}</button>
                 </form>
               ) : null}
               {written.length > 0 ? (

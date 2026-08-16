@@ -1,10 +1,14 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import * as schema from "@/lib/db/schema";
+import { drainOperatorCommands } from "@/modules/workflows/operator-command-queue";
+import { WorkflowRuntime } from "@/modules/workflows/runtime";
+import { createWorkflowTaskServices } from "@/modules/workflows/service-factory";
+import type { WorkflowTaskName } from "@/modules/workflows/task-contracts";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
 import {
   StructuredReplyClassifier,
@@ -62,6 +66,7 @@ async function fixture(
     relevant?: boolean;
     campaignDailyCap?: number;
     mailboxId?: string;
+    personalizedFollowUp?: boolean;
   } = {},
 ) {
   sequence += 1;
@@ -72,6 +77,25 @@ async function fixture(
     domain,
   });
   if (!account.ok) throw new Error(account.message);
+  if (options.personalizedFollowUp) {
+    // The agent's input requires at least one trusted source URL, so a step
+    // that declares a sentence cannot be written for an account nobody has
+    // researched. That is a wait, not a failure — and this fixture wants the
+    // path where the wait is over.
+    await db
+      .update(schema.accounts)
+      .set({
+        researchStatus: "complete",
+        researchSnapshot: { summary: "Builds evidence-backed tooling" },
+        researchedAt: new Date("2026-08-10T09:00:00.000Z"),
+      })
+      .where(eq(schema.accounts.id, account.account.id));
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: `https://evidence.example/${n}`,
+      sourceType: "website",
+    });
+  }
   const contact = await createOrGetContact(db, {
     accountId: account.account.id,
     firstName: "Ada",
@@ -102,7 +126,17 @@ async function fixture(
       {
         delayMinutes: 60,
         subjectTemplate: "Following up {{first_name}}",
-        bodyTemplate: "Follow-up for {{company}}",
+        bodyTemplate: options.personalizedFollowUp
+          ? "{{personalized_opening}} — follow-up for {{company}}"
+          : "Follow-up for {{company}}",
+        ...(options.personalizedFollowUp
+          ? {
+              personalizationSchema: {
+                fields: ["personalized_opening" as const],
+                minConfidence: 0.5,
+              },
+            }
+          : {}),
       },
     ],
   });
@@ -136,6 +170,22 @@ async function fixture(
   });
   if (!enrollment.ok) throw new Error(enrollment.message);
   const recipient = `ada-${n}@${domain}`;
+  if (options.personalizedFollowUp) {
+    // Deliberately a *different* address from the thread's. A follow-up
+    // addresses the conversation it is following, so the queued generation
+    // must use the previous message's recipient and not whichever candidate
+    // happens to be accepted now. Without this divergence the assertion below
+    // would pass on an empty candidate table and prove nothing.
+    await db.insert(schema.emailCandidates).values({
+      contactId: contact.contact.id,
+      email: `newer-${n}@${domain}`,
+      normalizedEmail: `newer-${n}@${domain}`,
+      domain,
+      confidence: "0.990",
+      source: "fixture",
+      status: "accepted",
+    });
+  }
   const proposal = await generateOutreachProposal(db, {
     enrollmentId: enrollment.enrollment.id,
     stepIndex: 0,
@@ -789,6 +839,11 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
         },
       } as unknown as StructuredAIProvider,
       "gpt-5.6-luna",
+      "structured-reply-v1",
+      // Both lanes run the same model on this transport, so the effort is the
+      // only thing that says which one this run belonged to — and a run that
+      // failed on its deadline is exactly when you want to know.
+      "Instant",
     );
     expect(
       await ingestInboundMessage(db, aiClassifier, {
@@ -802,13 +857,24 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
         receivedAt: new Date("2026-08-11T10:31:00.000Z"),
       }),
     ).toEqual({ ok: false, code: "CLASSIFIER_ERROR" });
+    // Ordered explicitly. `at(-1)` on an unordered select trusted Postgres to
+    // return rows in insertion order, which it never promises: an update
+    // rewrites a row and moves it in the heap, so the "last" row changed
+    // whenever an unrelated test wrote an agent run. That is a test that fails
+    // for a reason having nothing to do with what it asserts.
     const failedRuns = await db
       .select()
       .from(schema.agentRuns)
-      .where(eq(schema.agentRuns.agent, "reply_classifier"));
-    const failedRun = failedRuns.at(-1);
+      .where(eq(schema.agentRuns.agent, "reply_classifier"))
+      .orderBy(desc(schema.agentRuns.createdAt));
+    const failedRun = failedRuns.at(0);
     expect(failedRun).toMatchObject({
       model: "gpt-5.6-luna",
+      // The classifier carries its lane, and the row has to carry it too.
+      // The descriptor this path builds is hand-written rather than the
+      // classifier itself, so wiring the effort into the class proves nothing
+      // about the column until it is asserted here.
+      effort: "Instant",
       status: "failed",
       error: "Agent execution failed (Error)",
       output: null,
@@ -1240,6 +1306,196 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
         .where(eq(schema.messages.enrollmentId, f.enrollment.id))
     ).find((row) => row.stepIndex === 1);
     expect(followUp).toMatchObject({ status: "proposed" });
+
+    // Not sending is only half of "hands it to review". The other half is that
+    // the enrolment is genuinely handed over — its schedule cleared. Without
+    // it the row kept the `nextActionAt` and token of the follow-up that had
+    // just been refused, live work pointing at a decision already taken, and
+    // it only stayed dormant because `findDueEnrollments` skips a
+    // `ready_for_review` row whose step already has a message. Cancel that
+    // message and the stale schedule wakes up. That is an accident, not a
+    // guarantee.
+    const [enrolment] = await db
+      .select()
+      .from(schema.enrollments)
+      .where(eq(schema.enrollments.id, f.enrollment.id));
+    expect(enrolment).toMatchObject({
+      // `ready_for_review`, not `manual_review`: there is a good message here
+      // and the only thing left is the operator's decision on it.
+      // `reviewMessage` refuses to approve anything whose enrolment is not in
+      // this state, so parking it anywhere else shows the card and refuses the
+      // click.
+      state: "ready_for_review",
+      nextActionAt: null,
+      nextActionToken: null,
+    });
+    expect(
+      (
+        await findDueEnrollments(db, {
+          now: new Date("2026-08-11T11:02:00.000Z"),
+        })
+      ).some((row) => row.enrollmentId === f.enrollment.id),
+    ).toBe(false);
+
+    // And the decision is actually available. Without this the refusal is only
+    // half a feature: the sentence is protected from going out unread, and
+    // also from ever going out at all.
+    expect(
+      await reviewMessage(db, {
+        messageId: followUp!.id,
+        action: { kind: "approve" },
+        actor: "operator",
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  // The followups stage loops over every due enrolment. An agent call inside
+  // that loop would spend the operator's single ChatGPT window once per due
+  // prospect, unbounded — the exact bound the command queue exists to impose.
+  // So a step that declares a sentence is queued, never generated here.
+  it("queues a personalized follow-up instead of writing it in the loop", async () => {
+    await setPolicySettings();
+    const f = await fixture({ automatic: true, personalizedFollowUp: true });
+    const invocation = {
+      enrollmentId: f.enrollment.id,
+      expectedStep: 1,
+      expectedVersionId: f.version.id,
+      expectedDueAt: f.enrollment.nextActionAt!,
+      expectedToken: f.enrollment.nextActionToken!,
+    };
+    const sendsBefore = f.provider.sendDraftCalls.length;
+
+    const result = await processFollowUpInvocation(db, f.provider, invocation, {
+      now: new Date("2026-08-11T11:01:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      disposition: "generation_queued",
+    });
+    // Nothing written here: the deterministic generator would have produced a
+    // body with the agent's sentence missing, which cannot interpolate.
+    expect(
+      (
+        await db
+          .select()
+          .from(schema.messages)
+          .where(eq(schema.messages.enrollmentId, f.enrollment.id))
+      ).filter((row) => row.stepIndex === 1),
+    ).toHaveLength(0);
+    expect(f.provider.sendDraftCalls).toHaveLength(sendsBefore);
+
+    // The work is on the queue, under the same key shape enrolment uses for
+    // step zero, so a second invocation cannot double-queue it.
+    // Filtered on the step: enrolment already queued step zero, and that row
+    // is not what this test is about.
+    const queued = (await db.select().from(schema.operatorCommands)).filter(
+      (row) =>
+        row.payload.enrollmentId === f.enrollment.id &&
+        row.payload.stepIndex === 1,
+    );
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      command: "generate-message",
+      status: "queued",
+      dedupeKey: `enrollment:${f.enrollment.id}:generate:1`,
+    });
+    expect(queued[0]!.payload).toMatchObject({ stepIndex: 1 });
+
+    // And the enrolment is genuinely handed over, not left carrying a schedule
+    // for work it no longer owns.
+    const [enrolment] = await db
+      .select()
+      .from(schema.enrollments)
+      .where(eq(schema.enrollments.id, f.enrollment.id));
+    expect(enrolment).toMatchObject({
+      state: "ready_for_review",
+      nextActionAt: null,
+      nextActionToken: null,
+    });
+
+    // A repeat invocation adds nothing.
+    await processFollowUpInvocation(db, f.provider, invocation, {
+      now: new Date("2026-08-11T11:02:00.000Z"),
+    });
+    expect(
+      (await db.select().from(schema.operatorCommands)).filter(
+        (row) =>
+          row.payload.enrollmentId === f.enrollment.id &&
+          row.payload.stepIndex === 1,
+      ),
+    ).toHaveLength(1);
+
+    // And the queue actually writes it, with the agent's sentence in the body
+    // — the half that would make queueing pointless if it did not hold. It
+    // addresses the thread it is following, not whatever candidate happens to
+    // be accepted now.
+    const services = createWorkflowTaskServices(db, {});
+    const runtime = new WorkflowRuntime(db, services);
+    // Several passes, not one: a pass stops at its first AI turn, and earlier
+    // tests in this file leave their own step-zero generations queued ahead of
+    // this one. That is exactly how the worker behaves — a tick a minute until
+    // the queue is empty — so the loop is the faithful shape, not a workaround.
+    for (let pass = 0; pass < 8; pass += 1) {
+      await drainOperatorCommands(
+        db,
+        (drained) =>
+          runtime.execute(drained.task as WorkflowTaskName, drained.payload, {
+            runId: drained.runId,
+            attempt: drained.attempt,
+          }),
+        { now: new Date("2026-08-11T11:03:00.000Z"), limit: 20 },
+      );
+      const written = (
+        await db
+          .select()
+          .from(schema.messages)
+          .where(eq(schema.messages.enrollmentId, f.enrollment.id))
+      ).filter((row) => row.stepIndex === 1);
+      if (written.length > 0) break;
+    }
+    const [followUp] = (
+      await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.enrollmentId, f.enrollment.id))
+    ).filter((row) => row.stepIndex === 1);
+    expect(followUp).toMatchObject({
+      status: "proposed",
+      recipient: f.recipient,
+    });
+    expect(followUp!.body).toContain("Your work as");
+    expect(
+      await db
+        .select()
+        .from(schema.messagePersonalizationFields)
+        .where(eq(schema.messagePersonalizationFields.messageId, followUp!.id)),
+    ).toHaveLength(1);
+
+    // The loop this whole item exists to enable: what the queue wrote has to
+    // be reviewable and sendable. A step-N proposal whose enrolment sits in
+    // `manual_review` with its schedule cleared is a shape nothing produced
+    // before — worth walking to the end rather than assuming the review path
+    // treats it like any other card.
+    const approved = await reviewMessage(db, {
+      messageId: followUp!.id,
+      action: { kind: "approve" },
+      actor: "operator",
+    });
+    expect(approved).toMatchObject({ ok: true });
+    const delivered = await sendApprovedMessage(
+      db,
+      f.provider,
+      { messageId: followUp!.id },
+      { clock: () => new Date("2026-08-11T11:04:00.000Z") },
+    );
+    expect(delivered).toMatchObject({ ok: true, disposition: "sent" });
+    const [sent] = await db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.id, followUp!.id));
+    expect(sent!.sentAt).not.toBeNull();
+    expect(sent!.recipient).toBe(f.recipient);
   });
 
   it("recovers an automatic follow-up after approval but before send", async () => {

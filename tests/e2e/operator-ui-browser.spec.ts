@@ -276,6 +276,16 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await expect(
       page.getByRole("heading", { name: "What goes out" }),
     ).toBeVisible();
+    // A send waiting for a legal instant is the clearest thing that "goes out"
+    // and lives nowhere else. Empty here is the honest state for this run; the
+    // section existing is what makes an intent visible rather than a state the
+    // system holds and the operator cannot see.
+    await expect(
+      page.getByRole("heading", { name: "Scheduled sends" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Nothing is waiting for a slot."),
+    ).toBeVisible();
     await runMaintenanceCycle(page);
     await page.getByRole("link", { name: "Review queue" }).click();
     const card = messageCard(page, campaign);

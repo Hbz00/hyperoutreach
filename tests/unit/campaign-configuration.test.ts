@@ -107,12 +107,11 @@ describe("a step that asks the agent for a sentence", () => {
     ).toBe(false);
   });
 
-  // Only the first step is generated through the operator-command queue, the
-  // one path wired to the personalizing generator. Every later step is written
-  // by `processFollowUpInvocation`, which calls the deterministic generator —
-  // so a declaration there reaches interpolation with no such value and fails
-  // on MISSING_VARIABLE, one prospect at a time, against an immutable version.
-  it("refuses a follow-up step that asks the agent for a sentence", () => {
+  // Any step may ask for a sentence. Step zero is queued on enrolment and every
+  // later step is queued by the follow-up path, so both inherit the command
+  // queue's bound of one AI turn per pass — which is what makes the
+  // declaration safe anywhere rather than only on the first step.
+  it("accepts an AI sentence on a follow-up step", () => {
     const result = createCampaignSchema.safeParse({
       name: "Campaign",
       type: "commercial_outreach",
@@ -128,10 +127,26 @@ describe("a step that asks the agent for a sentence", () => {
       ],
     });
 
+    expect(result.success).toBe(true);
+  });
+
+  // The declared/used rule still applies per step, wherever the step sits.
+  it("still refuses a follow-up step that declares what its template ignores", () => {
+    const result = createCampaignSchema.safeParse({
+      name: "Campaign",
+      type: "commercial_outreach",
+      targetDescription: "Leaders at relevant companies",
+      configuration: {},
+      steps: [
+        step(),
+        step({
+          delayMinutes: 4_320,
+          personalizationSchema: { fields: ["personalized_opening"] },
+        }),
+      ],
+    });
+
     expect(result.success).toBe(false);
-    expect(JSON.stringify(result.error?.issues)).toContain(
-      "Only the first step",
-    );
   });
 
   it("still accepts an AI sentence on the first step of a multi-step sequence", () => {

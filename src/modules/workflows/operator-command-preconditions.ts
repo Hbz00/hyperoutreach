@@ -7,14 +7,29 @@ import {
   sequenceSteps,
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
+import { isTerminalEnrollmentState } from "@/modules/campaigns/enrollment-state";
+import { stepDeclaresPersonalization } from "@/modules/messages/personalization-declaration";
 import {
   AI_WORKFLOW_TASKS,
   type WaitingReason,
 } from "@/modules/workflows/operator-command-policy";
 
+/**
+ * What the queue should do with a command it has just claimed, before it
+ * spends an attempt on it.
+ *
+ * Three answers, not two. "Run it" and "wait, the precondition is not met yet"
+ * were the original pair, and they cannot express the case where the
+ * precondition will never be met because the work no longer has a subject —
+ * an enrolment that was stopped, or deleted. Left as a wait, such a row asks
+ * the database the same question every five minutes forever. It is cheap, and
+ * it is still wrong: the queue would be telling the operator it is waiting for
+ * something that is not coming.
+ */
 export type PreparedCommand =
-  | { ready: true; payload: Record<string, unknown>; usesAi: boolean }
-  | { ready: false; reason: WaitingReason };
+  | { kind: "ready"; payload: Record<string, unknown>; usesAi: boolean }
+  | { kind: "waiting"; reason: WaitingReason }
+  | { kind: "abandon"; reason: string };
 
 /**
  * Whether running this command will take a turn on the operator's single
@@ -56,8 +71,7 @@ async function commandTakesAiTurn(
     )
     .where(eq(enrollments.id, enrollmentId))
     .limit(1);
-  const declared = step?.declared as { fields?: unknown } | null | undefined;
-  return Array.isArray(declared?.fields) && declared.fields.length > 0;
+  return stepDeclaresPersonalization(step?.declared);
 }
 
 /**
@@ -77,8 +91,12 @@ export async function prepareCommand(
   row: { task: string; payload: Record<string, unknown> },
 ): Promise<PreparedCommand> {
   if (row.task !== "generate-message") {
+    // Research and discovery commands can be orphaned the same way — by an
+    // account deleted between queueing and draining. They are deliberately
+    // left alone: their subject is not read here, and inventing a second
+    // ownership rule for them belongs with the command that needs it.
     return {
-      ready: true,
+      kind: "ready",
       payload: row.payload,
       usesAi: await commandTakesAiTurn(db, row),
     };
@@ -86,11 +104,47 @@ export async function prepareCommand(
   const enrollmentId = row.payload.enrollmentId;
   if (typeof enrollmentId !== "string") {
     return {
-      ready: true,
+      kind: "ready",
       payload: row.payload,
       usesAi: await commandTakesAiTurn(db, row),
     };
   }
+
+  // Is there still somebody to write to? Asked before the address, because a
+  // stopped enrolment has no address question left to answer.
+  const [enrollment] = await db
+    .select({ state: enrollments.state })
+    .from(enrollments)
+    .where(eq(enrollments.id, enrollmentId))
+    .limit(1);
+  if (!enrollment) {
+    return {
+      kind: "abandon",
+      reason: "The enrolment this message was queued for no longer exists",
+    };
+  }
+  // `isTerminalEnrollmentState` and not a list written here: it is the tree's
+  // one answer to "is this sequence over", and it deliberately excludes
+  // `paused` and `manual_review`, which resume. Those stay waiting.
+  if (isTerminalEnrollmentState(enrollment.state)) {
+    return {
+      kind: "abandon",
+      reason: `This prospect's sequence ended before the message was written (${enrollment.state})`,
+    };
+  }
+  // A caller that already knows the address keeps it. The follow-up path does:
+  // it addresses the thread it is following, which is the previous step's
+  // recipient. Only work queued without one — an enrolment, whose prospect may
+  // have no resolved address yet — waits for resolution to answer.
+  const carried = row.payload.recipient;
+  if (typeof carried === "string" && carried.trim().length > 0) {
+    return {
+      kind: "ready",
+      payload: row.payload,
+      usesAi: await commandTakesAiTurn(db, row),
+    };
+  }
+
   const [accepted] = await db
     .select({ email: emailCandidates.normalizedEmail })
     .from(enrollments)
@@ -104,9 +158,9 @@ export async function prepareCommand(
     )
     .where(eq(enrollments.id, enrollmentId))
     .limit(1);
-  if (!accepted) return { ready: false, reason: "awaiting_accepted_email" };
+  if (!accepted) return { kind: "waiting", reason: "awaiting_accepted_email" };
   return {
-    ready: true,
+    kind: "ready",
     payload: { ...row.payload, recipient: accepted.email },
     usesAi: await commandTakesAiTurn(db, row),
   };

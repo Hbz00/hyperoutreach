@@ -267,6 +267,29 @@ describe("public email evidence providers", () => {
       input: { companyDomain: "acme.example" },
     });
   });
+
+  // This provider runs on the research lane, and on this transport the two
+  // lanes are the same model — the effort is the only thing that tells them
+  // apart. The descriptor is hand-written rather than the agent itself, which
+  // is exactly how a lane goes unrecorded without anybody noticing.
+  it("records which lane it ran on", () => {
+    const withLane = new StructuredPublicEmailEvidenceProvider(
+      {} as never,
+      "research-model",
+      "High",
+    );
+    expect(withLane.auditDescriptor).toMatchObject({
+      name: "public_email_evidence",
+      model: "research-model",
+      effort: "High",
+    });
+    // A mock bundle has no lane, and an invented one would be worse than the
+    // blank.
+    expect(
+      new StructuredPublicEmailEvidenceProvider({} as never, "research-model")
+        .auditDescriptor.effort,
+    ).toBeUndefined();
+  });
 });
 
 describe("MX resolver boundary", () => {

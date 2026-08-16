@@ -697,6 +697,11 @@ describe("durable workflow execution audit", () => {
       "messagesRecovered",
       "researchRecovered",
       "resolutionsRecovered",
+      // The scheduled-send lane rides in this stage. Named here on purpose:
+      // this assertion exists because a throw once skipped the whole return
+      // and took the other lanes with it, so every lane added later has to
+      // appear or the guarantee quietly shrinks.
+      "scheduledSends",
       "sendRequestsReleased",
     ]);
     // The message loop itself ran and reported per-message outcomes instead

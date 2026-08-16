@@ -64,6 +64,10 @@ export async function classifyReplyWithAudit(
   const descriptor = {
     name: "reply_classifier",
     model: classifier.model,
+    // Same reason as the inbound path this mirrors: a hand-built descriptor
+    // that drops the effort records `null` on a transport where the model
+    // alone cannot tell one lane from the other.
+    effort: classifier.effort,
     promptVersion: classifier.promptVersion,
     schemaVersion: classifier.schemaVersion,
   };

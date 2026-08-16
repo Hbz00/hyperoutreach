@@ -14,7 +14,12 @@ import {
 } from "@/lib/operator-auth";
 import { createOrGetAccount } from "@/modules/accounts/service";
 import { createOrGetContact } from "@/modules/contacts/service";
-import { mailboxConnections, messages, workflowEvents } from "@/lib/db/schema";
+import {
+  mailboxConnections,
+  messages,
+  operatorSendingSettings,
+  workflowEvents,
+} from "@/lib/db/schema";
 import {
   pauseCampaign,
   resumeCampaign,
@@ -35,10 +40,17 @@ import {
 } from "@/modules/mailboxes/smtp-imap-connection-service";
 import { reviewMessage } from "@/modules/messages/review-service";
 import { sendOutcomeNotice } from "@/modules/messages/send-outcome";
+import { isTransientSendBlock } from "@/modules/messages/send-policy";
+import {
+  autoScheduleIntent,
+  cancelSendIntent,
+  scheduleSendIntent,
+} from "@/modules/messages/scheduled-send";
 import type { SendMessageResult } from "@/modules/messages/send-service";
 import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
 import { ingestInboundMessage } from "@/modules/replies/inbound-service";
 import { updateOperatorSendingSettings } from "@/modules/settings/service";
+import { operatorClock } from "@/modules/settings/working-hours";
 import {
   addSuppression,
   removeSuppression,
@@ -625,14 +637,118 @@ export async function POST(
         // The send service's own claim keeps concurrent clicks safe.
         idempotencyKey: `ui:send:${messageId}:${value(formData, "requestToken") ?? randomUUID()}`,
       });
-      return destination(
-        request,
-        "/review",
-        sendOutcomeNotice(await recordedSendOutcome(dispatched.runId)),
-      );
+      const outcome = await recordedSendOutcome(dispatched.runId);
+      // A refusal time alone will lift is taken on without asking when it is
+      // close, and offered rather than assumed when it is not. The line is an
+      // hour: nobody wants to think about the sixty-second pacing delay, and
+      // nobody wants a Friday-evening click to leave on Monday morning without
+      // having said so.
+      //
+      // Written here, from the operator's own click, and never inside
+      // `sendApprovedMessage` — that function is also called by the automatic
+      // follow-up and by stale-work recovery, and letting either of them write
+      // an intent would be the system scheduling its own sends.
+      if (outcome && !outcome.ok && isTransientSendBlock(outcome.code)) {
+        const now = new Date();
+        const [settings] = await db
+          .select()
+          .from(operatorSendingSettings)
+          .where(eq(operatorSendingSettings.id, 1))
+          .limit(1);
+        // One rule, decided outside the route: whether this refusal is close
+        // enough to take on, at which instant, and for how long. The instant
+        // is the one a send could legally leave at rather than the one the
+        // named obstacle clears at — at 17:59 the sixty-second pacing delay
+        // ends at 18:00:30 and nothing may leave then, so the wait is not a
+        // minute, it is tomorrow morning, and tomorrow morning is a decision.
+        // The lifetime is granted because the instant was close, so the two
+        // are answered together and cannot drift apart here.
+        const auto = settings
+          ? autoScheduleIntent(outcome.code, now, settings)
+          : null;
+        if (auto) {
+          const scheduled = await scheduleSendIntent(db, {
+            messageId: messageId!,
+            now,
+            // The instant just shown to the operator is the instant stored, so
+            // the notice and the queue cannot disagree.
+            ...auto,
+          });
+          if (scheduled.ok) {
+            return destination(
+              request,
+              "/review",
+              `${sendOutcomeNotice(outcome)} — going out on its own at ${operatorClock(scheduled.scheduledAt, scheduled.timezone)}`,
+            );
+          }
+        }
+        // Far enough away to be a decision. The refusal stands, and the review
+        // card offers the schedule rather than this taking it — but only while
+        // the message is still `approved`. A send refused at the final check
+        // has already moved to `drafted`, where the card offers nothing and the
+        // route would refuse anyway; item 0's window hands it back shortly.
+        const [current] = await db
+          .select({ status: messages.status })
+          .from(messages)
+          .where(eq(messages.id, messageId!))
+          .limit(1);
+        return destination(
+          request,
+          "/review",
+          current?.status === "approved"
+            ? `${sendOutcomeNotice(outcome)} — not scheduled; the review card offers it if you want to wait`
+            : `${sendOutcomeNotice(outcome)} — not scheduled; it returns to the review queue shortly`,
+        );
+      }
+      return destination(request, "/review", sendOutcomeNotice(outcome));
     } catch {
       return destination(request, "/review", "Send execution failed safely");
     }
+  }
+
+  if (command === "schedule-send") {
+    const messageId = value(formData, "messageId");
+    if (!uuidSchema.safeParse(messageId).success)
+      return destination(request, "/review", "Invalid message");
+    const clickedAt = new Date();
+    const scheduled = await scheduleSendIntent(db, {
+      messageId: messageId!,
+      now: clickedAt,
+    });
+    return destination(
+      request,
+      "/review",
+      scheduled.ok
+        ? // A refusal with a nameable end gets named. A rolling daily cap has
+          // none, and the lane's first look is simply "now" — announcing the
+          // instant of the click as the delivery time would say something
+          // false about a wait that can last most of a day.
+          scheduled.scheduledAt.getTime() > clickedAt.getTime()
+          ? `Scheduled for ${operatorClock(scheduled.scheduledAt, scheduled.timezone)}`
+          : "Scheduled — it goes out at the first instant the policy allows"
+        : scheduled.code === "NO_WORKING_SLOT"
+          ? "Not scheduled: no working day is configured"
+          : scheduled.code === "ALREADY_SCHEDULED"
+            ? "Already scheduled"
+            : "Not scheduled: the message is no longer waiting to be sent",
+    );
+  }
+
+  if (command === "cancel-scheduled-send") {
+    const messageId = value(formData, "messageId");
+    if (!uuidSchema.safeParse(messageId).success)
+      return destination(request, "/review", "Invalid message");
+    const cancelled = await cancelSendIntent(db, messageId!);
+    return destination(
+      request,
+      "/review",
+      cancelled
+        ? "Scheduled send cancelled"
+        : // The lane claimed it between the render and the click. Saying
+          // "cancelled" here would be the kind of lie this iteration spent its
+          // time removing.
+          "Nothing to cancel — this send is already on its way",
+    );
   }
 
   if (command === "retry-command") {

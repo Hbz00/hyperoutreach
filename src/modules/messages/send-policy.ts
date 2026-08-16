@@ -25,6 +25,39 @@ export const SEND_POLICY_BLOCK_CODES = [
 
 export type SendPolicyBlockCode = (typeof SEND_POLICY_BLOCK_CODES)[number];
 
+/**
+ * Refusals that time alone lifts, and which a send intent may therefore wait
+ * out. Everything not named here is permanent for this purpose: it needs a
+ * decision, a correction, or a change of state that no amount of waiting
+ * produces.
+ *
+ * The membership is deliberately narrow, and two absences are the point:
+ *
+ * - `EMERGENCY_PAUSED` waits for a human to unpause. The pause exists to stop
+ *   everything at once; letting an intent survive it and fire the moment it
+ *   lifts is the opposite of what the operator pressed it for.
+ * - `REPLY_PENDING` waits for a classification that may say the prospect asked
+ *   to be left alone. Sending the moment it clears would race the answer.
+ *
+ * `RECENT_CONTACT_COOLDOWN` is absent for a different reason: it is measured in
+ * days, so an intent would predictably expire before it lifted. Refusing now
+ * and saying so beats promising a retry that cannot happen.
+ */
+export const TRANSIENT_SEND_BLOCK_CODES = [
+  "OUTSIDE_WORKING_HOURS",
+  "MAILBOX_MINIMUM_DELAY",
+  "CONTACT_MINIMUM_DELAY",
+  "MAILBOX_DAILY_CAP_REACHED",
+  "CAMPAIGN_DAILY_CAP_REACHED",
+] as const satisfies readonly SendPolicyBlockCode[];
+
+const transientSendBlockCodes = new Set<string>(TRANSIENT_SEND_BLOCK_CODES);
+
+/** Whether waiting, on its own, can turn this refusal into a send. */
+export function isTransientSendBlock(code: string): boolean {
+  return transientSendBlockCodes.has(code);
+}
+
 export type SendPolicyInput = {
   campaignStatus: "draft" | "active" | "paused" | "completed" | "archived";
   enrollmentState:

@@ -184,15 +184,24 @@ describe("AI provider bundle", () => {
 
     expect(factory).toHaveBeenCalledOnce();
     expect(factory).toHaveBeenCalledWith(config.chatGptDesktop);
+    // One provider, two lanes — and each lane carries the effort that makes it
+    // a lane. The models can be identical, as they are with the shipped
+    // configuration; the effort is what tells a ten-minute web-capable turn
+    // from a two-minute one, all the way down to the audit row.
     expect(bundle).toEqual({
       mode: "chatgpt_desktop",
       usesRealInfrastructure: true,
       research: {
         provider: desktop,
         model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "High",
         operationTimeoutMs: 600_000,
       },
-      nonWeb: { provider: desktop, model: "chatgpt-desktop:GPT-5.5" },
+      nonWeb: {
+        provider: desktop,
+        model: "chatgpt-desktop:GPT-5.5",
+        effort: "Instant",
+      },
     });
   });
 

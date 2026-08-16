@@ -10,7 +10,10 @@ import { enrollContact } from "@/modules/campaigns/service";
 import { MockMailProvider } from "@/modules/mailboxes/mock-mail-provider";
 import { evaluateSendPolicy } from "@/modules/messages/send-policy";
 import { sendApprovedMessage } from "@/modules/messages/send-service";
-import { drainOperatorCommands } from "@/modules/workflows/operator-command-queue";
+import {
+  drainOperatorCommands,
+  enqueueOperatorCommand,
+} from "@/modules/workflows/operator-command-queue";
 import { WorkflowRuntime } from "@/modules/workflows/runtime";
 import { createWorkflowTaskServices } from "@/modules/workflows/service-factory";
 import type { WorkflowTaskName } from "@/modules/workflows/task-contracts";
@@ -26,7 +29,7 @@ const NOW = new Date("2026-08-16T12:00:00.000Z");
  * runtime, not the bare service — so payload parsing and the runtime's
  * retryable-failure conversion are exercised rather than skipped.
  */
-function drain(now = NOW) {
+function drain(now = NOW, limit = 5) {
   const services = createWorkflowTaskServices(db, {});
   const runtime = new WorkflowRuntime(db, services);
   return drainOperatorCommands(
@@ -36,7 +39,7 @@ function drain(now = NOW) {
         runId: input.runId,
         attempt: input.attempt,
       }),
-    { now, limit: 5 },
+    { now, limit },
   );
 }
 
@@ -281,6 +284,103 @@ describe("the first message is written without being asked twice", () => {
     expect(await commandsFor(enrollment.id)).toHaveLength(1);
     await drain();
     expect(await messagesFor(enrollment.id)).toHaveLength(1);
+  });
+
+  // A parked row asks its question again every five minutes. That is right
+  // while the answer can still change, and wrong once it cannot: an enrolment
+  // that was stopped will never acquire an address, so the queue would be
+  // telling the operator it is waiting for something that is not coming.
+  it("abandons a generation whose sequence ended, instead of waiting forever", async () => {
+    const fixture = await prospect();
+    const enrollment = await enroll(fixture);
+    await db
+      .update(schema.enrollments)
+      .set({ state: "stopped" })
+      .where(eq(schema.enrollments.id, enrollment.id));
+
+    await drain();
+
+    const [command] = await commandsFor(enrollment.id);
+    expect(command).toMatchObject({ status: "abandoned" });
+    expect(command!.error).toContain("sequence ended");
+    expect(await messagesFor(enrollment.id)).toHaveLength(0);
+  });
+
+  // The other side of the same rule, and the one that would hurt if it were
+  // wrong: `paused` and `manual_review` are not terminal. They resume, so the
+  // work must still be there when they do.
+  it("keeps waiting for a paused enrolment rather than abandoning it", async () => {
+    const fixture = await prospect();
+    const enrollment = await enroll(fixture);
+    await db
+      .update(schema.enrollments)
+      .set({ state: "paused" })
+      .where(eq(schema.enrollments.id, enrollment.id));
+
+    await drain();
+
+    expect((await commandsFor(enrollment.id))[0]).toMatchObject({
+      status: "waiting",
+      waitingReason: "awaiting_accepted_email",
+    });
+  });
+
+  // The follow-up path queues its generations with the recipient already
+  // resolved, which skips the address question. That shortcut must not also
+  // skip the question of whether there is still anyone to write to — the
+  // ordering inside `prepareCommand` is what keeps the two separate, and
+  // nothing else asserts it.
+  it("abandons an orphaned command even when it already knows the address", async () => {
+    const fixture = await prospect({ acceptedEmail: true });
+    const enrollment = await enroll(fixture);
+    await db
+      .update(schema.enrollments)
+      .set({ state: "stopped" })
+      .where(eq(schema.enrollments.id, enrollment.id));
+    const carried = await enqueueOperatorCommand(db, {
+      command: "generate-message",
+      payload: {
+        enrollmentId: enrollment.id,
+        stepIndex: 1,
+        recipient: "already-known@example.com",
+      },
+      requestedBy: "automatic_follow_up_policy",
+      dedupeKey: `enrollment:${enrollment.id}:generate:1`,
+    });
+
+    await drain();
+
+    const [row] = await db
+      .select()
+      .from(schema.operatorCommands)
+      .where(eq(schema.operatorCommands.id, carried.id));
+    expect(row).toMatchObject({ status: "abandoned" });
+    expect(row!.error).toContain("sequence ended");
+  });
+
+  // An abandon costs a claim but does no work, so it draws on the parking
+  // budget rather than on the pass's work budget. Asserted with a work budget
+  // of one, which is what makes the two accountings distinguishable: if an
+  // abandon spent it, the older orphan would exhaust the pass and the one
+  // command that could actually run would never be reached.
+  //
+  // One orphan, not two: the parking budget is twice the work budget, so two
+  // would end the pass on their own — correctly, and for the other reason.
+  it("does not let an orphaned command spend the pass's work budget", async () => {
+    const orphan = await enroll(await prospect());
+    await db
+      .update(schema.enrollments)
+      .set({ state: "stopped" })
+      .where(eq(schema.enrollments.id, orphan.id));
+    // Queued last, so age alone would serve it last.
+    const runnable = await enroll(await prospect({ acceptedEmail: true }));
+
+    await drain(NOW, 1);
+
+    expect((await commandsFor(orphan.id))[0]).toMatchObject({
+      status: "abandoned",
+    });
+    expect(await messagesFor(runnable.id)).toHaveLength(1);
   });
 
   // The pass drains freely and stops at its first AI turn, so that ten

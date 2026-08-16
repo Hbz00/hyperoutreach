@@ -478,6 +478,11 @@ export async function ingestInboundMessage(
         {
           name: "reply_classifier",
           model: classifier.model,
+          // Carried through, not omitted. This descriptor is hand-built rather
+          // than the classifier itself, so leaving the effort out wrote `null`
+          // into every reply-classification row on a transport where both
+          // lanes run the same model — the one case the column exists for.
+          effort: classifier.effort,
           promptVersion: classifier.promptVersion,
           schemaVersion: classifier.schemaVersion,
         },

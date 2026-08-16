@@ -94,9 +94,14 @@ describe("workflow service provider composition", () => {
       research: {
         provider: codex,
         model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "High",
         operationTimeoutMs: 120_000,
       },
-      nonWeb: { provider: codex, model: "chatgpt-desktop:GPT-5.6 Sol" },
+      nonWeb: {
+        provider: codex,
+        model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "Instant",
+      },
     };
     const injected = dependencies(bundle);
     const db = databaseWriterDouble();
@@ -170,9 +175,14 @@ describe("workflow service provider composition", () => {
       research: {
         provider: surface,
         model: "chatgpt-desktop:research-lane",
+        effort: "High",
         operationTimeoutMs: 600_000,
       },
-      nonWeb: { provider: surface, model: "chatgpt-desktop:fast-lane" },
+      nonWeb: {
+        provider: surface,
+        model: "chatgpt-desktop:fast-lane",
+        effort: "Instant",
+      },
     };
     const injected = dependencies(bundle);
     const services = createWorkflowTaskServices(

@@ -17,6 +17,11 @@ export async function startAgentRun(
     .values({
       agent: agent.name,
       model: agent.model,
+      // Written here and never at completion, unlike `model`. A lane's effort
+      // is a property of how the caller was configured, not of what the
+      // surface reports at that instant — the desktop app answers with the
+      // picker's current state, which can read `none`. One source, chosen.
+      effort: agent.effort ?? null,
       promptVersion: agent.promptVersion,
       schemaVersion: agent.schemaVersion,
       input,

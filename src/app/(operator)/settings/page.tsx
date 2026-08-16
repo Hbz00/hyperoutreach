@@ -3,6 +3,7 @@ import { desc } from "drizzle-orm";
 import maintenanceConfig from "../../../../config/maintenance.json";
 import {
   agentRunCost,
+  agentRunLane,
   agentRunDuration,
 } from "@/modules/settings/agent-run-presentation";
 import { probeAiSurface } from "@/modules/settings/ai-surface-health";
@@ -634,7 +635,7 @@ export default async function SettingsPage({
                 <tr key={run.id}>
                   <td>{run.createdAt.toISOString()}</td>
                   <td>{run.agent}</td>
-                  <td>{run.model}</td>
+                  <td>{agentRunLane(run.model, run.effort)}</td>
                   <td>
                     {run.error ? `${run.status} — ${run.error}` : run.status}
                   </td>

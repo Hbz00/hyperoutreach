@@ -5,7 +5,24 @@ import { pathToFileURL } from "node:url";
 import maintenanceTiming from "../config/maintenance.json" with { type: "json" };
 import { loadAndResolveLocalMaintenanceConfig } from "./local-maintenance-runtime.mjs";
 
-const SIGNALS = ["SIGINT", "SIGTERM"];
+// SIGHUP is here because closing the terminal window orphans the stack exactly
+// like an unhandled Ctrl+C does: the children are detached, so nothing else can
+// stop them once the supervisor dies.
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+// The maintenance worker only handles SIGINT and SIGTERM, so forwarding a raw
+// SIGHUP would kill it mid-cycle and skip the drain the shutdown order exists
+// to protect. Ask for the same stop it already understands.
+function forwardableSignal(signal) {
+  return signal === "SIGHUP" ? "SIGTERM" : signal;
+}
+
+// One terminal Ctrl+C reaches the supervisor twice: the tty signals the whole
+// foreground process group, and `npm run` forwards the same signal to us on top
+// of that. Measured ~1ms apart. Only arm the force-kill escalation once that
+// duplicate has certainly landed, so a single Ctrl+C still shuts down
+// gracefully and only a deliberate second one skips the drain.
+export const ESCALATION_ARM_MS = 500;
 
 const defaultTimers = {
   setTimeout: (...arguments_) => globalThis.setTimeout(...arguments_),
@@ -251,7 +268,19 @@ export function createLocalStackSupervisor(options) {
     return shutdownPromise;
   }
 
-  return { start, shutdown, done };
+  // Escalation path for a second terminal signal. The graceful sequence drains
+  // the worker before Next.js, so it can stay silent for both grace windows;
+  // without this the repeated Ctrl+C would fall through to Node's default
+  // action, kill the supervisor and strand the detached children on the port.
+  function forceStop() {
+    shuttingDown = true;
+    for (const child of [workerChild, webChild]) {
+      if (child && !hasExited(child)) signalChild(child, "SIGKILL");
+    }
+    resolveDone(130);
+  }
+
+  return { start, shutdown, forceStop, done };
 }
 
 export async function runLocalStackCli(
@@ -259,6 +288,8 @@ export async function runLocalStackCli(
   options = {},
 ) {
   const logger = options.logger ?? console;
+  const timers = options.timers ?? defaultTimers;
+  const signalTarget = options.signalTarget ?? process;
   if (argv[0] === "--help" || argv[0] === "-h") {
     logger.info(
       "Usage: node scripts/run-local-stack.mjs <dev|start> [Next.js arguments]",
@@ -273,6 +304,7 @@ export async function runLocalStackCli(
   }
 
   let supervisor;
+  let startup;
   try {
     supervisor = createLocalStackSupervisor({
       mode,
@@ -282,27 +314,77 @@ export async function runLocalStackCli(
       logger,
       timers: options.timers,
       spawnProcess: options.spawnProcess,
+      signalProcess: options.signalProcess,
+      platform: options.platform,
       loadConfig: options.loadConfig,
     });
-    await supervisor.start();
+    startup = await supervisor.start();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     logger.error(`[local-stack] startup failed: ${message}`);
     return 1;
   }
 
+  const graceSeconds = Math.ceil(
+    ((startup.config?.mode === "enabled"
+      ? (startup.config?.shutdownGraceMs ??
+        maintenanceTiming.workerShutdownGraceMs)
+      : 0) +
+      (startup.config?.nextShutdownGraceMs ??
+        maintenanceTiming.nextShutdownGraceMs)) /
+      1000,
+  );
+
+  // SIGHUP arrives because the terminal went away, so the stream we log to may
+  // already be gone. An uncaught write error here would kill the supervisor and
+  // recreate the very orphan this handler exists to prevent.
+  const safeLog = (level, message) => {
+    try {
+      logger[level](message);
+    } catch {
+      // nothing left to report to
+    }
+  };
+
   const handlers = new Map();
+  let stopping = false;
+  let escalationArmed = false;
+  let forced = false;
   for (const signal of SIGNALS) {
+    // Registered with `on`, not `once`: the graceful sequence stays silent for
+    // up to the full grace window, so a second interrupt is expected and must
+    // remain ours to handle rather than falling through to Node's default
+    // action, which would kill the supervisor and strand the detached children.
     const handler = () => {
-      void supervisor.shutdown(signal);
+      if (forced) return;
+      if (stopping) {
+        if (!escalationArmed) return; // duplicate delivery of the same Ctrl+C
+        forced = true;
+        safeLog(
+          "error",
+          "[local-stack] second interrupt received; force-killing the local stack",
+        );
+        supervisor.forceStop();
+        return;
+      }
+      stopping = true;
+      safeLog(
+        "info",
+        `[local-stack] ${signal} received; draining the local stack (up to ${graceSeconds}s) — interrupt again to force-kill`,
+      );
+      const armHandle = timers.setTimeout(() => {
+        escalationArmed = true;
+      }, ESCALATION_ARM_MS);
+      armHandle?.unref?.(); // never hold the loop open past a clean shutdown
+      void supervisor.shutdown(forwardableSignal(signal));
     };
     handlers.set(signal, handler);
-    process.once(signal, handler);
+    signalTarget.on(signal, handler);
   }
 
   const exitCode = await supervisor.done;
   for (const [signal, handler] of handlers) {
-    process.removeListener(signal, handler);
+    signalTarget.removeListener(signal, handler);
   }
   return exitCode;
 }

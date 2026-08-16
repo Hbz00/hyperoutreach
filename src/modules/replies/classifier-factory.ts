@@ -14,6 +14,7 @@ export function createReplyClassifierFromBundle(
       bundle.nonWeb.provider,
       bundle.nonWeb.model,
       "chatgpt-desktop-reply-v1",
+      bundle.nonWeb.effort,
     );
   }
   return new DeterministicReplyClassifier();

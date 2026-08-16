@@ -101,3 +101,52 @@ describe("Codex model observability", () => {
     expect(updates[0]).not.toHaveProperty("model");
   });
 });
+
+// The effort is written once, when the run starts, from how the caller was
+// configured — and never at completion, unlike the model. The surface reports
+// an *observed* effort (the desktop picker's current state, which can read
+// `none`); a lane's identity is not that.
+describe("which lane an agent run records", () => {
+  const fastAgent = {
+    name: "personalization",
+    model: "chatgpt-desktop:GPT-5.6 Sol",
+    effort: "Instant",
+    promptVersion: "prompt-v1",
+    schemaVersion: "schema-v1",
+  };
+
+  it("stamps the configured effort when the run starts", async () => {
+    const { writer, inserts } = writerDouble();
+
+    await startAgentRun(writer as never, fastAgent, { input: true });
+
+    expect(inserts[0]).toMatchObject({
+      model: "chatgpt-desktop:GPT-5.6 Sol",
+      effort: "Instant",
+    });
+  });
+
+  it("never lets completion rewrite the lane", async () => {
+    const { writer, updates } = writerDouble();
+
+    await completeAgentRun(writer as never, "run-id", {
+      responseId: "response",
+      // What the surface answered with, which is not the lane.
+      model: "chatgpt-desktop:GPT-5.6 Sol",
+      output: {},
+      sources: [],
+      usage: null,
+      costUsd: null,
+    } as never);
+
+    expect(updates[0]).not.toHaveProperty("effort");
+  });
+
+  it("records no effort for an agent that has no lane", async () => {
+    const { writer, inserts } = writerDouble();
+
+    await startAgentRun(writer as never, codexAgent, { input: true });
+
+    expect(inserts[0]).toMatchObject({ effort: null });
+  });
+});

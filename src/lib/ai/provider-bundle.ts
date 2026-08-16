@@ -16,9 +16,10 @@ export type LiveAIProviderBundle = {
   research: {
     provider: StructuredAIProvider;
     model: string;
+    effort: string;
     operationTimeoutMs: number;
   };
-  nonWeb: { provider: StructuredAIProvider; model: string };
+  nonWeb: { provider: StructuredAIProvider; model: string; effort: string };
 };
 
 export type AIProviderBundle =
@@ -53,11 +54,16 @@ export function createLiveAIProviderBundle(
     research: {
       provider,
       model: auditModel(config.chatGptDesktop.research.model),
+      // Carried beside the model rather than folded into it: both lanes run
+      // the same model, so the effort is the only thing that tells a
+      // ten-minute web-capable turn from a two-minute one.
+      effort: config.chatGptDesktop.research.effort,
       operationTimeoutMs: config.chatGptDesktop.research.timeoutMs,
     },
     nonWeb: {
       provider,
       model: auditModel(config.chatGptDesktop.fast.model),
+      effort: config.chatGptDesktop.fast.effort,
     },
   };
 }

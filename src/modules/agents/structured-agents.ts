@@ -59,6 +59,7 @@ abstract class BaseStructuredAgent {
   constructor(
     protected readonly provider: StructuredAIProvider,
     readonly model: string,
+    readonly effort?: string,
   ) {}
 }
 
@@ -187,6 +188,7 @@ export class StructuredReplyClassifier implements ReplyClassifier {
     // surface-specific identity; the fallback stays provider-neutral so a
     // caller that forgets cannot stamp a row with a provider that never ran it.
     readonly name = "structured-reply-v1",
+    readonly effort?: string,
   ) {}
 
   async classifyObserved(

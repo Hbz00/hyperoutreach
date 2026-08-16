@@ -13,6 +13,15 @@ import type { AgentResult } from "@/modules/agents/types";
 export interface ObservableAgent {
   readonly name: string;
   readonly model: string;
+  /**
+   * The lane's reasoning effort, as configured — `High` for research, `Instant`
+   * for the fast lane.
+   *
+   * Optional, and deliberately so: the mock agents have no lane, and a run
+   * recorded before the column existed has no answer. Both are rendered as the
+   * model alone rather than as an invented effort.
+   */
+  readonly effort?: string;
   readonly promptVersion: string;
   readonly schemaVersion: string;
 }

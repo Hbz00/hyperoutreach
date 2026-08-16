@@ -34,7 +34,11 @@ import {
 } from "@/modules/mailboxes/microsoft-graph-sync-service";
 import { createMailboxGraphClient } from "@/modules/mailboxes/microsoft-oauth-service";
 import { generateWithPersonalization } from "@/modules/messages/personalized-generation";
-import { sendApprovedMessage } from "@/modules/messages/send-service";
+import {
+  readSendPolicyVerdict,
+  sendApprovedMessage,
+} from "@/modules/messages/send-service";
+import { dispatchScheduledSends } from "@/modules/messages/scheduled-send";
 import { createReplyClassifierFromBundle } from "@/modules/replies/classifier-factory";
 import {
   ingestMatchedInboundMessage,
@@ -170,6 +174,7 @@ export function composeEmailResolutionProviders(
     publicEvidence: new StructuredPublicEmailEvidenceProvider(
       bundle.research.provider,
       bundle.research.model,
+      bundle.research.effort,
     ),
     publicEvidenceOperationTimeoutMs: bundle.research.operationTimeoutMs,
   };
@@ -409,6 +414,40 @@ export function createWorkflowTaskServices(
       const sendRequestsReleased = await releaseExpiredSendRequests(db, {
         now,
       });
+      // The scheduled lane rides in this stage rather than in one of its own:
+      // it is message lifecycle work like the release above, it issues no AI
+      // turn, and giving it a stage would cost budget for a query that is
+      // usually empty. Its own query, though — `findStaleRecoveryCandidates`
+      // still cannot see an `approved` message, and that stays true.
+      //
+      // No `now`, deliberately, and this is the one place in this stage where
+      // that matters. `observedAt` is the instant the tick started, and this
+      // stage runs third: inbound and followups may have taken minutes before
+      // it. The rest of the stage completes work the operator already asked
+      // for and is bounded by its own window, so a stale clock only makes it
+      // late. This lane *originates* a delivery, and judging a delivery
+      // against a window that has since shut is the exact failure the whole
+      // area exists to prevent. It reads the wall clock, and hands the same
+      // instant to the verdict and to the send.
+      const scheduledSends = await dispatchScheduledSends(
+        db,
+        async (messageId, at) =>
+          readSendPolicyVerdict(
+            db,
+            messageId,
+            (await providerForMessage(messageId, db, environment)).kind,
+            at,
+          ),
+        async (messageId, at) => {
+          const result = await sendApprovedMessage(
+            db,
+            await providerForMessage(messageId, db, environment),
+            { messageId },
+            { clock: () => at },
+          );
+          return result.ok ? { ok: true } : { ok: false, code: result.code };
+        },
+      );
       const candidates = await findStaleRecoveryCandidates(db, {
         now,
         limit: recoveryLimit,
@@ -426,7 +465,18 @@ export function createWorkflowTaskServices(
             db,
             await providerForMessage(messageId, db, environment),
             { messageId },
-            { clock: () => now },
+            // The wall clock, for the same reason the scheduled lane above
+            // uses it. Selecting these candidates against the tick's instant
+            // is fine — a stale clock only makes recovery late, and the
+            // request's own window is what bounds how long it may still be
+            // completed. But completing one is a *delivery*, and most of the
+            // time this is the only path that reaches a provider in this
+            // stage: a candidate whose claim is still standing is reconciled
+            // and released, while a `drafted` message with a live request and
+            // no attempt behind it goes through the policy and out. Judged on
+            // an instant up to a whole stage old, that send leaves after the
+            // window it was measured against has already shut.
+            { clock: () => new Date() },
           ),
         );
       }
@@ -457,6 +507,7 @@ export function createWorkflowTaskServices(
       return {
         inbound,
         sendRequestsReleased,
+        scheduledSends,
         messagesRecovered,
         researchRecovered,
         resolutionsRecovered,

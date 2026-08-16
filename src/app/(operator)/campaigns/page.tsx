@@ -136,40 +136,27 @@ export default async function CampaignsPage({
                     required={index === 0}
                   />
                 </label>
-                {/* First step only: see the note on the same block in the
-                    campaign editor. Follow-up generation never calls the
-                    agent, so declaring a field there produces a version that
-                    cannot generate. */}
-                {index === 0 ? (
-                  <>
-                    <label className="span-all check">
-                      <input type="checkbox" name={`step${index}AiOpening`} />
-                      AI-written opening sentence — reference it as{" "}
-                      <code>{"{{personalized_opening}}"}</code>
-                    </label>
-                    <label className="span-all check">
-                      <input type="checkbox" name={`step${index}AiRelevance`} />
-                      AI-written company relevance — reference it as{" "}
-                      <code>{"{{company_relevance}}"}</code>
-                    </label>
-                    <label>
-                      Minimum AI confidence
-                      <input
-                        name={`step${index}MinConfidence`}
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        defaultValue={0.5}
-                      />
-                    </label>
-                  </>
-                ) : (
-                  <p className="muted span-all">
-                    Follow-up steps are written from the template alone. Only
-                    the first step can ask the agent for a sentence.
-                  </p>
-                )}
+                <label className="span-all check">
+                  <input type="checkbox" name={`step${index}AiOpening`} />
+                  AI-written opening sentence — reference it as{" "}
+                  <code>{"{{personalized_opening}}"}</code>
+                </label>
+                <label className="span-all check">
+                  <input type="checkbox" name={`step${index}AiRelevance`} />
+                  AI-written company relevance — reference it as{" "}
+                  <code>{"{{company_relevance}}"}</code>
+                </label>
+                <label>
+                  Minimum AI confidence
+                  <input
+                    name={`step${index}MinConfidence`}
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    defaultValue={0.5}
+                  />
+                </label>
               </div>
             </fieldset>
           ))}

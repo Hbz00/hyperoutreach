@@ -689,15 +689,49 @@ export const messages = pgTable(
      * When somebody asked for this message to go out. Stamped inside the send
      * claim, and only when the pre-claim status is `approved` — the one status
      * a request can start from, and the one recovery never claims from. A
-     * request stamps it; a resumption does not. Recovery reads it to bound how
-     * long it may keep completing a request, so it must never be confused with
-     * `draftedAt` (when a provider draft first existed, never refreshed) or
-     * with `scheduledAt` (reserved for a request pending a future instant).
+     * request stamps it; a resumption does not.
+     *
+     * The scheduled-send lane also claims from `approved`, and also stamps.
+     * That is right, not a leak: the operator asked, the system only waited
+     * for the instant their own policy allows, and the completion window
+     * should bound that delivery exactly as it bounds a direct click. What
+     * stays impossible is a stamp with no human gesture behind it — the lane
+     * selects on `scheduledAt`, which nothing but a click writes.
+     *
+     * Recovery reads this column to bound how long it may keep completing a
+     * request, so it must never be confused with `draftedAt` (when a provider
+     * draft first existed, never refreshed) or with `scheduledAt` (a request
+     * pending a future instant).
      */
     sendRequestedAt: timestamp("send_requested_at", { withTimezone: true }),
     sendAttemptedAt: timestamp("send_attempted_at", { withTimezone: true }),
     lastError: text("last_error"),
+    /**
+     * When the scheduled-send lane may next try this message.
+     *
+     * Written only by an operator's Send click that the policy refused for a
+     * reason time alone will lift, and moved forward as the lane re-checks. It
+     * is the discriminator that keeps the lane safe: a message that is merely
+     * approved carries null here and no worker path can select it.
+     *
+     * Not `sendRequestedAt`, which records that a send is in flight now, and
+     * not a substitute for it: the two answer different questions and item 0
+     * depends on the difference.
+     */
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+    /**
+     * When the intent gives up, fixed at the click and never moved.
+     *
+     * Separate from `scheduledAt` because one column cannot both be pushed
+     * forward on every re-check and remain the anchor the lifetime is measured
+     * from. Derived from the first instant the calendar actually opens, not
+     * from the click: a Friday-evening click opens on Monday, so a lifetime
+     * counted from the click would expire over the weekend without ever having
+     * been triable.
+     */
+    sendIntentExpiresAt: timestamp("send_intent_expires_at", {
+      withTimezone: true,
+    }),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     draftedAt: timestamp("drafted_at", { withTimezone: true }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
@@ -824,6 +858,19 @@ export const agentRuns = pgTable(
     agent: text("agent").notNull(),
     responseId: text("response_id"),
     model: text("model").notNull(),
+    /**
+     * The lane's reasoning effort, as configured when the turn started.
+     *
+     * Both lanes run the same model, so the model alone cannot tell a
+     * ten-minute web-capable research turn from a two-minute fast one — which
+     * is exactly what you need to know when a run fails on its deadline.
+     *
+     * Nullable because the mock agents have no lane and rows written before
+     * this column existed have no answer. Never backfilled: the effort of a
+     * past run is not recoverable, and guessing it would be worse than the
+     * blank.
+     */
+    effort: text("effort"),
     promptVersion: text("prompt_version").notNull(),
     schemaVersion: text("schema_version").notNull(),
     input: jsonb("input").$type<Record<string, unknown>>().notNull(),
@@ -1026,7 +1073,18 @@ export const operatorCommands = pgTable(
     /** Why the work cannot start yet. Null unless `status` is `waiting`. */
     waitingReason: text("waiting_reason"),
     attempt: integer("attempt").default(0).notNull(),
-    maxAttempts: integer("max_attempts").default(3).notNull(),
+    /**
+     * Four, so that the third backoff step is reachable.
+     *
+     * The retry ladder is 1, 5 then 15 minutes. At three attempts the run
+     * ended after the second wait and the 15-minute step was dead code — a
+     * command died six minutes into any outage. The outage this transport
+     * actually has is the operator's ChatGPT desktop app being closed,
+     * updated, or asleep with the laptop, which lasts longer than six
+     * minutes. Four attempts spans twenty-one, at the cost of a genuinely
+     * broken command taking that long to declare itself lost.
+     */
+    maxAttempts: integer("max_attempts").default(4).notNull(),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     claimId: text("claim_id"),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),

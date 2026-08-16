@@ -27,6 +27,8 @@ import {
   AUTOMATIC_FOLLOW_UP_ACTOR,
   validateWorkflowInvocation,
 } from "@/modules/workflows/follow-up-policy";
+import { stepDeclaresPersonalization } from "@/modules/messages/personalization-declaration";
+import { enqueueOperatorCommand } from "@/modules/workflows/operator-command-queue";
 
 const invocationSchema = z.object({
   enrollmentId: z.uuid(),
@@ -36,12 +38,25 @@ const invocationSchema = z.object({
   expectedToken: z.string().trim().min(1).max(200),
 });
 
-async function markFollowUpManualReview(
+/**
+ * Hands the enrolment back to the operator, and stops it being due.
+ *
+ * The target state is a parameter because the two reasons to hand back are not
+ * the same thing. Something that went wrong — a generation that failed — is
+ * `manual_review`: there may be no message, and a human has to decide what to
+ * do at all. A message waiting for a decision is `ready_for_review`, which is
+ * the state `reviewMessage` requires: it refuses to approve anything whose
+ * enrolment is not in it. Handing a perfectly good personalized message to
+ * `manual_review` therefore parked it where the operator could see it and not
+ * act on it.
+ */
+async function markFollowUpHandedBack(
   db: AppDatabase,
   input: z.infer<typeof invocationSchema>,
   now: Date,
   reason: string,
   claimId: string,
+  state: "manual_review" | "ready_for_review" = "manual_review",
 ): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.execute(
@@ -54,31 +69,38 @@ async function markFollowUpManualReview(
       .limit(1);
     if (!current) return;
     if (current.workflowClaimId !== claimId) return;
-    if (
-      !isTerminalEnrollmentState(current.state) &&
-      current.state !== "manual_review"
-    ) {
+    // Terminal enrolments are left alone — handing one back would resurrect a
+    // sequence somebody ended. Everything else is handed back, and the
+    // schedule is cleared whether or not the state itself changes: an enrolment
+    // already sitting in the target state can still be carrying the
+    // `nextActionAt` and token of the very follow-up being refused, which is
+    // live work pointing at a decision already taken.
+    if (!isTerminalEnrollmentState(current.state)) {
       await tx
         .update(enrollments)
         .set({
-          state: "manual_review",
+          state,
           nextActionAt: null,
           nextActionToken: null,
           workflowClaimId: null,
           workflowClaimedAt: null,
         })
         .where(eq(enrollments.id, current.id));
-      await tx.insert(stateTransitions).values({
-        entityType: "enrollment",
-        entityId: current.id,
-        fromState: current.state,
-        toState: "manual_review",
-        reason,
-        metadata: {
-          expectedStep: input.expectedStep,
-          expectedToken: input.expectedToken,
-        },
-      });
+      // Only when it actually moved: a transition row from a state to itself
+      // records nothing and reads as noise in the audit.
+      if (current.state !== state) {
+        await tx.insert(stateTransitions).values({
+          entityType: "enrollment",
+          entityId: current.id,
+          fromState: current.state,
+          toState: state,
+          reason,
+          metadata: {
+            expectedStep: input.expectedStep,
+            expectedToken: input.expectedToken,
+          },
+        });
+      }
     }
     await tx
       .update(workflowEvents)
@@ -262,6 +284,10 @@ export async function processFollowUpInvocation(
       disposition: "awaiting_review" | "sent" | "already_sent";
       messageId: string;
     }
+  // Its own member, deliberately without a `messageId`: nothing was written
+  // yet, and a caller that reads one here would be reading a message that does
+  // not exist.
+  | { ok: true; disposition: "generation_queued" }
   | {
       ok: false;
       code:
@@ -530,6 +556,64 @@ export async function processFollowUpInvocation(
       throw new Error("Injected crash after follow-up claim");
     }
 
+    // A step that asks an agent for a sentence cannot be generated here.
+    //
+    // This stage loops over every due enrolment, so an agent call inside the
+    // loop would spend the operator's single ChatGPT window once per due
+    // prospect, unbounded — exactly the bound the command queue exists to
+    // impose, and the reason step zero was queued in the first place. The work
+    // goes to the queue, which spends at most one turn per pass.
+    //
+    // The enrolment goes to review in the same movement, and that costs
+    // nothing: personalized text and unattended sending are mutually exclusive
+    // by design, so this path was never going to send the result anyway. What
+    // it would otherwise have done — generate deterministically — is worse
+    // than waiting: it would write a message with the agent's sentence
+    // missing, and interpolation fails on it.
+    const [declaringStep] = await db
+      .select({ declared: sequenceSteps.personalizationSchema })
+      .from(sequenceSteps)
+      .where(
+        and(
+          eq(sequenceSteps.campaignVersionId, input.expectedVersionId),
+          eq(sequenceSteps.stepIndex, input.expectedStep),
+        ),
+      )
+      .limit(1);
+    if (stepDeclaresPersonalization(declaringStep?.declared)) {
+      // The same key shape enrolment uses for step zero, so a re-invocation
+      // that arrives before the review mark lands answers "already queued"
+      // instead of writing a second row.
+      await enqueueOperatorCommand(db, {
+        command: "generate-message",
+        payload: {
+          enrollmentId: input.enrollmentId,
+          stepIndex: input.expectedStep,
+          // Carried rather than left for the queue to re-derive. A follow-up
+          // addresses the thread it is following: this is the previous step's
+          // recipient, which is what this path has always used and is not
+          // necessarily the contact's currently accepted candidate. Re-deriving
+          // would quietly change which address a follow-up goes to.
+          recipient: claim.recipient,
+        },
+        requestedBy: AUTOMATIC_FOLLOW_UP_ACTOR,
+        dedupeKey: `enrollment:${input.enrollmentId}:generate:${input.expectedStep}`,
+      });
+      await markFollowUpHandedBack(
+        db,
+        input,
+        now,
+        "personalized_follow_up_queued",
+        claim.claimId,
+        // A message is coming and the operator will have to decide on it.
+        // `reviewMessage` refuses to approve anything whose enrolment is not
+        // `ready_for_review`, so parking it in `manual_review` would show the
+        // card and refuse the click.
+        "ready_for_review",
+      );
+      return { ok: true, disposition: "generation_queued" };
+    }
+
     const generated = await generateOutreachProposal(db, {
       enrollmentId: input.enrollmentId,
       stepIndex: input.expectedStep,
@@ -537,7 +621,7 @@ export async function processFollowUpInvocation(
       workflowClaimId: claim.claimId,
     });
     if (!generated.ok) {
-      await markFollowUpManualReview(
+      await markFollowUpHandedBack(
         db,
         input,
         now,
@@ -575,13 +659,28 @@ export async function processFollowUpInvocation(
       .where(eq(messagePersonalizationFields.messageId, generated.message.id))
       .limit(1);
     if (personalized) {
-      await releaseFollowUpClaim(db, input.enrollmentId, claim.claimId);
-      await markFollowUpManualReview(
+      // No `releaseFollowUpClaim` first, deliberately.
+      // `markFollowUpHandedBack` is fenced on the claim id and clears the
+      // claim itself when it succeeds. Releasing beforehand made the mark a
+      // silent no-op: the message was correctly not sent, but the enrolment
+      // stayed `ready_for_review` carrying a `nextActionAt` and a token for a
+      // follow-up that had already been refused. It was not picked up again,
+      // but only by accident — `findDueEnrollments` skips a
+      // `ready_for_review` row that already has a message at its step. Cancel
+      // that message and the stale schedule becomes live work again. Every
+      // other hand-back marks first, for the same reason. The one branch that
+      // releases without marking — a non-automatic generation that succeeded,
+      // above — leaves the same stale schedule behind, and is dormant on the
+      // same accident rather than on a guarantee.
+      await markFollowUpHandedBack(
         db,
         input,
         now,
         "personalized_message_requires_review",
         claim.claimId,
+        // Same reason: there is a perfectly good `proposed` message here and
+        // the only thing left to do with it is approve it.
+        "ready_for_review",
       );
       return {
         ok: true,
@@ -597,7 +696,7 @@ export async function processFollowUpInvocation(
         workflowClaimId: claim.claimId,
       });
       if (!reviewed.ok) {
-        await markFollowUpManualReview(
+        await markFollowUpHandedBack(
           db,
           input,
           now,
@@ -644,7 +743,7 @@ export async function processFollowUpInvocation(
         await rescheduleFollowUp(db, input, now, sent.code, claim.claimId);
         await auditFollowUpBlock(db, input, sent.code, now);
       } else {
-        await markFollowUpManualReview(
+        await markFollowUpHandedBack(
           db,
           input,
           now,

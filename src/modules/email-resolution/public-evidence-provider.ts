@@ -94,10 +94,15 @@ export class StructuredPublicEmailEvidenceProvider implements ObservablePublicEm
   constructor(
     private readonly provider: StructuredAIProvider,
     private readonly model: string,
+    effort?: string,
   ) {
     this.auditDescriptor = {
       name: "public_email_evidence",
       model,
+      // This runs on the research lane, and the research lane is only
+      // distinguishable from the fast one by its effort — both are the same
+      // model. Optional because the mock bundle has no lane at all.
+      effort,
       promptVersion: "public-email-evidence-prompt-v1",
       schemaVersion: "public-email-evidence-schema-v1",
     };

@@ -27,11 +27,13 @@ describe("reply classifier provider routing", () => {
       research: {
         provider: { run: desktopRun },
         model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "High",
         operationTimeoutMs: 120_000,
       },
       nonWeb: {
         provider: { run: desktopRun },
         model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "Instant",
       },
     });
 
@@ -65,11 +67,13 @@ describe("reply classifier provider routing", () => {
       research: {
         provider: { run: researchRun },
         model: "research-model",
+        effort: "High",
         operationTimeoutMs: 120_000,
       },
       nonWeb: {
         provider: { run: desktopRun },
         model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "Instant",
       },
     });
 
@@ -108,9 +112,14 @@ describe("reply classifier provider routing", () => {
       research: {
         provider: { run },
         model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "High",
         operationTimeoutMs: 600_000,
       },
-      nonWeb: { provider: { run }, model: "chatgpt-desktop:GPT-5.6 Sol" },
+      nonWeb: {
+        provider: { run },
+        model: "chatgpt-desktop:GPT-5.6 Sol",
+        effort: "Instant",
+      },
     });
 
     expect(classifier.name).toBe("chatgpt-desktop-reply-v1");

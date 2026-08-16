@@ -311,6 +311,51 @@ export async function readQueuedWork(
 }
 
 /** What has just left, so "nothing happened" is distinguishable from "it did". */
+export type ScheduledSend = {
+  messageId: string;
+  recipient: string;
+  subject: string;
+  campaignName: string;
+  scheduledAt: Date;
+  expiresAt: Date | null;
+};
+
+/**
+ * Sends the operator asked for that are waiting for a legal instant.
+ *
+ * This page is called "what goes out", and a message waiting for Monday
+ * morning is the clearest example of something that is going out and is not
+ * visible anywhere else. Without it the intent would be a state the system
+ * holds and the operator cannot see — which is the failure the whole view
+ * exists to close.
+ */
+export async function readScheduledSends(
+  db: AppDatabase,
+): Promise<ScheduledSend[]> {
+  const rows = await db
+    .select({
+      messageId: messages.id,
+      recipient: messages.recipient,
+      subject: messages.subject,
+      campaignName: campaigns.name,
+      scheduledAt: messages.scheduledAt,
+      expiresAt: messages.sendIntentExpiresAt,
+    })
+    .from(messages)
+    .innerJoin(enrollments, eq(enrollments.id, messages.enrollmentId))
+    .innerJoin(campaigns, eq(campaigns.id, enrollments.campaignId))
+    .where(
+      and(eq(messages.status, "approved"), isNotNull(messages.scheduledAt)),
+    )
+    .orderBy(asc(messages.scheduledAt))
+    .limit(50);
+  return rows.flatMap((row) =>
+    row.scheduledAt
+      ? [{ ...row, scheduledAt: row.scheduledAt, expiresAt: row.expiresAt }]
+      : [],
+  );
+}
+
 export async function readRecentSends(
   db: AppDatabase,
   options: { now: Date; withinMs?: number; limit?: number },

@@ -1,7 +1,11 @@
+import { eq } from "drizzle-orm";
+
 import maintenanceConfig from "../../../../config/maintenance.json";
 import { getDatabase } from "@/lib/db/client";
-import { maintenanceState } from "@/lib/db/schema";
+import { maintenanceState, operatorSendingSettings } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { scheduledInstantLabel } from "@/modules/messages/scheduled-send";
+import { operatorClock } from "@/modules/settings/working-hours";
 import {
   getMaintenanceCodeTimeoutMs,
   getMaintenanceStatusPresentation,
@@ -11,6 +15,7 @@ import {
   readDueFollowUps,
   readQueuedWork,
   readRecentSends,
+  readScheduledSends,
   readSendBudgets,
 } from "@/modules/workflows/outbound-today";
 
@@ -23,14 +28,33 @@ export default async function OutboundPage({
   const { notice } = await searchParams;
   const db = getDatabase();
   const now = new Date();
-  const [budgets, queuedWork, dueFollowUps, recentSends, maintenanceRows] =
-    await Promise.all([
-      readSendBudgets(db, now),
-      readQueuedWork(db),
-      readDueFollowUps(db, { now }),
-      readRecentSends(db, { now }),
-      db.select().from(maintenanceState).limit(1),
-    ]);
+  const [
+    budgets,
+    queuedWork,
+    dueFollowUps,
+    scheduledSends,
+    recentSends,
+    maintenanceRows,
+    sendingSettingsRows,
+  ] = await Promise.all([
+    readSendBudgets(db, now),
+    readQueuedWork(db),
+    readDueFollowUps(db, { now }),
+    readScheduledSends(db),
+    readRecentSends(db, { now }),
+    db.select().from(maintenanceState).limit(1),
+    // The instants in the scheduled-sends table are promises this system made,
+    // and the review card prints the same ones on the operator's clock. A slot
+    // computed against a 09:00 calendar must not read as 07:00 UTC on one page
+    // and 09:00 on the other. The rest of this page is telemetry and keeps the
+    // host's locale.
+    db
+      .select({ timezone: operatorSendingSettings.timezone })
+      .from(operatorSendingSettings)
+      .where(eq(operatorSendingSettings.id, 1))
+      .limit(1),
+  ]);
+  const operatorTimezone = sendingSettingsRows[0]?.timezone;
   // Everything on this page is executed by the maintenance pass. If that
   // stopped, a queue that is merely slow and a queue that is dead look
   // identical — and this is the page the operator is on while waiting, so it
@@ -217,6 +241,60 @@ export default async function OutboundPage({
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="panel">
+        <h2>Scheduled sends</h2>
+        <p className="muted">
+          You asked for these and the policy refused for a reason time lifts.
+          They go out on their own at the first instant it allows, and never
+          before — an expired one comes back to the review queue instead. Where
+          that instant can be named it is; a refusal on a delay only says
+          &ldquo;not yet&rdquo;, and the wait ends whenever it truly ends.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Goes out</th>
+              <th>Expires</th>
+              <th>Campaign</th>
+              <th>Recipient</th>
+              <th>Subject</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scheduledSends.map((scheduled) => (
+              <tr key={scheduled.messageId}>
+                {/* Named only when it is a delivery time. The lane stores its
+                    own next look for a refusal on a delay, and printing that
+                    as "goes out" reads as an imminent send nobody asked for on
+                    the one page whose subject is what is leaving. */}
+                <td>
+                  {scheduledInstantLabel(
+                    scheduled.scheduledAt,
+                    now,
+                    operatorTimezone,
+                  )}
+                </td>
+                <td>
+                  {scheduled.expiresAt
+                    ? operatorClock(scheduled.expiresAt, operatorTimezone)
+                    : "—"}
+                </td>
+                <td>{scheduled.campaignName}</td>
+                <td>{scheduled.recipient}</td>
+                <td>{scheduled.subject}</td>
+              </tr>
+            ))}
+            {scheduledSends.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="empty">
+                  Nothing is waiting for a slot.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
       </section>
 
       <section className="panel">

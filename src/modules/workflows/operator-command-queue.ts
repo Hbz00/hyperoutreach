@@ -14,7 +14,15 @@ import { prepareCommand } from "@/modules/workflows/operator-command-preconditio
 
 export type OperatorCommandRow = typeof operatorCommands.$inferSelect;
 
-/** How long after each failed attempt the queue tries again. */
+/**
+ * How long after each failed attempt the queue tries again.
+ *
+ * Three waits for four attempts, spanning twenty-one minutes. The span is
+ * chosen against the outage this transport actually has — the operator's
+ * ChatGPT desktop app closed, updating, or asleep with the laptop — not
+ * against a network blip. Changing `maxAttempts` without extending this array
+ * is safe: the last wait repeats.
+ */
 const RETRY_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000];
 /** How long a parked command waits before asking the service again. */
 const WAITING_RECHECK_MS = 5 * 60_000;
@@ -93,7 +101,7 @@ export type DrainedOperatorCommand = {
  * and completion is fenced on the claim id for the same reason. An attempt is
  * only spent by work that was actually attempted: a command parked because its
  * precondition is not met comes back on a slower cadence with its retry budget
- * untouched, because failing three times at something that never started would
+ * untouched, because spending the ladder on something that never started would
  * abandon work nobody got wrong.
  */
 export async function drainOperatorCommands(
@@ -117,18 +125,24 @@ export async function drainOperatorCommands(
     if (!claimed) break;
 
     // Nothing was tried yet, so a missing precondition is a wait rather than a
-    // failed attempt — `finalizeCommand` gives the attempt back.
+    // failed attempt — `finalizeCommand` gives the attempt back. A precondition
+    // that can never be met is neither: it is a stop, said out loud.
     const prepared = await prepareCommand(db, claimed);
-    if (!prepared.ready) {
+    if (prepared.kind !== "ready") {
+      // Both branches draw on the parking budget rather than the pass's work
+      // budget. Neither ran anything, but both cost a claim — and a backlog of
+      // orphaned rows would otherwise drain in a single unbounded pass.
       parked += 1;
-      const parkedRow = await finalizeCommand(
+      const settledRow = await finalizeCommand(
         db,
         claimed,
         claimId,
-        { kind: "waiting", reason: prepared.reason },
+        prepared.kind === "waiting"
+          ? { kind: "waiting", reason: prepared.reason }
+          : { kind: "abandoned", reason: prepared.reason },
         { now, result: null },
       );
-      if (parkedRow) drained.push(parkedRow);
+      if (settledRow) drained.push(settledRow);
       continue;
     }
     executed += 1;

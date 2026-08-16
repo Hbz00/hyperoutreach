@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentRunCost,
   agentRunDuration,
+  agentRunLane,
 } from "@/modules/settings/agent-run-presentation";
 
 describe("agent run presentation", () => {
@@ -36,5 +37,32 @@ describe("agent run presentation", () => {
 
   it("does not claim a cost is available without a figure", () => {
     expect(agentRunCost("available", null)).toBe("unavailable");
+  });
+});
+
+// Both lanes run the same model on this transport. Without the effort the two
+// are indistinguishable in the table, which is exactly the question you have
+// when a run died on its deadline: did it have ten minutes, or two?
+describe("which lane a run belonged to", () => {
+  it("names the model and the effort together", () => {
+    expect(agentRunLane("chatgpt-desktop:GPT-5.6 Sol", "High")).toBe(
+      "chatgpt-desktop:GPT-5.6 Sol · High",
+    );
+    expect(agentRunLane("chatgpt-desktop:GPT-5.6 Sol", "Instant")).toBe(
+      "chatgpt-desktop:GPT-5.6 Sol · Instant",
+    );
+  });
+
+  it("distinguishes the two lanes, which is the whole point", () => {
+    const model = "chatgpt-desktop:GPT-5.6 Sol";
+    expect(agentRunLane(model, "High")).not.toBe(
+      agentRunLane(model, "Instant"),
+    );
+  });
+
+  // A mock has no lane, and a row written before the column existed has no
+  // answer. Neither gets an invented one.
+  it("falls back to the model alone when no effort was recorded", () => {
+    expect(agentRunLane("mock-model", null)).toBe("mock-model");
   });
 });
