@@ -4,6 +4,7 @@ import maintenanceConfig from "../../../../config/maintenance.json";
 import { getDatabase } from "@/lib/db/client";
 import { maintenanceState, operatorSendingSettings } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { StatusBadge } from "@/modules/presentation/status-badge";
 import { scheduledInstantLabel } from "@/modules/messages/scheduled-send";
 import { operatorClock } from "@/modules/settings/working-hours";
 import {
@@ -96,42 +97,31 @@ export default async function OutboundPage({
       ) : null}
 
       <section className="panel">
-        <h2>Maintenance pass</h2>
-        <dl className="facts">
-          <div>
-            <dt>State</dt>
-            <dd>
-              <span className="badge">{maintenancePresentation.label}</span>{" "}
-              {maintenancePresentation.detail}
-            </dd>
-          </div>
-          <div>
-            <dt>Last completed</dt>
-            <dd>
-              {maintenance.lastSucceededAt
-                ? maintenance.lastSucceededAt.toLocaleString()
-                : "Never"}
-            </dd>
-          </div>
-          <div>
-            <dt>Runs every</dt>
-            <dd>{maintenanceConfig.intervalMs / 1000} seconds</dd>
-          </div>
-          {/* Only while it is still the latest word. The cycle records
-              `lastError` on failure and never clears it on success, so
-              rendering on truthiness alone left a months-old failure sitting
-              under a healthy badge, reading as a live problem. */}
-          {maintenance.lastError &&
-          maintenance.lastFailedAt &&
-          (!maintenance.lastSucceededAt ||
-            maintenance.lastFailedAt.getTime() >
-              maintenance.lastSucceededAt.getTime()) ? (
-            <div>
-              <dt>Last failure</dt>
-              <dd>{maintenance.lastError}</dd>
-            </div>
-          ) : null}
-        </dl>
+        <div className="panel-heading">
+          <h2>Maintenance pass</h2>
+          <span className="badge">{maintenancePresentation.label}</span>
+        </div>
+        <p className="muted">
+          {maintenancePresentation.detail} Runs every{" "}
+          {maintenanceConfig.intervalMs / 1000} seconds · last completed{" "}
+          {maintenance.lastSucceededAt
+            ? maintenance.lastSucceededAt.toLocaleString()
+            : "never"}
+          .
+        </p>
+        {/* Only while it is still the latest word. The cycle records
+            `lastError` on failure and never clears it on success, so
+            rendering on truthiness alone left a months-old failure sitting
+            under a healthy badge, reading as a live problem. */}
+        {maintenance.lastError &&
+        maintenance.lastFailedAt &&
+        (!maintenance.lastSucceededAt ||
+          maintenance.lastFailedAt.getTime() >
+            maintenance.lastSucceededAt.getTime()) ? (
+          <p className="alert alert-error">
+            Last failure: {maintenance.lastError}
+          </p>
+        ) : null}
         {maintenanceStatus.state === "stalled" ||
         maintenanceStatus.state === "not_started" ? (
           <p className="alert alert-error">
@@ -204,7 +194,7 @@ export default async function OutboundPage({
                 <tr key={work.id}>
                   <td>{work.command}</td>
                   <td>
-                    <span className="badge">{work.status}</span>
+                    <StatusBadge kind="command" value={work.status} />
                   </td>
                   <td>
                     {work.attempt} / {work.maxAttempts}
@@ -246,11 +236,8 @@ export default async function OutboundPage({
       <section className="panel">
         <h2>Scheduled sends</h2>
         <p className="muted">
-          You asked for these and the policy refused for a reason time lifts.
-          They go out on their own at the first instant it allows, and never
-          before — an expired one comes back to the review queue instead. Where
-          that instant can be named it is; a refusal on a delay only says
-          &ldquo;not yet&rdquo;, and the wait ends whenever it truly ends.
+          Approved sends waiting for the first instant policy allows. An expired
+          one returns to the review queue instead of going out.
         </p>
         <table>
           <thead>
@@ -357,7 +344,7 @@ export default async function OutboundPage({
                   <td>{send.subject}</td>
                   <td>{send.campaignName}</td>
                   <td>
-                    <span className="badge">{send.status}</span>
+                    <StatusBadge kind="message" value={send.status} />
                   </td>
                   <td>
                     {(send.sentAt ?? send.attemptedAt)?.toLocaleString() ?? "—"}

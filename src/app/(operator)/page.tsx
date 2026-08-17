@@ -96,6 +96,7 @@ export default async function DashboardPage() {
     // The dashboard remains operable and Settings exposes the actionable
     // configuration notice without rendering raw environment failures.
   }
+  const startingOut = accountCount === 0;
 
   return (
     <main className="page-shell">
@@ -104,8 +105,7 @@ export default async function DashboardPage() {
           <p className="eyebrow">Operator dashboard</p>
           <h1>Campaign state at a glance</h1>
           <p className="muted">
-            Follow the numbered path below. Every count comes from persisted
-            application state, not the workflow provider.
+            Each card links to the page where you act on it.
           </p>
         </div>
       </header>
@@ -144,56 +144,78 @@ export default async function DashboardPage() {
             </span>
           </li>
         </ol>
+        {startingOut ? (
+          <p className="hint">
+            Nothing has been discovered yet — this installation is at station 1.
+            Start by <Link href="/settings">checking Settings</Link>, then{" "}
+            <Link href="/campaigns">create a campaign</Link>.
+          </p>
+        ) : null}
       </section>
 
-      <section className="card-grid" aria-label="Current operating state">
-        <Link className="metric-card" href="/settings">
-          <strong>Mailbox readiness</strong>
-          <span className="metric-value">
-            {liveMailboxes.length} live · {mockMailboxes.length} mock
-          </span>
-          <small>
-            {latestLiveSync
-              ? `Last live sync ${latestLiveSync.toLocaleString()}`
-              : "No live mailbox has synchronized yet"}
-          </small>
-        </Link>
-        <Link className="metric-card" href="/settings">
-          <strong>AI provider</strong>
-          <span className="metric-value">{provider.provider}</span>
-          <small>{provider.researchModel}</small>
-        </Link>
-        <Link className="metric-card" href="/prospects">
-          <strong>Accounts discovered</strong>
-          <span className="metric-value">{accountCount}</span>
-          <small>Research is shared by every contact at one company</small>
-        </Link>
-        <Link className="metric-card" href="/prospects">
-          <strong>Emails requiring action</strong>
-          <span className="metric-value">{emailActionCount}</span>
-          <small>Unresolved, low-confidence, or provider-error contacts</small>
-        </Link>
-        <Link className="metric-card" href="/review">
-          <strong>Messages requiring action</strong>
-          <span className="metric-value">{reviewCount}</span>
-          <small>Review, send, uncertain delivery, or failed state</small>
-        </Link>
-        <Link className="metric-card" href="/campaigns">
-          <strong>Follow-ups scheduled</strong>
-          <span className="metric-value">{followUpCount}</span>
-          <small>Every due send is policy-checked again at execution</small>
-        </Link>
-        <Link className="metric-card" href="/inbox">
-          <strong>Replies ingested</strong>
-          <span className="metric-value">{replyCount}</span>
-          <small>Classifications and deterministic sequence outcomes</small>
-        </Link>
-        <Link className="metric-card" href="/settings">
-          <strong>Persistent suppressions</strong>
-          <span className="metric-value">{suppressionCount}</span>
-          <small>Checked immediately before every send</small>
-        </Link>
+      <section className="panel" aria-label="Waiting on you">
+        <h2>Waiting on you</h2>
+        <div className="card-grid">
+          <Link className="metric-card" href="/review">
+            <strong>Messages requiring action</strong>
+            <span className="metric-value">{reviewCount}</span>
+            <small>Review, send, uncertain delivery, or failed state</small>
+          </Link>
+          <Link className="metric-card" href="/prospects">
+            <strong>Emails requiring action</strong>
+            <span className="metric-value">{emailActionCount}</span>
+            <small>
+              Unresolved, low-confidence, or provider-error contacts
+            </small>
+          </Link>
+          <Link className="metric-card" href="/outbound">
+            <strong>Follow-ups scheduled</strong>
+            <span className="metric-value">{followUpCount}</span>
+            <small>
+              These go out on their own — every due send is policy-checked again
+              at execution
+            </small>
+          </Link>
+        </div>
       </section>
+
+      <section className="panel" aria-label="System and pipeline state">
+        <h2>System &amp; pipeline</h2>
+        <div className="card-grid">
+          <Link className="metric-card" href="/settings">
+            <strong>Mailbox readiness</strong>
+            <span className="metric-value">
+              {liveMailboxes.length} live · {mockMailboxes.length} mock
+            </span>
+            <small>
+              {latestLiveSync
+                ? `Last live sync ${latestLiveSync.toLocaleString()}`
+                : "No live mailbox has synchronized yet"}
+            </small>
+          </Link>
+          <Link className="metric-card" href="/settings">
+            <strong>AI provider</strong>
+            <span className="metric-value">{provider.provider}</span>
+            <small>{provider.researchModel}</small>
+          </Link>
+          <Link className="metric-card" href="/prospects">
+            <strong>Accounts discovered</strong>
+            <span className="metric-value">{accountCount}</span>
+            <small>Research is shared by every contact at one company</small>
+          </Link>
+          <Link className="metric-card" href="/inbox">
+            <strong>Replies ingested</strong>
+            <span className="metric-value">{replyCount}</span>
+            <small>Classifications and deterministic sequence outcomes</small>
+          </Link>
+          <Link className="metric-card" href="/settings">
+            <strong>Persistent suppressions</strong>
+            <span className="metric-value">{suppressionCount}</span>
+            <small>Checked immediately before every send</small>
+          </Link>
+        </div>
+      </section>
+
       <section className="panel">
         <h2>Review is still changing the outcome</h2>
         <p className="muted">

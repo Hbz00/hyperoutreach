@@ -99,11 +99,28 @@ button:disabled {
   font-weight: 800;
   text-decoration: none;
 }
-.sidebar nav {
+.sidebar nav,
+.nav-group {
   display: grid;
   gap: 0.3rem;
 }
+.nav-group-label {
+  margin: 1.1rem 0 0.15rem;
+  padding: 0 0.75rem;
+  color: #8fa697;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.nav-group-label:first-child {
+  margin-top: 0;
+}
 .sidebar nav a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
   border-radius: 0.65rem;
   padding: 0.75rem;
   color: #dbe8de;
@@ -111,6 +128,11 @@ button:disabled {
 }
 .sidebar nav a:hover {
   background: rgb(255 255 255 / 10%);
+}
+.sidebar nav a[aria-current="page"] {
+  color: white;
+  background: rgb(255 255 255 / 14%);
+  font-weight: 700;
 }
 .operator-card {
   display: grid;
@@ -239,6 +261,10 @@ small {
   display: grid;
   gap: 1rem;
 }
+.stack > button,
+.form-grid > button {
+  justify-self: start;
+}
 .compact-form {
   min-width: 15rem;
   gap: 0.5rem;
@@ -289,6 +315,13 @@ textarea {
   width: 1rem;
   min-height: auto;
 }
+.check.warning {
+  border: 1px solid #e8cfa0;
+  border-radius: 0.7rem;
+  padding: 0.75rem 1rem;
+  color: #8a5a17;
+  background: #fdf1dc;
+}
 .check-row {
   display: flex;
   flex-wrap: wrap;
@@ -330,22 +363,36 @@ th {
   display: inline-flex;
   border-radius: 999px;
   padding: 0.28rem 0.55rem;
-  color: #27563e;
-  background: var(--accent-soft);
+  color: #44524a;
+  background: #e9ede9;
   font-size: 0.73rem;
   font-weight: 800;
-  text-transform: lowercase;
 }
+.badge-ok,
+.badge-positive,
+.badge-referral {
+  color: #17603e;
+  background: #dff4e7;
+}
+.badge-busy {
+  color: #1e4f8f;
+  background: #e3edfb;
+}
+.badge-warn,
+.badge-question {
+  color: #8a5a17;
+  background: #fdf1dc;
+}
+.badge-danger,
 .badge-unsubscribe,
 .badge-negative,
 .badge-bounce {
   color: #852c2c;
   background: #fbe4e4;
 }
-.badge-positive,
-.badge-referral {
-  color: #17603e;
-  background: #dff4e7;
+.badge-neutral {
+  color: #44524a;
+  background: #e9ede9;
 }
 .alert {
   margin: 0 0 1rem;
@@ -444,6 +491,34 @@ details > summary {
   cursor: pointer;
   font-weight: 800;
 }
+/* A panel whose heading is its summary: closed it reads as one line, open it
+   is the same panel as everywhere else. Secondary forms live behind these so
+   the content the operator returns for stays above the fold. */
+details.panel > summary {
+  margin: -1.4rem;
+  padding: 1.4rem;
+  font-size: 1.1rem;
+}
+details.panel[open] > summary {
+  margin-bottom: 0;
+}
+details.panel > summary small {
+  display: inline;
+  margin-left: 0.5rem;
+  font-weight: 400;
+}
+.hint {
+  margin: 0 0 1rem;
+  border: 1px solid #cbd6e4;
+  border-radius: 0.7rem;
+  padding: 0.75rem 1rem;
+  color: #2c4a70;
+  background: #eef3fa;
+}
+.hint a {
+  color: inherit;
+  font-weight: 700;
+}
 @media (max-width: 800px) {
   .app-frame {
     grid-template-columns: 1fr;
@@ -454,6 +529,10 @@ details > summary {
   }
   .sidebar nav {
     grid-template-columns: repeat(2, 1fr);
+    align-items: start;
+  }
+  .nav-group-label {
+    margin-top: 0.5rem;
   }
   .operator-card {
     margin-top: 0;

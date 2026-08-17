@@ -11,6 +11,10 @@ import {
   replies,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import {
+  describeStatus,
+  describeStopReason,
+} from "@/modules/presentation/status";
 
 export default async function InboxPage({
   searchParams,
@@ -54,10 +58,11 @@ export default async function InboxPage({
     <main className="page-shell">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Inbound intelligence</p>
+          <p className="eyebrow">Inbound</p>
           <h1>Inbox & replies</h1>
           <p className="muted">
-            Classifications, confidence, and deterministic sequence outcomes.
+            Replies, how they were classified, and what that did to the
+            sequence.
           </p>
         </div>
       </header>
@@ -67,12 +72,11 @@ export default async function InboxPage({
         </p>
       ) : null}
       {process.env.MAIL_PROVIDER !== "microsoft_graph" ? (
-        <section className="panel">
-          <h2>Inject a local reply</h2>
-          <p className="muted">
-            Mock-provider path through the same ingestion and classification
-            service used by Graph.
-          </p>
+        <details className="panel" open={rows.length === 0}>
+          <summary>
+            Inject a local reply
+            <small className="muted">mock-mode test tool</small>
+          </summary>
           <form
             action="/api/operator/commands/inject-reply"
             method="post"
@@ -105,7 +109,7 @@ export default async function InboxPage({
             </label>
             <button>Ingest reply</button>
           </form>
-        </section>
+        </details>
       ) : null}
       <section className="inbox-list">
         {rows.map((row) => (
@@ -142,11 +146,19 @@ export default async function InboxPage({
               </div>
               <div>
                 <dt>Enrollment</dt>
-                <dd>{row.enrollment?.state ?? "Unmatched"}</dd>
+                <dd>
+                  {row.enrollment
+                    ? describeStatus("enrollment", row.enrollment.state).label
+                    : "Unmatched"}
+                </dd>
               </div>
               <div>
                 <dt>Stop reason</dt>
-                <dd>{row.enrollment?.stopReason ?? "—"}</dd>
+                <dd>
+                  {row.enrollment?.stopReason
+                    ? describeStopReason(row.enrollment.stopReason)
+                    : "—"}
+                </dd>
               </div>
             </dl>
           </article>

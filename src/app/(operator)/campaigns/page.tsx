@@ -4,6 +4,13 @@ import Link from "next/link";
 import { getDatabase } from "@/lib/db/client";
 import { campaigns, enrollments } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { StatusBadge } from "@/modules/presentation/status-badge";
+
+const CAMPAIGN_TYPES: Record<string, string> = {
+  customer_discovery: "Customer discovery",
+  commercial_outreach: "Commercial outreach",
+  other: "Other",
+};
 
 export default async function CampaignsPage({
   searchParams,
@@ -33,7 +40,8 @@ export default async function CampaignsPage({
           <p className="eyebrow">Immutable sequences</p>
           <h1>Campaigns</h1>
           <p className="muted">
-            Published versions stay pinned to active enrollments.
+            A campaign is drafted, published, then enrolls prospects. Published
+            versions never change under an enrollment.
           </p>
         </div>
       </header>
@@ -42,8 +50,12 @@ export default async function CampaignsPage({
           {notice}
         </p>
       ) : null}
-      <section className="panel">
-        <h2>Create campaign</h2>
+
+      <details className="panel" open={rows.length === 0}>
+        <summary>
+          Create a campaign
+          <small className="muted">draft first — publish when ready</small>
+        </summary>
         <form
           action="/api/operator/commands/create-campaign"
           method="post"
@@ -70,6 +82,7 @@ export default async function CampaignsPage({
                 rows={3}
                 minLength={10}
                 required
+                placeholder="Who this campaign is for, in one or two sentences"
               />
             </label>
             <label>
@@ -98,9 +111,15 @@ export default async function CampaignsPage({
               Require professional relevance
             </label>
           </div>
+          <p className="muted">
+            Steps 2 and 3 are optional follow-ups — leave subject and body empty
+            to skip them.
+          </p>
           {[0, 1, 2].map((index) => (
             <fieldset key={index}>
-              <legend>Sequence step {index + 1}</legend>
+              <legend>
+                {index === 0 ? "Step 1 — first email" : `Step ${index + 1}`}
+              </legend>
               <div className="form-grid">
                 <label>
                   Delay in minutes
@@ -162,11 +181,12 @@ export default async function CampaignsPage({
           ))}
           <button type="submit">Create draft</button>
         </form>
-      </section>
+      </details>
+
       <section className="panel table-panel">
         <div className="panel-heading">
-          <h2>Campaign registry</h2>
-          <span>{rows.length}</span>
+          <h2>All campaigns</h2>
+          <span className="muted">{rows.length}</span>
         </div>
         <div className="table-wrap">
           <table>
@@ -176,7 +196,7 @@ export default async function CampaignsPage({
                 <th>Type</th>
                 <th>Status</th>
                 <th>Enrollments</th>
-                <th>Target</th>
+                <th>Updated</th>
               </tr>
             </thead>
             <tbody>
@@ -184,19 +204,20 @@ export default async function CampaignsPage({
                 <tr key={row.id}>
                   <td>
                     <Link href={`/campaigns/${row.id}`}>{row.name}</Link>
+                    <small>{row.targetDescription}</small>
                   </td>
-                  <td>{row.type}</td>
+                  <td>{CAMPAIGN_TYPES[row.type] ?? row.type}</td>
                   <td>
-                    <span className="badge">{row.status}</span>
+                    <StatusBadge kind="campaign" value={row.status} />
                   </td>
                   <td>{row.enrollments}</td>
-                  <td>{row.targetDescription}</td>
+                  <td>{row.updatedAt.toLocaleDateString()}</td>
                 </tr>
               ))}
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="empty">
-                    No campaigns yet.
+                    No campaigns yet. Create one above.
                   </td>
                 </tr>
               ) : null}

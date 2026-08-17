@@ -133,7 +133,7 @@ test("operates the mock outreach lifecycle through authenticated application end
   );
   expect(pathId(duplicate.headers().location, "/prospects")).toBe(contactId);
   const accountRegistry = await (await browser.get("/prospects")).text();
-  expect(accountRegistry).toContain("Account registry");
+  expect(accountRegistry).toContain("Companies");
   expect(accountRegistry).toContain(`Critical Flow ${unique}`);
   expect(accountRegistry).toContain("Research account");
   expect(accountRegistry).toContain("Discover contacts");
@@ -240,7 +240,9 @@ test("operates the mock outreach lifecycle through authenticated application end
   const unreviewedCard = reviewHtml
     .split('class="review-card"')
     .find((candidate) => candidate.includes(`Critical Flow ${unique}`));
-  expect(unreviewedCard).toContain(">proposed<");
+  // The badge shows the human label; the raw enum stays in its title.
+  expect(unreviewedCard).toContain(">Needs review<");
+  expect(unreviewedCard).toContain('title="proposed"');
   await browser.post("/api/operator/commands/review-message", {
     form: { csrf, messageId, reviewAction: "approve" },
   });

@@ -16,6 +16,11 @@ import {
   operatorSendingSettings,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { StatusBadge } from "@/modules/presentation/status-badge";
+import {
+  describeStatus,
+  describeStopReason,
+} from "@/modules/presentation/status";
 import { sendBlockNotice } from "@/modules/messages/send-block-notice";
 import {
   scheduledInstantLabel,
@@ -171,8 +176,9 @@ export default async function ReviewPage({
           <p className="eyebrow">Human-in-the-loop</p>
           <h1>Review queue</h1>
           <p className="muted">
-            The persisted subject and body below are exactly what the send
-            service receives.
+            {rows.length === 0
+              ? "Nothing waits on you."
+              : `${rows.length} message${rows.length > 1 ? "s" : ""} — the subject and body shown are exactly what would be sent.`}
           </p>
         </div>
         <Link className="button-link" href="/outbound">
@@ -225,7 +231,7 @@ export default async function ReviewPage({
                     Open prospect evidence
                   </Link>
                 </div>
-                <span className="badge">{row.message.status}</span>
+                <StatusBadge kind="message" value={row.message.status} />
               </header>
               <div className="review-grid">
                 <form
@@ -301,8 +307,13 @@ export default async function ReviewPage({
                     <div>
                       <dt>Enrollment</dt>
                       <dd>
-                        {row.enrollment.state} · stop{" "}
-                        {row.enrollment.stopReason ?? "none"}
+                        {
+                          describeStatus("enrollment", row.enrollment.state)
+                            .label
+                        }
+                        {row.enrollment.stopReason
+                          ? ` · stopped: ${describeStopReason(row.enrollment.stopReason)}`
+                          : ""}
                       </dd>
                     </div>
                     <div>

@@ -34,6 +34,27 @@ test.skip(
   "Set RUN_BROWSER_E2E=1 on a host where Chromium is permitted",
 );
 
+/**
+ * Secondary forms live behind `<details>` panels that open themselves only on
+ * an empty page. Opening is idempotent here: a summary click on an already
+ * open panel would close it again.
+ */
+async function openSection(
+  page: import("@playwright/test").Page,
+  formActionSuffix: string,
+): Promise<void> {
+  const details = page.locator(
+    `details:has(form[action$="${formActionSuffix}"])`,
+  );
+  // Every caller expects the section on the destination page; waiting here
+  // also absorbs the client-side navigation that precedes each call.
+  await details.waitFor({ state: "attached" });
+  const open = await details.evaluate(
+    (element) => (element as HTMLDetailsElement).open,
+  );
+  if (!open) await details.locator("summary").click();
+}
+
 async function createCampaign(
   page: import("@playwright/test").Page,
   input: {
@@ -49,6 +70,7 @@ async function createCampaign(
   },
 ) {
   await page.getByRole("link", { name: "Campaigns", exact: true }).click();
+  await openSection(page, "create-campaign");
   const form = page
     .locator('form[action$="create-campaign"]')
     .filter({ has: page.getByLabel("Name", { exact: true }) });
@@ -107,7 +129,9 @@ function messageCard(page: import("@playwright/test").Page, marker: string) {
 async function approveAndSend(card: Locator) {
   await expect(card.getByText("Current", { exact: true })).toBeVisible();
   await card.getByRole("button", { name: "Approve", exact: true }).click();
-  await expect(card.getByText("approved", { exact: true })).toBeVisible();
+  // The header badge, specifically: the enrollment facts can also read
+  // "Approved" once the message is, and a bare text match would be ambiguous.
+  await expect(card.locator("header .badge").first()).toHaveText("Approved");
   // The card says what the send would do, before the click. This is the half
   // of "say what happened" that happens *first*: with the shipped per-mailbox
   // delay, approving five and sending five had four of them refused in
@@ -178,6 +202,7 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
 
   await test.step("create a prospect and prove the rendered deduplication path", async () => {
     await page.getByRole("link", { name: "Prospects", exact: true }).click();
+    await openSection(page, "create-prospect");
     const form = page.locator('form[action$="create-prospect"]');
     await form.getByLabel("Company").fill(company);
     await form.getByLabel("Domain").fill(domain);
@@ -192,6 +217,7 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await expect(page.getByRole("status")).toContainText("Prospect created");
 
     await page.getByRole("link", { name: "Back to prospects" }).click();
+    await openSection(page, "create-prospect");
     await form.getByLabel("Company").fill(company);
     await form.getByLabel("Domain").fill(domain);
     await form.getByLabel("First name").fill("Grace");
@@ -219,8 +245,10 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     );
     await runMaintenanceCycle(page);
     await page.getByRole("link", { name: "Grace Hopper" }).click();
+    // Exact: the raw snapshot JSON behind the details also contains the
+    // sentence, and the readable rendering is what this asserts.
     await expect(
-      page.getByText("Deterministic local research fixture"),
+      page.getByText("Deterministic local research fixture", { exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("link", { name: "Deterministic local fixture" }),
@@ -229,7 +257,7 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
       "https://example.invalid/hyperoutreach-mock-research",
     );
     await expect(page.getByText(email, { exact: true })).toBeVisible();
-    await expect(page.getByText("accepted", { exact: true })).toBeVisible();
+    await expect(page.getByText("Accepted", { exact: true })).toBeVisible();
   });
 
   await test.step("publish a sequence, enroll, generate, inspect, approve, and mock-send", async () => {
@@ -296,6 +324,7 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
 
   await test.step("ingest an unsubscribe reply, classify it, and stop the sequence", async () => {
     await page.getByRole("link", { name: "Inbox", exact: true }).click();
+    await openSection(page, "inject-reply");
     const replyForm = page.locator('form[action$="inject-reply"]');
     await replyForm
       .getByLabel("Outbound message")
@@ -309,7 +338,7 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     const reply = page.locator("article.reply-card").first();
     await expect(reply.locator(".badge-unsubscribe")).toHaveText("unsubscribe");
     await expect(reply.getByText("Yes", { exact: true })).toBeVisible();
-    await expect(reply.getByText("opted_out", { exact: true })).toBeVisible();
+    await expect(reply.getByText("Opted out", { exact: true })).toBeVisible();
     await expect(reply.getByText("unsubscribe", { exact: true })).toHaveCount(
       2,
     );
@@ -319,9 +348,9 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     const stopped = page
       .locator("article.timeline-card")
       .filter({ hasText: campaign });
-    await expect(stopped.getByText("opted_out", { exact: true })).toBeVisible();
+    await expect(stopped.getByText("Opted out", { exact: true })).toBeVisible();
     await expect(stopped).toContainText("next none");
-    await expect(stopped.getByText(/stop unsubscribe/)).toBeVisible();
+    await expect(stopped.getByText(/stopped: unsubscribe/)).toBeVisible();
     await expect(
       stopped.getByRole("button", { name: /Generate step/ }),
     ).toHaveCount(0);
@@ -387,9 +416,9 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await expect(page.getByRole("status")).toContainText(
       "RECIPIENT_SUPPRESSED",
     );
-    await expect(
-      probeCard.getByText("approved", { exact: true }),
-    ).toBeVisible();
+    await expect(probeCard.locator("header .badge").first()).toHaveText(
+      "Approved",
+    );
     // And the other half of the verdict: the card now reads as held, naming
     // the same cause the notice gave, before any further click. Deliberately
     // anchored on the verdict line — the card also carries the last attempt's

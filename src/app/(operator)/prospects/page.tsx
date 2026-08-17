@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import Link from "next/link";
 
 import { getDatabase } from "@/lib/db/client";
@@ -8,8 +8,11 @@ import {
   contacts,
   emailCandidates,
   enrollments,
+  operatorCommands,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { StatusBadge } from "@/modules/presentation/status-badge";
+import { describeStatus } from "@/modules/presentation/status";
 
 export default async function ProspectsPage({
   searchParams,
@@ -19,7 +22,7 @@ export default async function ProspectsPage({
   const session = await requireOperatorSession();
   const { notice } = await searchParams;
   const db = getDatabase();
-  const [rows, accountRows] = await Promise.all([
+  const [rows, accountRows, pendingCommands] = await Promise.all([
     db
       .select({
         contactId: contacts.id,
@@ -31,6 +34,7 @@ export default async function ProspectsPage({
         confidence: emailCandidates.confidence,
         campaign: campaigns.name,
         state: enrollments.state,
+        contactStatus: contacts.status,
         researchStatus: accounts.researchStatus,
         resolutionStatus: contacts.emailResolutionStatus,
       })
@@ -61,8 +65,33 @@ export default async function ProspectsPage({
       .leftJoin(contacts, eq(contacts.accountId, accounts.id))
       .groupBy(accounts.id)
       .orderBy(desc(accounts.updatedAt)),
+    db
+      .select({
+        command: operatorCommands.command,
+        payload: operatorCommands.payload,
+      })
+      .from(operatorCommands)
+      .where(
+        and(
+          inArray(operatorCommands.status, ["queued", "waiting", "running"]),
+          // Only work whose result lands on this page. A queued message
+          // generation or mailbox sync must not be announced here.
+          inArray(operatorCommands.command, [
+            "discover-accounts",
+            "research-account",
+            "discover-contacts",
+            "resolve-email",
+          ]),
+        ),
+      ),
   ]);
-
+  // Discovery and research run on the maintenance pass, minutes later — not in
+  // this request. Without these markers a clicked button looks like a no-op.
+  const busyAccountIds = new Set(
+    pendingCommands
+      .map((row) => (row.payload as { accountId?: unknown })?.accountId)
+      .filter((id): id is string => typeof id === "string"),
+  );
   return (
     <main className="page-shell">
       <header className="page-header">
@@ -70,7 +99,7 @@ export default async function ProspectsPage({
           <p className="eyebrow">Evidence-backed pipeline</p>
           <h1>Prospects</h1>
           <p className="muted">
-            Global contacts are deduplicated before campaign enrollment.
+            Companies and people, deduplicated globally before any campaign.
           </p>
         </div>
       </header>
@@ -79,12 +108,20 @@ export default async function ProspectsPage({
           {notice}
         </p>
       ) : null}
-      <section className="panel">
-        <h2>Discover matching accounts</h2>
-        <p className="muted">
-          Runs the configured research provider, normalizes companies, and
-          reuses existing accounts by identity.
+      {pendingCommands.length > 0 ? (
+        <p className="hint">
+          {pendingCommands.length} background task
+          {pendingCommands.length > 1 ? "s" : ""} in progress — results appear
+          here when the next maintenance pass finishes.{" "}
+          <Link href="/outbound">Follow along</Link>
         </p>
+      ) : null}
+
+      <details className="panel" open={accountRows.length === 0}>
+        <summary>
+          Discover accounts with AI
+          <small className="muted">describe your ICP, get companies</small>
+        </summary>
         <form
           action="/api/operator/commands/discover-accounts"
           method="post"
@@ -132,16 +169,51 @@ export default async function ProspectsPage({
           </label>
           <button type="submit">Run account discovery</button>
         </form>
-      </section>
+      </details>
+
+      <details className="panel" open={accountRows.length === 0}>
+        <summary>
+          Add a prospect manually
+          <small className="muted">one known person, one company</small>
+        </summary>
+        <form
+          action="/api/operator/commands/create-prospect"
+          method="post"
+          className="form-grid"
+        >
+          <input type="hidden" name="csrf" value={session.csrfToken} />
+          <label>
+            Company
+            <input name="companyName" required />
+          </label>
+          <label>
+            Domain
+            <input name="domain" placeholder="example.com" />
+          </label>
+          <label>
+            First name
+            <input name="firstName" required />
+          </label>
+          <label>
+            Last name
+            <input name="lastName" required />
+          </label>
+          <label>
+            Job title
+            <input name="jobTitle" />
+          </label>
+          <label>
+            Email
+            <input name="email" type="email" />
+          </label>
+          <button type="submit">Save prospect</button>
+        </form>
+      </details>
+
       <section className="panel table-panel">
         <div className="panel-heading">
-          <div>
-            <h2>Account registry</h2>
-            <p className="muted">
-              Discovered companies remain operable before any contact exists.
-            </p>
-          </div>
-          <span>{accountRows.length} accounts</span>
+          <h2>Companies</h2>
+          <span className="muted">{accountRows.length}</span>
         </div>
         <div className="table-wrap">
           <table>
@@ -162,15 +234,20 @@ export default async function ProspectsPage({
                     <small>{account.domain ?? "Domain unresolved"}</small>
                   </td>
                   <td>
-                    {account.industry ?? "Industry unknown"}
-                    <small>{account.country ?? "Country unknown"}</small>
+                    {account.industry ?? "—"}
+                    <small>{account.country ?? ""}</small>
                   </td>
                   <td>
-                    <span className="badge">{account.researchStatus}</span>
+                    <StatusBadge
+                      kind="research"
+                      value={account.researchStatus}
+                    />
                     <small>
-                      {account.researchedAt
-                        ? `Fetched ${account.researchedAt.toLocaleString()}`
-                        : "No research snapshot yet"}
+                      {busyAccountIds.has(account.id)
+                        ? "Task in progress…"
+                        : account.researchedAt
+                          ? `Fetched ${account.researchedAt.toLocaleString()}`
+                          : ""}
                     </small>
                   </td>
                   <td>{account.contactCount}</td>
@@ -252,7 +329,8 @@ export default async function ProspectsPage({
               {accountRows.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="empty">
-                    No accounts yet. Run ICP discovery above.
+                    No companies yet. Run account discovery or add a prospect
+                    above.
                   </td>
                 </tr>
               ) : null}
@@ -260,54 +338,20 @@ export default async function ProspectsPage({
           </table>
         </div>
       </section>
-      <section className="panel">
-        <h2>Add a prospect</h2>
-        <form
-          action="/api/operator/commands/create-prospect"
-          method="post"
-          className="form-grid"
-        >
-          <input type="hidden" name="csrf" value={session.csrfToken} />
-          <label>
-            Company
-            <input name="companyName" required />
-          </label>
-          <label>
-            Domain
-            <input name="domain" placeholder="example.com" />
-          </label>
-          <label>
-            First name
-            <input name="firstName" required />
-          </label>
-          <label>
-            Last name
-            <input name="lastName" required />
-          </label>
-          <label>
-            Job title
-            <input name="jobTitle" />
-          </label>
-          <label>
-            Email
-            <input name="email" type="email" />
-          </label>
-          <button type="submit">Save prospect</button>
-        </form>
-      </section>
+
       <section className="panel table-panel">
         <div className="panel-heading">
-          <h2>All prospects</h2>
-          <span>{rows.length} rows</span>
+          <h2>People</h2>
+          <span className="muted">{rows.length}</span>
         </div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Company</th>
                 <th>Person</th>
+                <th>Company</th>
                 <th>Role</th>
-                <th>Email confidence</th>
+                <th>Email</th>
                 <th>Campaign</th>
                 <th>Status</th>
               </tr>
@@ -316,33 +360,41 @@ export default async function ProspectsPage({
               {rows.map((row) => (
                 <tr key={`${row.contactId}-${row.enrollmentId ?? "available"}`}>
                   <td>
-                    {row.company}
-                    <small>{row.researchStatus}</small>
-                  </td>
-                  <td>
                     <Link href={`/prospects/${row.contactId}`}>
                       {row.person}
                     </Link>
                   </td>
+                  <td>{row.company}</td>
                   <td>{row.role ?? "—"}</td>
                   <td>
                     {row.email ?? "Unresolved"}
                     <small>
                       {row.confidence
-                        ? `${Math.round(Number(row.confidence) * 100)}%`
-                        : row.resolutionStatus}
+                        ? `${Math.round(Number(row.confidence) * 100)}% confidence`
+                        : describeStatus(
+                            "emailResolution",
+                            row.resolutionStatus,
+                          ).label}
                     </small>
                   </td>
                   <td>{row.campaign ?? "—"}</td>
                   <td>
-                    <span className="badge">{row.state ?? "not enrolled"}</span>
+                    {/* Without an enrollment, the contact's own lifecycle is
+                        the status — a rejected or opted-out contact must not
+                        hide behind a bare "not enrolled". */}
+                    {row.state ? (
+                      <StatusBadge kind="enrollment" value={row.state} />
+                    ) : (
+                      <StatusBadge kind="contact" value={row.contactStatus} />
+                    )}
                   </td>
                 </tr>
               ))}
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="empty">
-                    No prospects yet. Add one above or run discovery.
+                    No people yet. Discover contacts on a company, or add a
+                    prospect above.
                   </td>
                 </tr>
               ) : null}

@@ -16,6 +16,7 @@ import {
   workflowEvents,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { StatusBadge } from "@/modules/presentation/status-badge";
 import { MaintenanceStatusPanel } from "@/modules/settings/maintenance-status-panel";
 import { resolveProviderPresentation } from "@/modules/settings/provider-presentation";
 import { getOperatorSendingSettings } from "@/modules/settings/service";
@@ -214,7 +215,7 @@ export default async function SettingsPage({
                   <td>{mailbox.email}</td>
                   <td>{mailbox.provider}</td>
                   <td>
-                    <span className="badge">{mailbox.status}</span>
+                    <StatusBadge kind="mailbox" value={mailbox.status} />
                   </td>
                   <td>{mailbox.grantedScopes.join(", ") || "Local mock"}</td>
                   <td>{mailbox.lastSyncedAt?.toLocaleString() ?? "Never"}</td>
@@ -269,111 +270,114 @@ export default async function SettingsPage({
             </tbody>
           </table>
         </div>
-        <h3>Connect an SMTP/IMAP mailbox</h3>
-        <p className="muted">
-          For mailboxes without Microsoft 365 OAuth (university or company
-          webmail, Zimbra, etc.). We verify IMAP login, the Drafts and Sent
-          folders, then SMTP login before saving anything — nothing is ever sent
-          as part of this check. Submitting this form again with working
-          credentials is also how a revoked mailbox gets reconnected.
-        </p>
-        <form
-          action="/api/operator/commands/connect-smtp-mailbox"
-          method="post"
-          className="form-grid"
+        <details
+          open={mailboxes.every((mailbox) => mailbox.provider === "mock")}
         >
-          <input type="hidden" name="csrf" value={session.csrfToken} />
-          <label>
-            Email address
-            <input
-              name="email"
-              type="email"
-              required
-              placeholder="you@example.edu"
-            />
-          </label>
-          <label>
-            Login username
-            <input
-              name="username"
-              required
-              placeholder="e.g. corentin.sacazes"
-            />
-            <small>
-              The login your mail server expects — it may differ from the email
-              address above.
-            </small>
-          </label>
-          <label>
-            IMAP host
-            <input
-              name="imapHost"
-              required
-              placeholder="e.g. webmail.example.edu"
-            />
-          </label>
-          <label>
-            IMAP port
-            <input
-              name="imapPort"
-              type="number"
-              min={1}
-              max={65535}
-              defaultValue={993}
-              required
-            />
-          </label>
-          <label>
-            IMAP security
-            <select name="imapSecurity" defaultValue="tls">
-              <option value="tls">TLS (implicit — typically port 993)</option>
-              <option value="starttls">STARTTLS (typically port 143)</option>
-            </select>
-          </label>
-          <label>
-            SMTP host
-            <input
-              name="smtpHost"
-              required
-              placeholder="e.g. webmail.example.edu"
-            />
-          </label>
-          <label>
-            SMTP port
-            <input
-              name="smtpPort"
-              type="number"
-              min={1}
-              max={65535}
-              defaultValue={587}
-              required
-            />
-          </label>
-          <label>
-            SMTP security
-            <select name="smtpSecurity" defaultValue="starttls">
-              <option value="starttls">STARTTLS (typically port 587)</option>
-              <option value="tls">TLS (implicit — typically port 465)</option>
-            </select>
-          </label>
-          <label>
-            Password
-            <input
-              name="password"
-              type="password"
-              required
-              autoComplete="off"
-            />
-          </label>
-          <button>Connect mailbox</button>
-        </form>
+          <summary>Connect an SMTP/IMAP mailbox</summary>
+          <p className="muted">
+            For providers without Microsoft 365 OAuth (university or company
+            webmail, Zimbra, Fastmail…). Logins are verified before anything is
+            saved; nothing is sent during the check. Re-submitting with working
+            credentials also reconnects a revoked mailbox.
+          </p>
+          <form
+            action="/api/operator/commands/connect-smtp-mailbox"
+            method="post"
+            className="form-grid"
+          >
+            <input type="hidden" name="csrf" value={session.csrfToken} />
+            <label>
+              Email address
+              <input
+                name="email"
+                type="email"
+                required
+                placeholder="you@example.edu"
+              />
+            </label>
+            <label>
+              Login username
+              <input
+                name="username"
+                required
+                placeholder="e.g. corentin.sacazes"
+              />
+              <small>
+                The login your mail server expects — it may differ from the
+                email address above.
+              </small>
+            </label>
+            <label>
+              IMAP host
+              <input
+                name="imapHost"
+                required
+                placeholder="e.g. webmail.example.edu"
+              />
+            </label>
+            <label>
+              IMAP port
+              <input
+                name="imapPort"
+                type="number"
+                min={1}
+                max={65535}
+                defaultValue={993}
+                required
+              />
+            </label>
+            <label>
+              IMAP security
+              <select name="imapSecurity" defaultValue="tls">
+                <option value="tls">TLS (implicit — typically port 993)</option>
+                <option value="starttls">STARTTLS (typically port 143)</option>
+              </select>
+            </label>
+            <label>
+              SMTP host
+              <input
+                name="smtpHost"
+                required
+                placeholder="e.g. webmail.example.edu"
+              />
+            </label>
+            <label>
+              SMTP port
+              <input
+                name="smtpPort"
+                type="number"
+                min={1}
+                max={65535}
+                defaultValue={587}
+                required
+              />
+            </label>
+            <label>
+              SMTP security
+              <select name="smtpSecurity" defaultValue="starttls">
+                <option value="starttls">STARTTLS (typically port 587)</option>
+                <option value="tls">TLS (implicit — typically port 465)</option>
+              </select>
+            </label>
+            <label>
+              Password
+              <input
+                name="password"
+                type="password"
+                required
+                autoComplete="off"
+              />
+            </label>
+            <button>Connect mailbox</button>
+          </form>
+        </details>
       </section>
       <section className="panel">
         <h2>Sending policy</h2>
         <form
           action="/api/operator/commands/update-settings"
           method="post"
-          className="form-grid"
+          className="stack"
         >
           <input type="hidden" name="csrf" value={session.csrfToken} />
           <label className="check warning">
@@ -382,95 +386,107 @@ export default async function SettingsPage({
               name="emergencyPause"
               defaultChecked={settings.emergencyPause}
             />
-            Emergency pause
+            Emergency pause — blocks every send until unchecked
           </label>
-          <label>
-            Timezone
-            <input name="timezone" defaultValue={settings.timezone} />
-          </label>
-          <fieldset className="span-all">
-            <legend>Working days</legend>
-            <div className="check-row">
-              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
-                (day, index) => (
-                  <label className="check" key={day}>
-                    <input
-                      type="checkbox"
-                      name="workingDays"
-                      value={index}
-                      defaultChecked={settings.workingDays.includes(index)}
-                    />
-                    {day}
-                  </label>
-                ),
-              )}
+          <fieldset>
+            <legend>Sending window</legend>
+            <div className="form-grid">
+              <label>
+                Timezone
+                <input name="timezone" defaultValue={settings.timezone} />
+              </label>
+              <fieldset className="span-all">
+                <legend>Working days</legend>
+                <div className="check-row">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+                    (day, index) => (
+                      <label className="check" key={day}>
+                        <input
+                          type="checkbox"
+                          name="workingDays"
+                          value={index}
+                          defaultChecked={settings.workingDays.includes(index)}
+                        />
+                        {day}
+                      </label>
+                    ),
+                  )}
+                </div>
+              </fieldset>
+              <label>
+                Start minute
+                <input
+                  name="workingStartMinute"
+                  type="number"
+                  min={0}
+                  max={1439}
+                  defaultValue={settings.workingStartMinute}
+                />
+                <small>Minutes after midnight — 540 = 09:00</small>
+              </label>
+              <label>
+                End minute
+                <input
+                  name="workingEndMinute"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  defaultValue={settings.workingEndMinute}
+                />
+                <small>1020 = 17:00 · 1440 = midnight</small>
+              </label>
             </div>
           </fieldset>
-          <label>
-            Start minute
-            <input
-              name="workingStartMinute"
-              type="number"
-              min={0}
-              max={1439}
-              defaultValue={settings.workingStartMinute}
-            />
-          </label>
-          <label>
-            End minute
-            <input
-              name="workingEndMinute"
-              type="number"
-              min={1}
-              max={1440}
-              defaultValue={settings.workingEndMinute}
-            />
-          </label>
-          <label>
-            Mailbox daily cap
-            <input
-              name="mailboxDailyCap"
-              type="number"
-              min={1}
-              defaultValue={settings.mailboxDailyCap}
-            />
-          </label>
-          <label>
-            Campaign daily cap
-            <input
-              name="campaignDailyCap"
-              type="number"
-              min={1}
-              defaultValue={settings.campaignDailyCap}
-            />
-          </label>
-          <label>
-            Mailbox minimum delay (seconds)
-            <input
-              name="mailboxMinimumDelaySeconds"
-              type="number"
-              min={0}
-              defaultValue={settings.mailboxMinimumDelaySeconds}
-            />
-          </label>
-          <label>
-            Contact minimum delay (minutes)
-            <input
-              name="contactMinimumDelayMinutes"
-              type="number"
-              min={0}
-              defaultValue={settings.contactMinimumDelayMinutes}
-            />
-          </label>
-          <label>
-            Cross-campaign cooldown (days)
-            <input
-              name="crossCampaignCooldownDays"
-              type="number"
-              min={0}
-              defaultValue={settings.crossCampaignCooldownDays}
-            />
-          </label>
+          <fieldset>
+            <legend>Volume &amp; pacing</legend>
+            <div className="form-grid">
+              <label>
+                Mailbox daily cap
+                <input
+                  name="mailboxDailyCap"
+                  type="number"
+                  min={1}
+                  defaultValue={settings.mailboxDailyCap}
+                />
+              </label>
+              <label>
+                Campaign daily cap
+                <input
+                  name="campaignDailyCap"
+                  type="number"
+                  min={1}
+                  defaultValue={settings.campaignDailyCap}
+                />
+              </label>
+              <label>
+                Mailbox minimum delay (seconds)
+                <input
+                  name="mailboxMinimumDelaySeconds"
+                  type="number"
+                  min={0}
+                  defaultValue={settings.mailboxMinimumDelaySeconds}
+                />
+              </label>
+              <label>
+                Contact minimum delay (minutes)
+                <input
+                  name="contactMinimumDelayMinutes"
+                  type="number"
+                  min={0}
+                  defaultValue={settings.contactMinimumDelayMinutes}
+                />
+              </label>
+              <label>
+                Cross-campaign cooldown (days)
+                <input
+                  name="crossCampaignCooldownDays"
+                  type="number"
+                  min={0}
+                  defaultValue={settings.crossCampaignCooldownDays}
+                />
+              </label>
+            </div>
+          </fieldset>
           <button>Save sending policy</button>
         </form>
       </section>

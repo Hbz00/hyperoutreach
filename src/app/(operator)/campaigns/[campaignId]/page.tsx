@@ -1,4 +1,5 @@
 import { and, asc, desc, eq } from "drizzle-orm";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { getDatabase } from "@/lib/db/client";
@@ -12,6 +13,8 @@ import {
   sequenceSteps,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { StatusBadge } from "@/modules/presentation/status-badge";
+import { describeStopReason } from "@/modules/presentation/status";
 
 /** What a stored step already asks the agent to write. */
 function declaredFields(step: { personalizationSchema: unknown }): string[] {
@@ -95,6 +98,7 @@ export default async function CampaignDetailPage({
     .where(eq(enrollments.campaignId, campaign.id))
     .orderBy(desc(enrollments.createdAt));
   const config = activeVersion.configuration as Record<string, unknown>;
+  const drafting = !activeVersion.publishedAt;
   return (
     <main className="page-shell">
       <header className="page-header">
@@ -104,6 +108,7 @@ export default async function CampaignDetailPage({
           <p className="muted">{campaign.targetDescription}</p>
         </div>
         <div className="header-actions">
+          <StatusBadge kind="campaign" value={campaign.status} />
           {campaign.status === "active" ? (
             <form action="/api/operator/commands/pause-campaign" method="post">
               <input type="hidden" name="csrf" value={session.csrfToken} />
@@ -124,30 +129,147 @@ export default async function CampaignDetailPage({
           {notice}
         </p>
       ) : null}
-      {activeVersion.publishedAt ? null : (
+
+      {drafting ? (
         <section className="panel">
-          <h2>Publish current version</h2>
-          <p className="muted">
-            Publication makes this template set available for enrollment. Used
-            versions become immutable.
-          </p>
-          <form action="/api/operator/commands/publish-campaign" method="post">
-            <input type="hidden" name="csrf" value={session.csrfToken} />
-            <input type="hidden" name="campaignId" value={campaign.id} />
-            <input
-              type="hidden"
-              name="campaignVersionId"
-              value={activeVersion.id}
-            />
-            <button>Publish version {activeVersion.version}</button>
-          </form>
+          <div className="panel-heading">
+            <div>
+              <h2>Publish version {activeVersion.version}</h2>
+              <p className="muted">
+                Publishing makes this sequence available for enrollment. Once
+                used, it can never change — revisions create a new version.
+              </p>
+            </div>
+            <form
+              action="/api/operator/commands/publish-campaign"
+              method="post"
+            >
+              <input type="hidden" name="csrf" value={session.csrfToken} />
+              <input type="hidden" name="campaignId" value={campaign.id} />
+              <input
+                type="hidden"
+                name="campaignVersionId"
+                value={activeVersion.id}
+              />
+              <button>Publish version {activeVersion.version}</button>
+            </form>
+          </div>
         </section>
-      )}
+      ) : null}
+
       <section className="panel">
+        <h2>Enroll a prospect</h2>
+        {prospects.length === 0 ? (
+          <p className="hint">
+            No prospect has an accepted email yet. Resolve one on the{" "}
+            <Link href="/prospects">Prospects page</Link> first.
+          </p>
+        ) : null}
+        {!enrollmentVersion.publishedAt ? (
+          <p className="hint">Publish the sequence before enrolling.</p>
+        ) : null}
+        <form
+          action="/api/operator/commands/enroll-contact"
+          method="post"
+          className="form-grid"
+        >
+          <input type="hidden" name="csrf" value={session.csrfToken} />
+          <input type="hidden" name="campaignId" value={campaign.id} />
+          <input
+            type="hidden"
+            name="campaignVersionId"
+            value={enrollmentVersion.id}
+          />
+          <label>
+            Prospect
+            <select name="contactId" required>
+              <option value="">Select prospect</option>
+              {prospects.map((contact) => (
+                <option key={contact.id} value={contact.id}>
+                  {contact.name} · {contact.email}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Mailbox
+            <select name="mailboxId" required>
+              <option value="">Select mailbox</option>
+              {mailboxes.map((mailbox) => (
+                <option key={mailbox.id} value={mailbox.id}>
+                  {mailbox.email} · {mailbox.provider}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={!enrollmentVersion.publishedAt}>
+            Enroll contact
+          </button>
+        </form>
+        <p className="muted">
+          Enrolling queues the first message; it appears in the review queue
+          once written. Nothing is sent without your approval.
+        </p>
+      </section>
+
+      <section className="panel table-panel">
         <div className="panel-heading">
-          <h2>Sequence editor</h2>
-          <span>{activeVersion.publishedAt ? "Published" : "Draft"}</span>
+          <h2>Enrollments</h2>
+          <span className="muted">{enrollmentRows.length}</span>
         </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Contact</th>
+                <th>State</th>
+                <th>Version</th>
+                <th>Step</th>
+                <th>Next action</th>
+                <th>Stopped because</th>
+              </tr>
+            </thead>
+            <tbody>
+              {enrollmentRows.map((row) => (
+                <tr key={row.id}>
+                  <td>{row.contact}</td>
+                  <td>
+                    <StatusBadge kind="enrollment" value={row.state} />
+                  </td>
+                  <td>
+                    v
+                    {versions.find(
+                      (version) => version.id === row.campaignVersionId,
+                    )?.version ?? "?"}
+                  </td>
+                  <td>{row.step + 1}</td>
+                  <td>{row.next?.toLocaleString() ?? "—"}</td>
+                  <td>
+                    {row.stopReason ? describeStopReason(row.stopReason) : "—"}
+                  </td>
+                </tr>
+              ))}
+              {enrollmentRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="empty">
+                    No enrollments yet.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <details className="panel" open={drafting}>
+        <summary>
+          {drafting ? "Edit draft sequence" : "Revise sequence"}
+          <small className="muted">
+            {drafting
+              ? "not published yet — edits stay on this draft"
+              : `saving creates draft v${activeVersion.version + 1}`}
+          </small>
+        </summary>
         <form
           action="/api/operator/commands/revise-campaign"
           method="post"
@@ -260,99 +382,13 @@ export default async function CampaignDetailPage({
             </fieldset>
           ))}
           <button type="submit">
-            {activeVersion.publishedAt ? "Create next version" : "Save draft"}
+            {drafting ? "Save draft" : "Create next version"}
           </button>
         </form>
-      </section>
-      <section className="panel">
-        <h2>Enroll a resolved prospect</h2>
-        <form
-          action="/api/operator/commands/enroll-contact"
-          method="post"
-          className="form-grid"
-        >
-          <input type="hidden" name="csrf" value={session.csrfToken} />
-          <input type="hidden" name="campaignId" value={campaign.id} />
-          <input
-            type="hidden"
-            name="campaignVersionId"
-            value={enrollmentVersion.id}
-          />
-          <label>
-            Prospect
-            <select name="contactId" required>
-              <option value="">Select prospect</option>
-              {prospects.map((contact) => (
-                <option key={contact.id} value={contact.id}>
-                  {contact.name} · {contact.email}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Mailbox
-            <select name="mailboxId" required>
-              <option value="">Select mailbox</option>
-              {mailboxes.map((mailbox) => (
-                <option key={mailbox.id} value={mailbox.id}>
-                  {mailbox.email} · {mailbox.provider}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="submit" disabled={!enrollmentVersion.publishedAt}>
-            Enroll contact
-          </button>
-        </form>
-      </section>
-      <section className="panel table-panel">
-        <div className="panel-heading">
-          <h2>Enrollment state</h2>
-          <span>{enrollmentRows.length}</span>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Contact</th>
-                <th>State</th>
-                <th>Version</th>
-                <th>Step</th>
-                <th>Next action</th>
-                <th>Stop reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {enrollmentRows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.contact}</td>
-                  <td>
-                    <span className="badge">{row.state}</span>
-                  </td>
-                  <td>
-                    v
-                    {versions.find(
-                      (version) => version.id === row.campaignVersionId,
-                    )?.version ?? "?"}
-                  </td>
-                  <td>{row.step + 1}</td>
-                  <td>{row.next?.toLocaleString() ?? "—"}</td>
-                  <td>{row.stopReason ?? "—"}</td>
-                </tr>
-              ))}
-              {enrollmentRows.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="empty">
-                    No enrollments yet.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      </details>
+
       <details className="panel">
-        <summary>Immutable version history</summary>
+        <summary>Version history</summary>
         {versions.map((version) => (
           <p key={version.id}>
             v{version.version} ·{" "}
