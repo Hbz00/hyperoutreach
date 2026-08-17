@@ -39,6 +39,13 @@ import {
   TransientEmailEnrichmentProvider,
 } from "@/modules/email-resolution/providers";
 import { resolveContactEmail as resolveContactEmailService } from "@/modules/email-resolution/service";
+import { createWorkflowTaskServices } from "@/modules/workflows/service-factory";
+import { WorkflowRuntime } from "@/modules/workflows/runtime";
+import type { WorkflowTaskName } from "@/modules/workflows/task-contracts";
+import {
+  drainOperatorCommands,
+  enqueueOperatorCommand,
+} from "@/modules/workflows/operator-command-queue";
 import {
   StructuredPublicEmailEvidenceProvider,
   StaticPublicEmailEvidenceProvider,
@@ -164,6 +171,61 @@ async function resolveContactEmail(
       ),
     },
   );
+}
+
+/**
+ * An audited public-address search, which the static fixture is not: only an
+ * observable provider writes the `agent_runs` row that a second contact of the
+ * same company can reuse.
+ */
+class ObservablePublicEmailFixture {
+  readonly name = "observable-fixture";
+  readonly auditDescriptor: {
+    name: string;
+    model: string;
+    promptVersion: string;
+    schemaVersion: string;
+  };
+  calls = 0;
+
+  constructor(
+    private readonly samples: ConstructorParameters<
+      typeof StaticPublicEmailEvidenceProvider
+    >[0],
+    promptVersion = "public-email-evidence-prompt-v2",
+  ) {
+    this.auditDescriptor = {
+      name: "public_email_evidence",
+      model: "fixture-model",
+      promptVersion,
+      schemaVersion: "public-email-evidence-schema-v1",
+    };
+  }
+
+  async find(input: { companyDomain: string }) {
+    return (await this.findWithAgentResult(input)).evidence;
+  }
+
+  async findWithAgentResult(input: { companyDomain: string }) {
+    void input;
+    this.calls += 1;
+    return {
+      evidence: {
+        samples: structuredClone(this.samples),
+        sourceUrls: [
+          ...new Set(this.samples.map((sample) => sample.sourceUrl)),
+        ],
+      },
+      agentResult: {
+        responseId: `fixture_${this.calls}`,
+        model: "fixture-model",
+        output: { samples: structuredClone(this.samples) },
+        sources: this.samples.map((sample) => ({ url: sample.sourceUrl })),
+        usage: null,
+        costUsd: null,
+      },
+    };
+  }
 }
 
 async function accountAndContact(suffix: string, evidencedDomain = true) {
@@ -1664,6 +1726,445 @@ describe("database-backed research and email resolution", () => {
     expect(ambiguousEvidence).toHaveLength(0);
   });
 
+  /**
+   * The employer move a French profile used to lose.
+   *
+   * The proof of the new employment is the person's own LinkedIn page, and a
+   * web-searching agent gets it from `fr.linkedin.com`. The stored identity is
+   * always canonicalised to `www.linkedin.com`, so comparing the two through a
+   * generic URL normaliser — which only lower-cases the host — made a plainly
+   * present proof read as absent and recorded a conflict instead of repinning.
+   */
+  it("accepts a LinkedIn employment proof served from a country subdomain", async () => {
+    const oldAccount = await createOrGetAccount(db, {
+      name: "Move Old",
+      domain: "move-old.example",
+    });
+    const incomingAccount = await createOrGetAccount(db, {
+      name: "Move Incoming",
+      domain: "move-incoming.example",
+    });
+    if (!oldAccount.ok || !incomingAccount.ok)
+      throw new Error("Account fixture failed");
+    const existing = await createOrGetContact(db, {
+      accountId: oldAccount.account.id,
+      firstName: "Victor",
+      lastName: "Guyon",
+      jobTitle: "Directeur régional",
+      linkedinUrl: "https://www.linkedin.com/in/victor-guyon",
+    });
+    if (!existing.ok) throw new Error("Contact fixture failed");
+
+    const discovered = await discoverContacts(
+      db,
+      new ContactDiscoveryFixture({
+        contacts: [
+          {
+            firstName: "Victor",
+            lastName: "Guyon",
+            jobTitle: "Directeur d'exploitation",
+            linkedinUrl: "https://fr.linkedin.com/in/victor-guyon",
+            confidence: 0.95,
+            evidence: [
+              {
+                // The country subdomain, exactly as the agent reports it.
+                url: "https://fr.linkedin.com/in/victor-guyon",
+                title: "Victor Guyon",
+                supports: ["employment", "job_title"],
+                retrievedAt,
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        accountId: incomingAccount.account.id,
+        roles: ["Directeur d'exploitation"],
+        limit: 5,
+      },
+    );
+
+    expect(discovered).toMatchObject({ ok: true, conflicts: [] });
+    const [stored] = await db
+      .select()
+      .from(schema.contacts)
+      .where(eq(schema.contacts.id, existing.contact.id));
+    expect(stored?.accountId).toBe(incomingAccount.account.id);
+    expect(stored?.jobTitle).toBe("Directeur d'exploitation");
+  });
+
+  /**
+   * The searched question is the company's convention, not the person's
+   * address, so ten colleagues used to ask it ten times — ten web searches for
+   * one answer, on a budget that runs out silently.
+   */
+  it("reuses one company search for a colleague, and never reuses an empty one", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Shared Search",
+      domain: "shared-search.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://shared-search.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contactOf = async (firstName: string, lastName: string) => {
+      const created = await createOrGetContact(db, {
+        accountId: account.account.id,
+        firstName,
+        lastName,
+        jobTitle: "Directeur",
+      });
+      if (!created.ok) throw new Error("Contact fixture failed");
+      return created.contact.id;
+    };
+    const first = await contactOf("Audrey", "Gimenez");
+    const second = await contactOf("Abdesslam", "Laoukili");
+    const third = await contactOf("Tony", "Pasquier");
+
+    // Nothing found: the record must not retire the company. The same prompt
+    // on the same domain returned zero, then one, then two on three real
+    // consecutive attempts.
+    const empty = new ObservablePublicEmailFixture([]);
+    await resolveContactEmailService(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      { contactId: first },
+      { publicEvidenceProvider: empty },
+    );
+    expect(empty.calls).toBe(1);
+
+    const found = new ObservablePublicEmailFixture([
+      {
+        firstName: "Marie",
+        lastName: "Durand",
+        email: "marie.durand@shared-search.example",
+        sourceUrl: "https://shared-search.example/press.pdf",
+      },
+      {
+        firstName: "Paul",
+        lastName: "Martin",
+        email: "paul.martin@shared-search.example",
+        sourceUrl: "https://shared-search.example/press.pdf",
+      },
+    ]);
+    const searched = await resolveContactEmailService(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      { contactId: second },
+      { publicEvidenceProvider: found },
+    );
+    expect(found.calls).toBe(1);
+    expect(searched).toMatchObject({ ok: true, status: "resolved" });
+
+    // The colleague: same company, same convention, no second search.
+    const reused = await resolveContactEmailService(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      { contactId: third },
+      { publicEvidenceProvider: found },
+    );
+    expect(found.calls).toBe(1);
+    expect(reused).toMatchObject({ ok: true, status: "resolved" });
+    const [candidate] = await db
+      .select()
+      .from(schema.emailCandidates)
+      .where(eq(schema.emailCandidates.contactId, third));
+    expect(candidate?.email).toBe("tony.pasquier@shared-search.example");
+
+    // And the operator can always ask again: the checkbox on the contact page
+    // reaches the service as `forcePublicSearch`.
+    await resolveContactEmailService(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      { contactId: third, forcePublicSearch: true },
+      { publicEvidenceProvider: found },
+    );
+    expect(found.calls).toBe(2);
+  });
+
+  /**
+   * The whole path the button takes: the payload the route builds, through the
+   * queue, through the runtime's strict payload check, into the service.
+   *
+   * Every layer of it was covered except the seams between them, and that is
+   * exactly where `forcePublicSearch` broke: added to the payload type and to
+   * the route, missing from the `.strict()` schema the runtime parses with. It
+   * typechecked, the suite stayed green, and every click would have thrown,
+   * retried the whole ladder and abandoned twenty minutes later with a schema
+   * error in the operator's error column.
+   */
+  it("drains a resolve-email command built exactly as the route builds it", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Queued Resolution",
+      domain: "queued-resolution.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://queued-resolution.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Nadia",
+      lastName: "Perrin",
+      jobTitle: "Directrice",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+
+    const queued = await enqueueOperatorCommand(db, {
+      command: "resolve-email",
+      // Verbatim from `route.ts`: the threshold is always sent, and so is the
+      // checkbox — `boolean()` returns false rather than omitting the key.
+      payload: {
+        contactId: contact.contact.id,
+        confidenceThreshold: 0.85,
+        forcePublicSearch: false,
+      },
+      requestedBy: "operator@example.com",
+      dedupeKey: `ui:email-resolution:${contact.contact.id}:queued-test`,
+    });
+
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
+    const drained = await drainOperatorCommands(db, (input) =>
+      new WorkflowRuntime(db, services).execute(
+        input.task as WorkflowTaskName,
+        input.payload,
+        { runId: input.runId, attempt: input.attempt },
+      ),
+    );
+
+    expect(drained).toContainEqual(
+      expect.objectContaining({ id: queued.id, status: "succeeded" }),
+    );
+    const [row] = await db
+      .select()
+      .from(schema.operatorCommands)
+      .where(eq(schema.operatorCommands.id, queued.id));
+    expect(row?.status).toBe("succeeded");
+    expect(row?.error).toBeNull();
+  });
+
+  /**
+   * Through the factory, not around it.
+   *
+   * The composition test asserts that `enrichment` is `null`; it cannot see
+   * what the resolution does with it. Standing a no-result stub back in its
+   * place would keep that assertion true while every unresolved contact went
+   * back to blaming an enrichment service this installation does not have —
+   * which is the bug the null was introduced to fix. This exercises the wiring
+   * the maintenance cycle actually calls.
+   */
+  it("reports the honest reason through the composed production services", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Composed Wiring",
+      domain: "composed-wiring.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://composed-wiring.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Sonia",
+      lastName: "Mercier",
+      jobTitle: "Directrice",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+
+    // The mock bundle: no AI provider configured, exactly as a credential-free
+    // installation composes itself.
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
+    const outcome = await services["email-resolution"]({
+      contactId: contact.contact.id,
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      status: "manual_review",
+      // Not `enrichment_no_result`: nothing was asked, so nothing can have
+      // answered nothing.
+      reason: "insufficient_public_evidence",
+    });
+  });
+
+  /**
+   * A company running two conventions must not have one of them picked for it.
+   *
+   * Two unambiguous samples score 0.90 each, both clear the 0.85 default, and
+   * the winner used to be decided by `localeCompare` on the generated address —
+   * an alphabetical coin toss that auto-accepts, sends, and on a hard bounce
+   * writes a permanent suppression. Real companies do this: one of the ten
+   * carriers probed showed eight addresses in `first.last` and three in
+   * `flast`.
+   */
+  it("refuses to pick between two conventions that tie above the threshold", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Two Conventions",
+      domain: "two-conventions.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://two-conventions.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Tony",
+      lastName: "Pasquier",
+      jobTitle: "Responsable transport",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+
+    const source = "https://two-conventions.example/press.pdf";
+    const outcome = await resolveContactEmail(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      {
+        contactId: contact.contact.id,
+        publicSamples: [
+          // Two proving `first.last`, unambiguously.
+          {
+            firstName: "Marie",
+            lastName: "Durand",
+            email: "marie.durand@two-conventions.example",
+            sourceUrl: source,
+          },
+          {
+            firstName: "Paul",
+            lastName: "Martin",
+            email: "paul.martin@two-conventions.example",
+            sourceUrl: source,
+          },
+          // Two proving `f.last`, equally unambiguously.
+          {
+            firstName: "Jean",
+            lastName: "Dupont",
+            email: "j.dupont@two-conventions.example",
+            sourceUrl: source,
+          },
+          {
+            firstName: "Luc",
+            lastName: "Bernard",
+            email: "l.bernard@two-conventions.example",
+            sourceUrl: source,
+          },
+        ],
+      },
+    );
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      status: "manual_review",
+      reason: "candidate_conflict",
+    });
+    // Both addresses are offered for the operator to choose between, and
+    // neither is accepted on their behalf.
+    const rows = await db
+      .select()
+      .from(schema.emailCandidates)
+      .where(eq(schema.emailCandidates.contactId, contact.contact.id));
+    expect(rows.map((row) => row.email).sort()).toEqual([
+      "t.pasquier@two-conventions.example",
+      "tony.pasquier@two-conventions.example",
+    ]);
+    expect(rows.every((row) => row.status === "candidate")).toBe(true);
+  });
+
+  /**
+   * Improving the prompt must reach the companies already searched. Reuse keyed
+   * on the domain alone would have kept serving a weaker answer for a month —
+   * to exactly the companies worth re-asking.
+   */
+  it("does not reuse a search recorded under an older prompt", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Prompt Version",
+      domain: "prompt-version.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://prompt-version.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Claire",
+      lastName: "Vaas",
+      jobTitle: "Directrice",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+    const samples = [
+      {
+        firstName: "Marie",
+        lastName: "Durand",
+        email: "marie.durand@prompt-version.example",
+        sourceUrl: "https://prompt-version.example/press.pdf",
+      },
+      {
+        firstName: "Paul",
+        lastName: "Martin",
+        email: "paul.martin@prompt-version.example",
+        sourceUrl: "https://prompt-version.example/press.pdf",
+      },
+    ];
+
+    // A record written by the previous prompt, non-empty and fresh: reusable on
+    // every count except the one that matters.
+    const old = new ObservablePublicEmailFixture(
+      samples,
+      "public-email-evidence-prompt-v1",
+    );
+    await resolveContactEmailService(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      { contactId: contact.contact.id },
+      { publicEvidenceProvider: old },
+    );
+    expect(old.calls).toBe(1);
+
+    const current = new ObservablePublicEmailFixture(samples);
+    await resolveContactEmailService(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      { contactId: contact.contact.id },
+      { publicEvidenceProvider: current },
+    );
+    expect(current.calls).toBe(1);
+
+    // And once the current prompt has its own record, reuse resumes.
+    await resolveContactEmailService(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      { contactId: contact.contact.id },
+      { publicEvidenceProvider: current },
+    );
+    expect(current.calls).toBe(1);
+  });
+
   it("serializes concurrent global LinkedIn discovery into one contact", async () => {
     const account = await createOrGetAccount(db, {
       name: "Concurrent Contacts",
@@ -1979,7 +2480,7 @@ describe("database-backed research and email resolution", () => {
     expect(run).toMatchObject({
       agent: "public_email_evidence",
       model: "mock-public-email-research",
-      promptVersion: "public-email-evidence-prompt-v1",
+      promptVersion: "public-email-evidence-prompt-v2",
       schemaVersion: "public-email-evidence-schema-v1",
       input: { companyDomain: "email-ai-audit-success.example" },
       output: { samples },
@@ -2041,7 +2542,7 @@ describe("database-backed research and email resolution", () => {
     expect(run).toMatchObject({
       agent: "public_email_evidence",
       model: "mock-public-email-research",
-      promptVersion: "public-email-evidence-prompt-v1",
+      promptVersion: "public-email-evidence-prompt-v2",
       schemaVersion: "public-email-evidence-schema-v1",
       input: { companyDomain: "email-ai-audit-failure.example" },
       responseId: null,

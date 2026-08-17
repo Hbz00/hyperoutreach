@@ -356,10 +356,19 @@ test("operates the mock outreach lifecycle through authenticated application end
     form: { csrf, messageId: probeMessageId },
   });
   const blockedSettings = await (await browser.get("/settings")).text();
-  const probeAudit = blockedSettings
+  // Every audit row for this message, not the first one that mentions it. The
+  // message has several — its generation, then its blocked send — and taking
+  // the first made the assertion depend on the order they happen to render in,
+  // which is why it failed intermittently while the behaviour it checks was
+  // never in doubt. What is claimed here is that the send was refused for
+  // suppression, and any row carrying that reason proves it.
+  const probeAudits = blockedSettings
     .split('class="audit-row"')
-    .find((candidate) => candidate.includes(probeMessageId));
-  expect(probeAudit).toContain("RECIPIENT_SUPPRESSED");
+    .filter((candidate) => candidate.includes(probeMessageId));
+  expect(probeAudits.length).toBeGreaterThan(0);
+  expect(
+    probeAudits.some((candidate) => candidate.includes("RECIPIENT_SUPPRESSED")),
+  ).toBe(true);
 
   await browser.dispose();
 });

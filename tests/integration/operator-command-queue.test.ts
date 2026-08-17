@@ -392,4 +392,91 @@ describe("operator command queue", () => {
     expect(await drainOperatorCommands(db, execute, { now: NOW })).toEqual([]);
     expect(execute).not.toHaveBeenCalled();
   });
+
+  /**
+   * A pass is not an instant: one AI command holds it for minutes. These three
+   * read the clock again during the pass, which is what the queue does in
+   * production — `service-factory` passes neither `now` nor `clock`.
+   *
+   * The regression they pin: every timestamp used to come from the pass's start,
+   * so a command that ran for 84 seconds recorded a zero duration and a
+   * one-minute retry rung was already spent by the time it was written.
+   */
+  describe("timing within a long pass", () => {
+    // Advances by `stepMs` on every read, so the instant after the work is
+    // later than the instant before it — exactly what a real clock does and a
+    // pinned `now` cannot.
+    const advancingClock = (from: Date, stepMs: number) => {
+      let reads = 0;
+      return () => new Date(from.getTime() + stepMs * reads++);
+    };
+
+    it("records when the attempt ended, not when the pass began", async () => {
+      const queued = await queueResearch();
+
+      await drainOperatorCommands(
+        db,
+        async () => ({ ok: true }),
+        // Two reads per command: the claim, then the finalisation.
+        { now: NOW, clock: advancingClock(NOW, 90_000) },
+      );
+
+      const row = await readCommand(queued.id);
+      expect(row.status).toBe("succeeded");
+      expect(row.startedAt).toEqual(NOW);
+      expect(row.completedAt).toEqual(later(90_000));
+      // The point of the whole change: a 90-second command must not record
+      // itself as instantaneous. No page renders these two columns today —
+      // `readQueuedWork` drops them and excludes succeeded rows — so this is
+      // for whoever reads the table when something looks slow, and for the
+      // retry backoff that counts from the same instant.
+      expect(row.completedAt!.getTime() - row.startedAt!.getTime()).toBe(
+        90_000,
+      );
+    });
+
+    it("counts the retry backoff from the failure, not from before the attempt", async () => {
+      const queued = await queueResearch();
+
+      await drainOperatorCommands(
+        db,
+        async () => {
+          throw new Error("provider unavailable");
+        },
+        { now: NOW, clock: advancingClock(NOW, 100_000) },
+      );
+
+      const row = await readCommand(queued.id);
+      expect(row.status).toBe("queued");
+      expect(row.attempt).toBe(1);
+      // Failure at NOW+100s, first rung 60s: the wait must start at the
+      // failure. Measured from the pass start it would be NOW+60s — already
+      // past when written, so the next tick would retry with no wait at all.
+      expect(row.nextAttemptAt).toEqual(later(160_000));
+      expect(row.nextAttemptAt!.getTime()).toBeGreaterThan(
+        later(100_000).getTime(),
+      );
+    });
+
+    /**
+     * The production call site passes neither `now` nor `clock`
+     * (`service-factory`'s `drain-operator-commands`), so this is the wiring
+     * that actually runs every minute — and the one that recorded every
+     * command as instantaneous.
+     */
+    it("measures a real duration when no clock is injected", async () => {
+      const queued = await queueResearch();
+
+      await drainOperatorCommands(db, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return { ok: true };
+      });
+
+      const row = await readCommand(queued.id);
+      expect(row.status).toBe("succeeded");
+      expect(row.completedAt!.getTime()).toBeGreaterThan(
+        row.startedAt!.getTime(),
+      );
+    });
+  });
 });

@@ -38,6 +38,8 @@ export function defaultCdpPort(
  */
 const RENDERER_URL_PREFIX = "app://-/index.html";
 const RENDERER_URL_EXCLUDES = ["avatar-overlay"];
+/** How long an already-answering app is given to show its renderer. */
+const WARM_RENDERER_GRACE_MS = 5_000;
 
 export type DesktopAppOptions = {
   port?: number;
@@ -91,6 +93,65 @@ async function waitForPort(port: number, timeoutMs: number): Promise<void> {
   );
 }
 
+/**
+ * Waits for the renderer to exist, not merely for the port to answer.
+ *
+ * On a cold start the debug port opens before the app has a Chat surface: for
+ * the first second or so `/json/list` offers only the avatar overlay, which
+ * `selectRendererTarget` correctly refuses. Reading the list once at that
+ * moment produced `renderer_missing` about a second after launch — the whole
+ * failure mode of a discovery command that ran while ChatGPT happened to be
+ * closed, which is exactly when the client launches the app itself.
+ *
+ * The clock and the sleep are injected so the policy can be tested without
+ * waiting for real time or opening a socket.
+ */
+export async function waitForRendererTarget(
+  listTargets: () => Promise<CdpTarget[]>,
+  options: {
+    timeoutMs: number;
+    intervalMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<CdpTarget> {
+  const now = options.now ?? (() => Date.now());
+  const sleep =
+    options.sleep ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const intervalMs = options.intervalMs ?? 500;
+  const deadline = now() + Math.max(0, options.timeoutMs);
+  // At least one attempt, however little budget is left: a warm app answers on
+  // the first read, and refusing to look at all would turn a working
+  // installation into an error because an earlier step used up the clock.
+  let lastError: unknown = null;
+  for (;;) {
+    // A cold-starting app can refuse a devtools listing for a moment before it
+    // serves one. Treating that first refusal as fatal would reintroduce the
+    // failure this loop exists to prevent, by a different door, so a transient
+    // error is retried like an empty listing and only reported if the deadline
+    // arrives with nothing better.
+    let targets: CdpTarget[] = [];
+    try {
+      targets = await listTargets();
+      lastError = null;
+    } catch (error) {
+      lastError = error;
+    }
+    const target = selectRendererTarget(targets);
+    if (target?.webSocketDebuggerUrl) return target;
+    if (now() >= deadline) {
+      if (lastError) throw lastError;
+      throw new ChatGptDesktopError(
+        "ChatGPT desktop renderer was not found",
+        "renderer_missing",
+        `no ${RENDERER_URL_PREFIX} page appeared within ${Math.max(0, options.timeoutMs)} ms`,
+      );
+    }
+    await sleep(intervalMs);
+  }
+}
+
 export function selectRendererTarget(targets: CdpTarget[]): CdpTarget | null {
   return (
     targets.find(
@@ -105,11 +166,40 @@ export function selectRendererTarget(targets: CdpTarget[]): CdpTarget | null {
   );
 }
 
+/**
+ * How long to wait for the chat surface, given whether this client just started
+ * the app.
+ *
+ * A cold start gets whatever remains of the launch budget, because the surface
+ * it needs is still being built and cutting that short is the regression this
+ * whole path exists to fix. An app that was already answering gets a short
+ * grace instead: its renderer exists by definition, so if it is missing now the
+ * installation is wrong and waiting three quarters of a minute to say so helps
+ * nobody.
+ *
+ * Extracted and exported because the two arms are one ternary apart, and
+ * swapping them restores the original bug while every test still passes. A pure
+ * function can be pinned; an expression buried in an I/O path cannot.
+ */
+export function rendererBudgetMs(
+  launched: boolean,
+  remainingMs: number,
+): number {
+  const remaining = Math.max(0, remainingMs);
+  return launched ? remaining : Math.min(WARM_RENDERER_GRACE_MS, remaining);
+}
+
 export async function resolveRenderer(
   options: DesktopAppOptions = {},
 ): Promise<{ port: number; target: CdpTarget }> {
   const port = options.port ?? defaultCdpPort();
   const appPath = options.appPath ?? DEFAULT_APP_PATH;
+  const launchTimeoutMs = options.launchTimeoutMs ?? 45_000;
+  // One budget for the whole startup, shared by both waits, so fixing the
+  // renderer race does not silently double how long a broken installation
+  // takes to say so.
+  const deadline = Date.now() + launchTimeoutMs;
+  let launched = false;
 
   if (!(await isCdpPortOpen(port))) {
     if (!(await isAppInstalled(appPath))) {
@@ -132,16 +222,12 @@ export async function resolveRenderer(
       );
     }
     await launchHidden(appPath, port);
-    await waitForPort(port, options.launchTimeoutMs ?? 45_000);
+    await waitForPort(port, deadline - Date.now());
+    launched = true;
   }
 
-  const target = selectRendererTarget(await listCdpTargets(port));
-  if (!target?.webSocketDebuggerUrl) {
-    throw new ChatGptDesktopError(
-      "ChatGPT desktop renderer was not found",
-      "renderer_missing",
-      `no ${RENDERER_URL_PREFIX} page on port ${port}`,
-    );
-  }
+  const target = await waitForRendererTarget(() => listCdpTargets(port), {
+    timeoutMs: rendererBudgetMs(launched, deadline - Date.now()),
+  });
   return { port, target };
 }

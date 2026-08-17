@@ -22,6 +22,7 @@ import {
   DeterministicReplyClassifier,
   REPLY_CATEGORIES,
 } from "@/modules/replies/reply-classifier";
+import { canonicalLinkedInUrl } from "@/modules/contacts/input";
 import { mapReplyOutcome } from "@/modules/replies/reply-policy";
 
 export const EVALUATION_METRIC_NAMES = [
@@ -326,7 +327,19 @@ function ratio(numerator: number, denominator: number): number {
   return denominator === 0 ? 0 : numerator / denominator;
 }
 
+/**
+ * The identity a contact URL collapses to.
+ *
+ * LinkedIn goes through the production canonicaliser, because that is what the
+ * application deduplicates on and an evaluation that certifies duplicate
+ * prevention with a weaker rule certifies the wrong thing: `fr.linkedin.com`
+ * and `www.linkedin.com` are one person to the database, and would have been
+ * two to this harness. Everything else keeps the generic normalisation, since
+ * no other host family has a canonical form the product commits to.
+ */
 function normalizeWebIdentity(value: string): string {
+  const linkedin = canonicalLinkedInUrl(value);
+  if (linkedin) return linkedin;
   const parsed = new URL(value);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Identity URL must use HTTP or HTTPS");

@@ -21,7 +21,10 @@ import {
   contactDiscoveryOutputSchema,
   type ContactDiscoveryOutput,
 } from "@/modules/agents/schemas";
-import { parseContactInput } from "@/modules/contacts/input";
+import {
+  canonicalLinkedInUrl,
+  parseContactInput,
+} from "@/modules/contacts/input";
 import {
   normalizeProvenanceUrl,
   validateContactDiscoveryProvenance,
@@ -393,15 +396,22 @@ export async function discoverContacts(
 function hasValidatedCurrentEmployment(
   candidate: Candidate,
   accountDomain: string | null,
-  canonicalLinkedinUrl: string | null,
+  storedLinkedinUrl: string | null,
 ): boolean {
-  const linkedin = canonicalLinkedinUrl
-    ? normalizeProvenanceUrl(canonicalLinkedinUrl)
+  // Canonicalised on both sides, not merely provenance-normalised. The stored
+  // identity is always `www.linkedin.com/in/<lowercase-slug>`, while an agent
+  // reporting a French profile hands back `fr.linkedin.com/in/Victor-Guyon`.
+  // `normalizeProvenanceUrl` only lower-cases the host, so those two compared
+  // unequal and a LinkedIn page proving the employment counted for nothing —
+  // leaving an employer move looking unevidenced and recording a conflict
+  // instead of repinning the contact.
+  const linkedin = storedLinkedinUrl
+    ? canonicalLinkedInUrl(storedLinkedinUrl)
     : null;
   return candidate.evidence.some((source) => {
     if (!source.supports.includes("employment")) return false;
     const normalized = normalizeProvenanceUrl(source.url);
-    if (linkedin && normalized === linkedin) return true;
+    if (linkedin && canonicalLinkedInUrl(source.url) === linkedin) return true;
     if (!accountDomain) return false;
     const hostname = new URL(normalized).hostname;
     return hostname === accountDomain || hostname.endsWith(`.${accountDomain}`);

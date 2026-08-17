@@ -414,6 +414,7 @@ export async function POST(
         confidenceThreshold: Number(
           value(formData, "confidenceThreshold") ?? "0.85",
         ),
+        forcePublicSearch: boolean(formData, "forcePublicSearch"),
       },
     });
   }

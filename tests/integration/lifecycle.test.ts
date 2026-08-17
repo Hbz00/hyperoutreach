@@ -1592,9 +1592,21 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
     );
     expect(results.every((result) => result.ok)).toBe(true);
     expect(provider.sendDraftCalls).toHaveLength(5);
-    const [{ count }] = await client<[{ count: number }]>`
-      select count(*)::int as count from pg_locks where locktype = 'advisory'
-    `;
+    // Polled, not sampled once. The property is that the batch leaves no
+    // advisory lock behind; reading `pg_locks` from a different connection can
+    // still observe one for a moment after the holder released it, and a single
+    // sample turned that observation lag into an intermittent failure. A short
+    // bounded wait keeps the guarantee — a lock genuinely leaked is still here
+    // two seconds later — without asserting on the instant it is read.
+    let count = -1;
+    const deadline = Date.now() + 2_000;
+    do {
+      [{ count }] = await client<[{ count: number }]>`
+        select count(*)::int as count from pg_locks where locktype = 'advisory'
+      `;
+      if (count === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
     expect(count).toBe(0);
   });
 

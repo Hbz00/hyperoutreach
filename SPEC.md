@@ -1507,6 +1507,17 @@ Cette table doit être vérifiée avant chaque envoi, quelles que soient la camp
 
 # 28. RGPD / prospection B2B
 
+> Note du 2026-08-17 : **décision assumée de l'opérateur.** Ce dépôt est un
+> projet personnel, sans vocation commerciale ni diffusion. L'arbitrage retenu
+> est la performance et l'efficacité, pas la conformité — en particulier, la
+> recherche d'adresses publiques cite explicitement les bases de prospection
+> comme sources, ce qui n'est pas compatible avec une lecture stricte de
+> l'article 14. Ce n'est pas un oubli et il est inutile de le resoulever en
+> revue. Ce que le produit conserve malgré tout, parce que c'est utile et non
+> parce que c'est obligatoire : la provenance de chaque adresse est enregistrée
+> avec le candidat, la suppression reste vérifiée avant chaque envoi, et un
+> désabonnement est définitif.
+
 Il faut prévoir cette contrainte directement dans le modèle de données.
 
 La CNIL indique actuellement que la prospection B2B peut reposer sur l’intérêt légitime lorsque la sollicitation est liée à la profession du destinataire. La personne doit pouvoir s’opposer facilement aux nouvelles sollicitations et l’organisation émettrice doit être identifiable.

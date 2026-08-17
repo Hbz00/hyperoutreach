@@ -85,7 +85,11 @@ export type WorkflowPayloads = {
   };
   "account-research": { accountId: string; force?: boolean };
   "contact-discovery": { accountId: string; roles: string[]; limit: number };
-  "email-resolution": { contactId: string; confidenceThreshold?: number };
+  "email-resolution": {
+    contactId: string;
+    confidenceThreshold?: number;
+    forcePublicSearch?: boolean;
+  };
   "personalize-message": {
     declaredFields: Array<"company_relevance" | "personalized_opening">;
     trustedSourceUrls: string[];
@@ -142,6 +146,7 @@ export const WORKFLOW_PAYLOAD_SCHEMAS = {
     .object({
       contactId: z.uuid(),
       confidenceThreshold: z.number().min(0).max(1).optional(),
+      forcePublicSearch: z.boolean().optional(),
     })
     .strict(),
   "personalize-message": personalizationInputSchema,
@@ -192,6 +197,30 @@ export const WORKFLOW_PAYLOAD_SCHEMAS = {
     .strict(),
   "maintenance-cycle": z.object({ observedAt: observedAtSchema }).strict(),
 } satisfies Record<WorkflowTaskName, z.ZodType>;
+
+/**
+ * Compile-time proof that every runtime schema declares exactly the keys its
+ * payload type declares.
+ *
+ * Keys, not assignability: an optional property that one side simply lacks is
+ * invisible to `extends` in both directions, which is how `forcePublicSearch`
+ * reached the payload type, passed typecheck, and was then refused by the
+ * `.strict()` schema on every single click. Comparing the key unions is what
+ * actually catches that.
+ */
+type SchemaKeys<T extends WorkflowTaskName> = keyof z.input<
+  (typeof WORKFLOW_PAYLOAD_SCHEMAS)[T]
+>;
+type PayloadSchemaAgreement = {
+  [T in WorkflowTaskName]: [SchemaKeys<T>] extends [keyof WorkflowPayloads[T]]
+    ? [keyof WorkflowPayloads[T]] extends [SchemaKeys<T>]
+      ? true
+      : ["schema is missing a declared payload key", T]
+    : ["schema declares a key the payload type does not", T];
+};
+const _payloadSchemasAgree: Record<WorkflowTaskName, true> =
+  null as unknown as PayloadSchemaAgreement;
+void _payloadSchemasAgree;
 
 export function parseWorkflowPayload<T extends WorkflowTaskName>(
   task: T,

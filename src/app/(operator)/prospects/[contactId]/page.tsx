@@ -49,6 +49,20 @@ function snapshotFacts(snapshot: unknown): {
   return { summary, signals };
 }
 
+/**
+ * How the company's address convention was established for this candidate:
+ * searched now, or reused from an earlier search of the same company.
+ */
+function companySearch(evidence: unknown): string | null {
+  if (typeof evidence !== "object" || evidence === null) return null;
+  const record = evidence as { searchedAt?: unknown; evidenceOrigin?: unknown };
+  if (typeof record.searchedAt !== "string") return null;
+  const searched = new Date(record.searchedAt);
+  if (Number.isNaN(searched.getTime())) return null;
+  const origin = record.evidenceOrigin === "reused" ? "reused" : "searched";
+  return `company ${origin} ${searched.toLocaleDateString()}`;
+}
+
 export default async function ProspectDetailPage({
   params,
   searchParams,
@@ -189,7 +203,15 @@ export default async function ProspectDetailPage({
                 <input type="checkbox" name="force" />
                 Force fresh research
               </label>
-              <button>Research account</button>
+              {/* Secondary, as it already is on `/prospects`. This is a
+                  contact's page: the action it exists for is resolving that
+                  contact's address, and account research is offered on the
+                  company row one level up. Styling the account action as this
+                  page's primary put the emphasis on the wrong verb, and an
+                  operator who came to resolve an address queued a research pass
+                  instead — which returned `reused` without a model call, so
+                  nothing visibly happened and the mistake was invisible. */}
+              <button className="button-secondary">Research account</button>
             </div>
           </form>
           <form action="/api/operator/commands/resolve-email" method="post">
@@ -212,7 +234,16 @@ export default async function ProspectDetailPage({
                   defaultValue="0.85"
                 />
               </label>
-              <button className="button-secondary">Resolve email</button>
+              <label className="check">
+                <input type="checkbox" name="forcePublicSearch" />
+                Force a fresh company search
+              </label>
+              <small className="muted">
+                A company is searched once and the result reused for its other
+                contacts for thirty days. Ticking this spends a live web search
+                on your ChatGPT subscription instead.
+              </small>
+              <button>Resolve email</button>
             </div>
           </form>
           <form action="/api/operator/commands/discover-contacts" method="post">
@@ -274,6 +305,14 @@ export default async function ProspectDetailPage({
                   <td>
                     {candidate.pattern ?? "manual"}
                     <small>{candidate.source}</small>
+                    {companySearch(candidate.evidence) ? (
+                      // Which company search this address rests on. A colleague's
+                      // search is reused for up to thirty days, so "resolved
+                      // today" and "evidenced today" are different claims, and
+                      // only this one tells the operator whether ticking
+                      // "Search the company again" would change anything.
+                      <small>{companySearch(candidate.evidence)}</small>
+                    ) : null}
                   </td>
                   <td>{percent(candidate.confidence)}</td>
                   <td>

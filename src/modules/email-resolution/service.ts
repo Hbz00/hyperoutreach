@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import {
   accounts,
+  agentRuns,
   contacts,
   emailCandidates,
   evidenceSources,
@@ -31,14 +32,35 @@ import {
 } from "@/modules/prospects/normalization";
 import {
   isObservablePublicEmailEvidenceProvider,
+  publicEmailSampleSchema,
   type PublicEmailEvidenceInput,
   type PublicEmailEvidenceProvider,
   type PublicEmailEvidenceResult,
+  type PublicEmailSample,
 } from "@/modules/email-resolution/public-evidence-provider";
+import {
+  DEFAULT_PUBLIC_EVIDENCE_TTL_MS,
+  shouldReusePublicEmailEvidence,
+} from "@/modules/email-resolution/evidence-freshness";
+
+/**
+ * The confidence an address must reach before it is accepted and sent to.
+ *
+ * Exported so the form that offers to override it and the probe that measures
+ * against it read the same number: three hand-copied literals drift, and this
+ * one decides what leaves the mailbox.
+ */
+export const DEFAULT_EMAIL_CONFIDENCE_THRESHOLD = 0.85;
 
 const resolveInputSchema = z.object({
   contactId: z.uuid(),
-  confidenceThreshold: z.number().min(0).max(1).default(0.85),
+  confidenceThreshold: z
+    .number()
+    .min(0)
+    .max(1)
+    .default(DEFAULT_EMAIL_CONFIDENCE_THRESHOLD),
+  /** Ask the model again even when a recent company search is on record. */
+  forcePublicSearch: z.boolean().default(false),
 });
 
 type ResolutionStatus =
@@ -167,6 +189,61 @@ async function findPublicEmailEvidence(
   }
 }
 
+/**
+ * The most recent successful company search on record.
+ *
+ * Read from the audit trail rather than a cache table: every search is already
+ * written there with its full result, its domain and its completion time, so a
+ * second store would be a copy that can disagree with the record. The coupling
+ * is deliberately one-way and harmless — pruning audit rows costs one redundant
+ * search, never a wrong answer.
+ */
+async function findRecordedPublicEmailEvidence(
+  db: AppDatabase,
+  domain: string,
+): Promise<{
+  samples: PublicEmailSample[];
+  foundAt: Date;
+  promptVersion: string;
+} | null> {
+  const [row] = await db
+    .select({
+      output: agentRuns.output,
+      completedAt: agentRuns.completedAt,
+      promptVersion: agentRuns.promptVersion,
+    })
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.agent, "public_email_evidence"),
+        eq(agentRuns.status, "succeeded"),
+        // A succeeded run always has a completion time, but the column is
+        // nullable and Postgres sorts DESC NULLS FIRST: one row that ever
+        // escaped without one would win `limit 1` forever and silently disable
+        // reuse for that company. Excluding it costs nothing and removes the
+        // trap rather than relying on it staying unreachable.
+        isNotNull(agentRuns.completedAt),
+        sql`${agentRuns.input}->>'companyDomain' = ${domain}`,
+      ),
+    )
+    // `createdAt` breaks the tie: JavaScript stamps completion to the
+    // millisecond, so two searches of the same domain in one pass can share it
+    // and SQL then returns either row. Which one it returns decides whether a
+    // stale or an empty result is reused, so it cannot be left to chance.
+    .orderBy(desc(agentRuns.completedAt), desc(agentRuns.createdAt))
+    .limit(1);
+  if (!row?.completedAt) return null;
+  const parsed = z
+    .object({ samples: z.array(publicEmailSampleSchema) })
+    .safeParse(row.output);
+  if (!parsed.success) return null;
+  return {
+    samples: parsed.data.samples,
+    foundAt: row.completedAt,
+    promptVersion: row.promptVersion,
+  };
+}
+
 async function setClaimedResolutionState(
   db: Pick<AppDatabase, "update">,
   contactId: string,
@@ -210,6 +287,7 @@ export async function resolveContactEmail(
     providerOperationTimeoutMs?: number;
     publicEvidenceOperationTimeoutMs?: number;
     publicEvidenceProvider?: PublicEmailEvidenceProvider | null;
+    publicEvidenceTtlMs?: number;
   } = {},
 ): Promise<ResolveContactEmailResult> {
   const parsed = resolveInputSchema.safeParse(rawInput);
@@ -355,7 +433,39 @@ export async function resolveContactEmail(
 
   let publicSamples = [] as Parameters<typeof inferEmailPatterns>[0];
   let publicEvidenceFailed = false;
-  if (options.publicEvidenceProvider) {
+  // The convention belongs to the company, so the search does too. A colleague
+  // resolved earlier already asked this exact question; asking again spends a
+  // web search on an answer we hold.
+  // Skipped outright when the answer cannot be used: a forced search and a
+  // provider that reports no version both discard the record, and the query is
+  // not free.
+  const recorded =
+    parsed.data.forcePublicSearch || !options.publicEvidenceProvider
+      ? null
+      : await findRecordedPublicEmailEvidence(db, domain);
+  // Taken from the provider rather than named here, so the prompt and the
+  // version that gates reuse of its results can never drift apart. A provider
+  // that reports no version — the deterministic fixture — matches no record
+  // and simply searches, which is the safe default.
+  const currentPromptVersion =
+    options.publicEvidenceProvider &&
+    isObservablePublicEmailEvidenceProvider(options.publicEvidenceProvider)
+      ? options.publicEvidenceProvider.auditDescriptor.promptVersion
+      : "";
+  const reusing = shouldReusePublicEmailEvidence({
+    sampleCount: recorded?.samples.length ?? 0,
+    foundAt: recorded?.foundAt ?? null,
+    recordedPromptVersion: recorded?.promptVersion ?? null,
+    currentPromptVersion,
+    now,
+    ttlMs: options.publicEvidenceTtlMs ?? DEFAULT_PUBLIC_EVIDENCE_TTL_MS,
+    force: parsed.data.forcePublicSearch,
+  });
+  let evidenceFoundAt = now;
+  if (reusing && recorded) {
+    publicSamples = recorded.samples;
+    evidenceFoundAt = recorded.foundAt;
+  } else if (options.publicEvidenceProvider) {
     try {
       const evidence = await findPublicEmailEvidence(
         db,
@@ -457,6 +567,12 @@ export async function resolveContactEmail(
         sourceUrls: pattern.sourceUrls,
         sampleCount: pattern.sampleCount,
         mxRecords: mx.records,
+        // When the company was searched, which is not when this contact was
+        // resolved: a colleague's search is reused for up to thirty days, and
+        // an operator deciding whether to force a fresh one has no other way to
+        // tell a search made today from one made four weeks ago.
+        searchedAt: evidenceFoundAt.toISOString(),
+        evidenceOrigin: reusing ? ("reused" as const) : ("searched" as const),
       },
     });
   }
@@ -527,28 +643,50 @@ export async function resolveContactEmail(
   }
 
   providerFailed ||= publicEvidenceFailed && candidates.size === 0;
-  const status: ResolutionStatus = providerFailed
-    ? "provider_error"
-    : bestConfidence >= parsed.data.confidenceThreshold
-      ? "resolved"
-      : "manual_review";
   const rankedCandidates = [...candidates.values()].sort(
     (left, right) =>
       right.confidence - left.confidence ||
       left.normalizedEmail.localeCompare(right.normalizedEmail),
   );
+  /**
+   * Two addresses evidenced exactly as well as each other.
+   *
+   * One pattern yields one address for a given contact, so distinct addresses
+   * sharing the top confidence mean the company was observed running more than
+   * one convention and nothing in the evidence says which one this person uses.
+   * The sort above would still return one of them — ordered by `localeCompare`,
+   * which is to say alphabetically — and accepting that is a coin toss whose
+   * losing side is a bounce, a permanent suppression and a prospect spent for
+   * nothing. Real companies do this: one carrier in a ten-domain probe showed
+   * eight addresses in `first.last` and three in `flast`.
+   *
+   * A strictly better-evidenced convention still wins: refusing whenever a
+   * second convention exists at all would retire companies whose dominant form
+   * is perfectly clear. Only the tie is undecidable, and only the tie refuses.
+   */
+  const contested =
+    rankedCandidates.length > 1 &&
+    rankedCandidates[0]!.confidence >= parsed.data.confidenceThreshold &&
+    rankedCandidates[1]!.confidence === rankedCandidates[0]!.confidence;
+  const status: ResolutionStatus = providerFailed
+    ? "provider_error"
+    : bestConfidence >= parsed.data.confidenceThreshold && !contested
+      ? "resolved"
+      : "manual_review";
   let persistedStatus = status;
   let persistedReason: EmailResolutionReason | null = providerFailed
     ? "provider_transient_error"
     : !mx.hasMx
       ? "mx_missing"
-      : status === "resolved"
-        ? null
-        : providerAttempted && acceptedProviderCandidates === 0
-          ? "enrichment_no_result"
-          : patterns.length === 0
-            ? "insufficient_public_evidence"
-            : "low_confidence";
+      : contested
+        ? "candidate_conflict"
+        : status === "resolved"
+          ? null
+          : providerAttempted && acceptedProviderCandidates === 0
+            ? "enrichment_no_result"
+            : patterns.length === 0
+              ? "insufficient_public_evidence"
+              : "low_confidence";
   try {
     const persisted = await db.transaction(async (tx) => {
       await tx.execute(

@@ -145,6 +145,46 @@ describe("workflow dispatcher contracts", () => {
     ).toThrow();
   });
 
+  /**
+   * The payloads the operator UI actually posts, parsed by the exact function
+   * the runtime calls before executing a task.
+   *
+   * These schemas are `.strict()` and the payload *types* beside them are a
+   * separate declaration: `satisfies Record<WorkflowTaskName, z.ZodType>` does
+   * not bind one to the other, so a field can be added to the type, typecheck
+   * clean, and be rejected at run time on every click. That is not theoretical
+   * — `forcePublicSearch` shipped that way, and because the route sends the key
+   * whether or not the box is ticked, it would have thrown on every single
+   * resolution, retried the whole ladder, and abandoned ~21 minutes later.
+   */
+  it("accepts the payloads the operator routes actually build", () => {
+    const contactId = "b5da6eec-cfed-42e8-9ac9-aca719ddff90";
+    // Box ticked, and — the case that matters — box left alone: `boolean()`
+    // returns false rather than omitting the key.
+    for (const forcePublicSearch of [true, false]) {
+      expect(
+        parseWorkflowPayload("email-resolution", {
+          contactId,
+          confidenceThreshold: 0.85,
+          forcePublicSearch,
+        }),
+      ).toMatchObject({ contactId, forcePublicSearch });
+    }
+    expect(
+      parseWorkflowPayload("account-research", {
+        accountId: "7b082ffe-0ed4-43cc-8744-1889d552d29b",
+        force: false,
+      }),
+    ).toMatchObject({ force: false });
+    // The strictness itself must survive: an unknown key is still refused.
+    expect(() =>
+      parseWorkflowPayload("email-resolution", {
+        contactId,
+        surprise: true,
+      }),
+    ).toThrow();
+  });
+
   it("uses a stable minute bucket for duplicate recovery scheduler calls", () => {
     expect(recoveryDispatchKey(new Date("2026-08-12T10:42:59.999Z"))).toBe(
       "recovery:2026-08-12T10:42",

@@ -5480,6 +5480,8 @@
       "values": [
         "https://www.linkedin.com/in/alice-martin",
         "https://www.linkedin.com/in/alice-martin/?trk=public",
+        "https://fr.linkedin.com/in/alice-martin",
+        "https://m.linkedin.com/in/Alice-Martin",
         "https://www.linkedin.com/in/bob-smith"
       ],
       "expectedUniqueCount": 2

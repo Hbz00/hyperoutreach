@@ -243,6 +243,51 @@ describe("workflow service provider composition", () => {
     expect(injected.mockDns.resolve).toHaveBeenCalledWith("example.com");
     expect(injected.realDns.resolve).not.toHaveBeenCalled();
   });
+
+  /**
+   * No enrichment provider, in either mode — not a stub that returns nothing.
+   *
+   * The distinction is the operator's diagnosis. `resolveContactEmail` reports
+   * `enrichment_no_result` whenever a provider was asked and returned nothing,
+   * and that branch sits ahead of the two reasons that say what really
+   * happened: `insufficient_public_evidence` (the domain publishes no address
+   * to infer a pattern from) and `low_confidence` (a pattern existed and scored
+   * too low). Passing a no-result stub made the first branch always win, so
+   * every unresolved contact in production blamed an enrichment service this
+   * installation does not have.
+   */
+  it.each([
+    ["live", { mode: "chatgpt_desktop", usesRealInfrastructure: true }],
+    ["mock", { mode: "mock", usesRealInfrastructure: false }],
+  ] as const)(
+    "integrates no enrichment provider in %s mode",
+    (_label, partial) => {
+      const surface = providerDouble(() => ({ samples: [] }));
+      const bundle = {
+        ...partial,
+        ...(partial.usesRealInfrastructure
+          ? {
+              research: {
+                provider: surface,
+                model: "chatgpt-desktop:research-lane",
+                effort: "High" as const,
+                operationTimeoutMs: 600_000,
+              },
+              nonWeb: {
+                provider: surface,
+                model: "chatgpt-desktop:fast-lane",
+                effort: "Instant" as const,
+              },
+            }
+          : {}),
+      } as AIProviderBundle;
+
+      expect(
+        composeEmailResolutionProviders(bundle, dependencies(bundle))
+          .enrichment,
+      ).toBeNull();
+    },
+  );
 });
 
 describe("inbound maintenance safety", () => {

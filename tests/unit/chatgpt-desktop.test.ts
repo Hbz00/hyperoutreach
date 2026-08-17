@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { CdpSession, CdpTarget } from "@/lib/chatgpt-desktop/cdp";
 import { ChatGptDesktopError } from "@/lib/chatgpt-desktop/errors";
@@ -9,7 +9,9 @@ import {
 } from "@/lib/chatgpt-desktop/chat-surface";
 import {
   defaultCdpPort,
+  rendererBudgetMs,
   selectRendererTarget,
+  waitForRendererTarget,
 } from "@/lib/chatgpt-desktop/desktop-app";
 
 function target(overrides: Partial<CdpTarget>): CdpTarget {
@@ -67,6 +69,174 @@ describe("selectRendererTarget", () => {
 
   it("returns null when the app exposes no targets", () => {
     expect(selectRendererTarget([])).toBeNull();
+  });
+});
+
+describe("rendererBudgetMs", () => {
+  /**
+   * The two arms are one ternary apart and swapping them restores the original
+   * regression — a cold start cut to a few seconds — while every behavioural
+   * test still passes, because nothing else observes the choice. Pinning it
+   * here is what makes the swap impossible to do quietly.
+   */
+  it("gives a cold start everything that is left", () => {
+    expect(rendererBudgetMs(true, 45_000)).toBe(45_000);
+    expect(rendererBudgetMs(true, 6_000)).toBe(6_000);
+  });
+
+  it("gives an already-answering app a short grace, never the full budget", () => {
+    expect(rendererBudgetMs(false, 45_000)).toBe(5_000);
+    // Never more than what is left, either.
+    expect(rendererBudgetMs(false, 1_200)).toBe(1_200);
+  });
+
+  it("never returns a negative budget when the clock is already spent", () => {
+    expect(rendererBudgetMs(true, -1_000)).toBe(0);
+    expect(rendererBudgetMs(false, -1_000)).toBe(0);
+  });
+
+  it("always favours the cold start over the warm grace", () => {
+    // The property the ternary encodes, stated so an inversion fails here.
+    for (const remaining of [0, 1_000, 5_000, 20_000, 45_000]) {
+      expect(rendererBudgetMs(true, remaining)).toBeGreaterThanOrEqual(
+        rendererBudgetMs(false, remaining),
+      );
+    }
+  });
+});
+
+describe("waitForRendererTarget", () => {
+  /** A clock and a sleep that advance together, so no test waits for real time. */
+  function fakeTime(startMs = 0) {
+    let current = startMs;
+    return {
+      now: () => current,
+      sleep: async (ms: number) => {
+        current += ms;
+      },
+      elapsed: () => current - startMs,
+    };
+  }
+
+  it("returns the renderer on the first look when the app is warm", async () => {
+    const time = fakeTime();
+    const listTargets = vi.fn(async () => [target({ id: "shell" })]);
+
+    const found = await waitForRendererTarget(listTargets, {
+      timeoutMs: 45_000,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(found.id).toBe("shell");
+    expect(listTargets).toHaveBeenCalledOnce();
+    expect(time.elapsed()).toBe(0);
+  });
+
+  /**
+   * The regression this exists for. A cold start answers on its debug port
+   * before it has a chat surface: the first listing offers only the avatar
+   * overlay, which is deliberately refused. Reading the list once at that
+   * instant reported `renderer_missing` about a second after launch, which is
+   * what happened to a real discovery command while ChatGPT was closed.
+   */
+  it("keeps looking while a cold start shows only the avatar overlay", async () => {
+    const time = fakeTime();
+    const overlay = target({
+      id: "overlay",
+      url: "app://-/index.html?initialRoute=%2Favatar-overlay",
+    });
+    const listTargets = vi
+      .fn<() => Promise<CdpTarget[]>>()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([overlay])
+      .mockResolvedValueOnce([overlay])
+      .mockResolvedValue([overlay, target({ id: "shell" })]);
+
+    const found = await waitForRendererTarget(listTargets, {
+      timeoutMs: 45_000,
+      intervalMs: 500,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(found.id).toBe("shell");
+    expect(listTargets).toHaveBeenCalledTimes(4);
+    expect(time.elapsed()).toBe(1_500);
+  });
+
+  it("retries a transient devtools failure instead of aborting the wait", async () => {
+    const time = fakeTime();
+    const listTargets = vi
+      .fn<() => Promise<CdpTarget[]>>()
+      .mockRejectedValueOnce(new Error("connection refused"))
+      .mockResolvedValue([target({ id: "shell" })]);
+
+    const found = await waitForRendererTarget(listTargets, {
+      timeoutMs: 45_000,
+      intervalMs: 500,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(found.id).toBe("shell");
+    expect(listTargets).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports the transport failure when the budget ends on one", async () => {
+    const time = fakeTime();
+    const listTargets = vi.fn(async () => {
+      throw new Error("connection refused");
+    });
+
+    // The devtools error itself, not a renderer_missing that would send the
+    // operator looking at the wrong thing.
+    await expect(
+      waitForRendererTarget(listTargets, {
+        timeoutMs: 1_000,
+        intervalMs: 500,
+        now: time.now,
+        sleep: time.sleep,
+      }),
+    ).rejects.toThrow(/connection refused/);
+  });
+
+  it("gives up with a typed error once the budget is spent", async () => {
+    const time = fakeTime();
+    const listTargets = vi.fn(async () => [
+      target({ id: "overlay", url: "app://-/index.html?x=avatar-overlay" }),
+    ]);
+
+    const failure = await waitForRendererTarget(listTargets, {
+      timeoutMs: 2_000,
+      intervalMs: 500,
+      now: time.now,
+      sleep: time.sleep,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ChatGptDesktopError);
+    expect((failure as ChatGptDesktopError).code).toBe("renderer_missing");
+    // Bounded: it stopped rather than polling forever.
+    expect(time.elapsed()).toBeLessThanOrEqual(2_500);
+  });
+
+  /**
+   * A caller whose earlier step consumed the shared startup budget still
+   * deserves one look: a warm app answers immediately, and refusing to check at
+   * all would fail an installation that works.
+   */
+  it("always looks at least once, even with no budget left", async () => {
+    const time = fakeTime();
+    const listTargets = vi.fn(async () => [target({ id: "shell" })]);
+
+    const found = await waitForRendererTarget(listTargets, {
+      timeoutMs: 0,
+      now: time.now,
+      sleep: time.sleep,
+    });
+
+    expect(found.id).toBe("shell");
+    expect(listTargets).toHaveBeenCalledOnce();
   });
 });
 

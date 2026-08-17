@@ -107,9 +107,29 @@ export type DrainedOperatorCommand = {
 export async function drainOperatorCommands(
   db: AppDatabase,
   execute: OperatorCommandExecutor,
-  options: { now?: Date; limit?: number } = {},
+  options: { now?: Date; limit?: number; clock?: () => Date } = {},
 ): Promise<DrainedOperatorCommand[]> {
-  const now = options.now ?? new Date();
+  // `now` fixes what is *due* and what lease has *expired*: one reference for
+  // the whole pass, so a command that becomes eligible mid-pass waits for the
+  // next tick instead of racing the one already running.
+  //
+  // `clock` is read again at every claim and every finalisation, because a pass
+  // is not an instant: one AI command holds it for minutes. Recording a
+  // completion at the pass's start made every command report a zero duration —
+  // an 84-second discovery included, whose `completed_at` preceded its own
+  // model call — and, worse, measured the retry backoff from before the attempt
+  // instead of after it. A one-minute rung is entirely spent by any attempt
+  // that takes a minute, so a deterministically failing AI command retried on
+  // the very next tick and burned its four attempts in minutes. The production
+  // caller in `service-factory` pins nothing and takes the wall clock by
+  // default, which is what makes this correct there without a further change.
+  //
+  // Pinning `now` pins the clock too unless one is supplied, so a caller that
+  // asks for a deterministic instant still gets a fully deterministic pass.
+  const pinnedNow = options.now;
+  const clock =
+    options.clock ?? (pinnedNow ? () => pinnedNow : () => new Date());
+  const now = pinnedNow ?? clock();
   const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
   // Parking is not doing work, so it does not spend the pass's budget — but it
   // still costs a claim, so it gets a ceiling of its own rather than none.
@@ -121,7 +141,12 @@ export async function drainOperatorCommands(
   while (executed < limit && parked < parkLimit) {
     const claimId = randomUUID();
     const runId = `command_${randomUUID()}`;
-    const claimed = await claimNextCommand(db, { now, claimId, runId });
+    const claimed = await claimNextCommand(db, {
+      now,
+      at: clock(),
+      claimId,
+      runId,
+    });
     if (!claimed) break;
 
     // Nothing was tried yet, so a missing precondition is a wait rather than a
@@ -140,7 +165,7 @@ export async function drainOperatorCommands(
         prepared.kind === "waiting"
           ? { kind: "waiting", reason: prepared.reason }
           : { kind: "abandoned", reason: prepared.reason },
-        { now, result: null },
+        { at: clock(), result: null },
       );
       if (settledRow) drained.push(settledRow);
       continue;
@@ -170,8 +195,11 @@ export async function drainOperatorCommands(
     }
 
     const disposition = classifyCommandOutcome(outcome);
+    // Read after the work, not before it: this is the instant the attempt
+    // actually ended, and both the recorded duration and the retry backoff
+    // count from here.
     const finished = await finalizeCommand(db, claimed, claimId, disposition, {
-      now,
+      at: clock(),
       result: outcome.status === "returned" ? outcome.value : null,
     });
     if (finished) drained.push(finished);
@@ -191,7 +219,10 @@ export async function drainOperatorCommands(
 
 async function claimNextCommand(
   db: AppDatabase,
-  context: { now: Date; claimId: string; runId: string },
+  // `now` decides eligibility and lease expiry for the whole pass; `at` is when
+  // this particular claim happened, which is later than the pass's start once an
+  // earlier command in the same pass has taken time.
+  context: { now: Date; at: Date; claimId: string; runId: string },
 ): Promise<OperatorCommandRow | null> {
   const staleBefore = new Date(context.now.getTime() - CLAIM_LEASE_MS);
   return db.transaction(async (tx) => {
@@ -245,8 +276,8 @@ async function claimNextCommand(
         // that the reason and the state agree, and it caught this.
         waitingReason: null,
         claimId: context.claimId,
-        claimedAt: context.now,
-        startedAt: context.now,
+        claimedAt: context.at,
+        startedAt: context.at,
         runId: context.runId,
         // Every claim counts, including one that reclaims a dead lease: that
         // run consumed a real turn on the operator's subscription, and not
@@ -266,7 +297,10 @@ async function finalizeCommand(
   claimed: OperatorCommandRow,
   claimId: string,
   disposition: ReturnType<typeof classifyCommandOutcome>,
-  context: { now: Date; result: unknown },
+  // `at` is when the attempt ended. Every timestamp and every wait below
+  // counts from it, so a wait is imposed after the failure rather than
+  // partly consumed by the attempt that caused it.
+  context: { at: Date; result: unknown },
 ): Promise<DrainedOperatorCommand | null> {
   const base = {
     claimId: null,
@@ -280,7 +314,7 @@ async function finalizeCommand(
           status: "succeeded" as const,
           waitingReason: null,
           error: null,
-          completedAt: context.now,
+          completedAt: context.at,
           nextAttemptAt: null,
         }
       : disposition.kind === "waiting"
@@ -290,7 +324,7 @@ async function finalizeCommand(
             waitingReason: disposition.reason,
             error: null,
             completedAt: null,
-            nextAttemptAt: new Date(context.now.getTime() + WAITING_RECHECK_MS),
+            nextAttemptAt: new Date(context.at.getTime() + WAITING_RECHECK_MS),
             // Give the attempt back. The precondition was not met, so nothing
             // was tried; charging the retry budget here would abandon work
             // nobody got wrong.
@@ -304,7 +338,7 @@ async function finalizeCommand(
               error: disposition.reason,
               completedAt: null,
               nextAttemptAt: new Date(
-                context.now.getTime() +
+                context.at.getTime() +
                   (RETRY_BACKOFF_MS[claimed.attempt - 1] ??
                     RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1]!),
               ),
@@ -314,7 +348,7 @@ async function finalizeCommand(
               status: "abandoned" as const,
               waitingReason: null,
               error: disposition.reason,
-              completedAt: context.now,
+              completedAt: context.at,
               nextAttemptAt: null,
             };
 
@@ -349,7 +383,7 @@ async function finalizeCommand(
  */
 export async function requeueOperatorCommand(
   db: AppDatabase,
-  input: { id: string; now?: Date },
+  input: { id: string },
 ): Promise<boolean> {
   const [updated] = await db
     .update(operatorCommands)

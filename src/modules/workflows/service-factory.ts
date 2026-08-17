@@ -11,7 +11,7 @@ import {
   NodeDnsMxResolver,
   type DnsMxResolver,
 } from "@/modules/email-resolution/dns";
-import { NoResultEmailEnrichmentProvider } from "@/modules/email-resolution/providers";
+import type { EmailEnrichmentProvider } from "@/modules/email-resolution/providers";
 import {
   StructuredPublicEmailEvidenceProvider,
   StaticPublicEmailEvidenceProvider,
@@ -159,18 +159,30 @@ export function composeEmailResolutionProviders(
   >,
 ): {
   dns: DnsMxResolver;
+  /**
+   * `null` because this installation integrates no third-party enrichment
+   * service. It is a composed value rather than an inline argument so the
+   * absence is visible and testable here, next to the other provider choices:
+   * standing a no-result stub in its place made the resolution report
+   * `enrichment_no_result` on every unresolved contact and shadowed the two
+   * reasons the operator needs — `insufficient_public_evidence` and
+   * `low_confidence`.
+   */
+  enrichment: EmailEnrichmentProvider | null;
   publicEvidence: PublicEmailEvidenceProvider;
   publicEvidenceOperationTimeoutMs: number;
 } {
   if (!bundle.usesRealInfrastructure) {
     return {
       dns: dependencies.createMockDns(),
+      enrichment: null,
       publicEvidence: new StaticPublicEmailEvidenceProvider([]),
       publicEvidenceOperationTimeoutMs: 10_000,
     };
   }
   return {
     dns: dependencies.createRealDns(),
+    enrichment: null,
     publicEvidence: new StructuredPublicEmailEvidenceProvider(
       bundle.research.provider,
       bundle.research.model,
@@ -191,6 +203,7 @@ export function createWorkflowTaskServices(
   const runEmailResolution = (payload: {
     contactId: string;
     confidenceThreshold?: number;
+    forcePublicSearch?: boolean;
   }) => {
     const emailProviders = composeEmailResolutionProviders(
       providerBundle,
@@ -199,7 +212,7 @@ export function createWorkflowTaskServices(
     return resolveContactEmail(
       db,
       emailProviders.dns,
-      new NoResultEmailEnrichmentProvider(),
+      emailProviders.enrichment,
       payload,
       {
         publicEvidenceProvider: emailProviders.publicEvidence,

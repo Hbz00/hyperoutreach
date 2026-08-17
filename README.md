@@ -231,6 +231,16 @@ AI_FAST_EFFORT=Instant
 AI_FAST_TIMEOUT_MS=120000
 ```
 
+The public-address search names its source families explicitly — the company's
+own material, documents written by third parties (programme PDFs, press kits,
+tender documents, legal notices, job adverts), and contact or people-search
+databases — because companies that publish no address on their own site still
+appear in files written by others. It refuses two things by name rather than by
+principle: reporting a person whose address the cited page does not actually
+show, and reporting an address a page displays masked or truncated. Both are
+behaviours a model can check itself against; a general "do not infer" clause
+alone did not stop either.
+
 Each turn opens a new chat, switches the app into temporary chat so nothing is
 persisted in the account history, selects model and effort, sends the prompt,
 waits for the answer to stabilise, and restores the mode it found. Turns are
@@ -301,10 +311,35 @@ from other domains, excludes samples ambiguous across multiple conventions,
 deterministically infers supported address conventions, normalizes international
 names, and performs replaceable real/mock MX checks. RFC null MX means the domain
 does not accept mail; any MX only affects confidence and never proves that a
-recipient exists. Below the confidence threshold, an optional
-`EmailEnrichmentProvider` can add candidates;
-no-result and transient-failure outcomes remain explicit instead of inventing an
-address. DNS and conventional enrichment retain their short provider deadline.
+recipient exists. This installation integrates **no** third-party enrichment
+service: `composeEmailResolutionProviders` supplies `null`, and the
+`EmailEnrichmentProvider` seam stays available for one that is actually
+configured. Standing a no-result stub in that slot instead made every unresolved
+contact report `enrichment_no_result` — a diagnosis about a service that was
+never asked — and hid the two reasons that matter,
+`insufficient_public_evidence` and `low_confidence`. No-result and
+transient-failure outcomes remain explicit instead of inventing an address.
+
+**A company is searched once.** The question the model is asked is the company's
+convention, not one person's address, so a successful search is reused for every
+other contact at that account for thirty days
+(`DEFAULT_PUBLIC_EVIDENCE_TTL_MS`). Reuse is read from the audit trail, which
+already records each search with its domain, result and completion time, so
+there is no second store to disagree with the record. Three things are never
+reused: a search that found nothing — the same prompt on the same domain has
+returned zero, one and two addresses on consecutive attempts, so caching the
+worst draw would retire a company a second look resolves — a record older than
+the lifetime, and a record made by an earlier prompt version, which is what
+makes improving the prompt reach companies already searched. **Force a fresh
+company search** on the contact page overrides all of it and spends a live web
+search. Each candidate records which search it rests on and whether that search
+was fresh or reused, shown beside its address convention.
+
+Two conventions that tie above the threshold are refused rather than resolved.
+One pattern yields one address per contact, so two addresses evidenced equally
+well mean the company runs more than one convention and the evidence does not
+say which this person uses; the contact keeps both candidates and a
+`candidate_conflict` reason instead of having one picked alphabetically. DNS and conventional enrichment retain their short provider deadline.
 AI public-evidence research has its own deadline, `AI_RESEARCH_TIMEOUT_MS`
 (600 seconds by default), because it is web research like any other research
 call. All remain abortable and deadline-bound. A claim fenced by
@@ -689,6 +724,26 @@ npm run test:integration
 npm run eval
 npm run build
 ```
+
+Two probes sit beside that suite and are deliberately **not** part of it,
+because each spends live turns on the operator's own ChatGPT window and must be
+run deliberately, with the maintenance worker stopped:
+
+```bash
+npm run probe:personalization -- --runs 10
+npm run probe:public-email -- --domain acme.example,globex.example
+```
+
+The first measures whether the fast lane holds the personalization contract. The
+second compares the shipped public-address prompt against a candidate over the
+same domains, scoring both with the production pattern inference so a win means
+a contact would actually resolve. It reads the live database read-only, writes
+nothing, and refuses to start while a maintenance lease is alive. Its verifier
+is an ordinary HTTP client, so it can confirm an address on a readable page and
+can never confirm one on LinkedIn or a contact database — those answer 999 and
+403 to anything but the app itself. Read its `unverified` column, which means a
+readable page that did not contain the address, as the only evidence of a
+fabrication; `unreadable` means out of reach, not discredited.
 
 `npm run eval` loads the schema-validated, versioned fixture at
 `evals/fixtures/v1.json`. It reports account/contact precision, required-fact
