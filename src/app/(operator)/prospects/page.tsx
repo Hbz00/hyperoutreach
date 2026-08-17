@@ -112,7 +112,7 @@ export default async function ProspectsPage({
         <p className="hint">
           {pendingCommands.length} background task
           {pendingCommands.length > 1 ? "s" : ""} in progress — results appear
-          here when the next maintenance pass finishes.{" "}
+          here when the maintenance pass finishes.{" "}
           <Link href="/outbound">Follow along</Link>
         </p>
       ) : null}

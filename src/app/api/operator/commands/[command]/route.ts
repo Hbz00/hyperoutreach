@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { and, eq } from "drizzle-orm";
+import { after } from "next/server";
 import { z } from "zod";
 
 import { getDatabase } from "@/lib/db/client";
@@ -60,11 +61,14 @@ import {
   removeSuppression,
 } from "@/modules/suppression/service";
 import { createWorkflowDispatcher } from "@/modules/workflows/dispatcher-factory";
+import { dispatchMaintenanceTick } from "@/modules/workflows/maintenance-service";
 import type { QueuedOperatorCommand } from "@/modules/workflows/operator-command-policy";
 import {
   enqueueOperatorCommand,
   requeueOperatorCommand,
+  type EnqueuedOperatorCommand,
 } from "@/modules/workflows/operator-command-queue";
+import { resolveWorkflowProvider } from "@/modules/workflows/provider-config";
 
 export const runtime = "nodejs";
 // No operator command issues an AI turn any more: the ones that would are
@@ -226,6 +230,65 @@ async function recordedSendOutcome(
 }
 
 /**
+ * Asks for a maintenance cycle now, once the operator's page is already back.
+ *
+ * The cycle's last stage is what drains queued work, so without this the
+ * operator waits for the resident worker's next offer — up to a minute of
+ * nothing on a queue that is usually empty. There is deliberately no check of
+ * whether that queue is idle first: the `maintenance_state` singleton lease
+ * already decides who runs, and a cycle asked for while another holds the lease
+ * returns `busy` for the cost of one audit row. Checking would only add a race
+ * on top of the arbiter that exists to settle it.
+ *
+ * Best-effort, and it has to be. The queued row is durable and the worker
+ * offers again within the minute, so a kick that never lands costs latency and
+ * nothing else. That is why the dispatcher is built inside the callback — its
+ * factory throws on a misconfigured provider, and the enqueue has already
+ * succeeded by then — and why a failed cycle dies here: the cycle records its
+ * own failure in `maintenance_state`, which is what "What goes out" reads.
+ *
+ * `maxDuration` on this route bounds the callback on a platform that enforces
+ * it. Being cut short is survivable for the same reason: the lease goes stale
+ * after `staleLeaseMs` and the next tick reclaims it.
+ */
+function askForMaintenanceNow(
+  environment: Record<string, string | undefined> = process.env,
+): void {
+  try {
+    // Local execution only. Under Trigger, `maintenance-cycle` is a
+    // `schedules.task` whose run reads `payload.timestamp` — the scheduler's
+    // own payload, not the `observedAt` this path sends — so a cycle asked for
+    // from here would arrive unreadable. Trigger owns that schedule, exactly as
+    // it owns the worker the supervisor declines to start.
+    if (resolveWorkflowProvider(environment) !== "local") return;
+    // The same explicit opt-out the worker honours, parsed the same way — see
+    // `maintenanceEnabled` in `scripts/local-maintenance-runtime.mjs`. An
+    // installation that has said it drives its own cycles means it: a button
+    // press is not a reason to start one behind its back.
+    if (
+      environment.LOCAL_MAINTENANCE_ENABLED?.trim().toLowerCase() === "false"
+    ) {
+      return;
+    }
+    after(async () => {
+      try {
+        await dispatchMaintenanceTick(createWorkflowDispatcher(), new Date(), {
+          immediate: true,
+        });
+      } catch {
+        // The cycle's own failure, already written to `maintenance_state`.
+      }
+    });
+  } catch {
+    // Asking failed, which is configuration rather than runtime: an
+    // unrecognised `WORKFLOW_PROVIDER`, or `after` outside a request scope.
+    // Both are reported loudly where they belong — the supervisor's preflight,
+    // the dispatcher factory, the maintenance route — and neither is a reason
+    // to turn a queued command into an error the operator has to read.
+  }
+}
+
+/**
  * Records AI work and hands the page straight back.
  *
  * These commands used to run their agent inside the request, with
@@ -247,23 +310,30 @@ async function queued(
     payload: Record<string, unknown>;
   },
 ): Promise<Response> {
+  let enqueued: EnqueuedOperatorCommand;
+  // Scoped to the write, and only the write: everything after it happened, and
+  // "not queued" has to keep meaning that the row is not there.
   try {
-    const enqueued = await enqueueOperatorCommand(getDatabase(), {
+    enqueued = await enqueueOperatorCommand(getDatabase(), {
       command: input.command,
       payload: input.payload,
       requestedBy: input.actor,
       dedupeKey: input.dedupeKey,
     });
-    return destination(
-      request,
-      input.returnTo,
-      enqueued.duplicate
-        ? `${input.label} is already queued`
-        : `${input.label} queued — it runs on the next maintenance pass`,
-    );
   } catch {
     return destination(request, input.returnTo, `${input.label} not queued`);
   }
+  // Including on a duplicate. The second press is the same request as the
+  // first, and the row it found may be one parked on a precondition the
+  // operator has since lifted — a pass is what re-reads it.
+  askForMaintenanceNow();
+  return destination(
+    request,
+    input.returnTo,
+    enqueued.duplicate
+      ? `${input.label} is already queued`
+      : `${input.label} queued — it starts as soon as the maintenance pass is free`,
+  );
 }
 
 export async function POST(
@@ -542,6 +612,10 @@ export async function POST(
       contactId: value(formData, "contactId"),
       mailboxId: value(formData, "mailboxId") ?? null,
     });
+    // Enrolling writes the step-zero generation into the queue in its own
+    // transaction, so a fresh enrolment is queued work like any other. An
+    // existing one queued nothing, and has nothing to ask a pass for.
+    if (result.ok && result.disposition === "created") askForMaintenanceNow();
     return destination(
       request,
       uuidSchema.safeParse(campaignId).success
@@ -550,7 +624,7 @@ export async function POST(
       result.ok
         ? result.disposition === "existing"
           ? "Contact already enrolled"
-          : "Contact enrolled — their first message is queued for the next maintenance pass"
+          : "Contact enrolled — their first message is queued"
         : result.message,
     );
   }
@@ -795,11 +869,12 @@ export async function POST(
       return destination(request, "/outbound", "Invalid command");
     }
     const requeued = await requeueOperatorCommand(db, { id: commandId! });
+    if (requeued) askForMaintenanceNow();
     return destination(
       request,
       "/outbound",
       requeued
-        ? "Queued again — it runs on the next maintenance pass"
+        ? "Queued again — it starts as soon as the maintenance pass is free"
         : "That command is not waiting for a retry",
     );
   }
