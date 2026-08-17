@@ -13,20 +13,26 @@ import {
   sequenceSteps,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { readPersonalizationDeclaration } from "@/modules/messages/personalization-declaration";
 import { StatusBadge } from "@/modules/presentation/status-badge";
 import { describeStopReason } from "@/modules/presentation/status";
 
-/** What a stored step already asks the agent to write. */
+/**
+ * What a stored step already asks the agent to write, read through the tree's
+ * one answer to that question rather than a private copy of the shape check.
+ * The helper says it is the single reader, and two copies here made that false.
+ */
 function declaredFields(step: { personalizationSchema: unknown }): string[] {
-  const declared = step.personalizationSchema as { fields?: unknown };
-  return Array.isArray(declared?.fields) ? (declared.fields as string[]) : [];
+  return (
+    readPersonalizationDeclaration(step.personalizationSchema)?.fields ?? []
+  );
 }
 
 function minConfidence(step: { personalizationSchema: unknown }): number {
-  const declared = step.personalizationSchema as { minConfidence?: unknown };
-  return typeof declared?.minConfidence === "number"
-    ? declared.minConfidence
-    : 0.5;
+  return (
+    readPersonalizationDeclaration(step.personalizationSchema)?.minConfidence ??
+    0.5
+  );
 }
 
 export default async function CampaignDetailPage({
@@ -378,6 +384,24 @@ export default async function CampaignDetailPage({
                     defaultValue={minConfidence(step)}
                   />
                 </label>
+                {/* The consequence of ticking either box on a follow-up, said
+                    where the decision is made. The follow-up path hands a step
+                    that declares an agent field to the command queue and parks
+                    the prospect in the review queue — it cannot generate it in
+                    the loop, because that loop runs once per due prospect and
+                    there is one ChatGPT window. So this genuinely overrides
+                    "Automatic follow-ups" for this step, and an operator who
+                    only reads the checkbox above would never find that out. */}
+                {step.stepIndex > 0 &&
+                declaredFields(step).length > 0 &&
+                config.automaticFollowUps === true ? (
+                  <p className="muted span-all">
+                    This step asks the agent for a sentence, so it will not go
+                    out on its own: it is written on a maintenance pass and
+                    waits for you in the review queue, even with automatic
+                    follow-ups on.
+                  </p>
+                ) : null}
               </div>
             </fieldset>
           ))}

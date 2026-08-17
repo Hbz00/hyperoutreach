@@ -427,8 +427,20 @@ export function createWorkflowTaskServices(
       // for and is bounded by its own window, so a stale clock only makes it
       // late. This lane *originates* a delivery, and judging a delivery
       // against a window that has since shut is the exact failure the whole
-      // area exists to prevent. It reads the wall clock, and hands the same
-      // instant to the verdict and to the send.
+      // area exists to prevent. It reads the wall clock.
+      //
+      // The lane's own instant goes to the verdict, which is the cheap look
+      // that decides whether trying is worth it. It is deliberately *not*
+      // handed to the send. `sendApprovedMessage` re-evaluates the policy
+      // under a row lock and that check is the authority — but it happens
+      // after up to three provider round trips, each of which may take the
+      // full 150-second transport budget. Freezing its clock to the instant
+      // the lane looked meant those minutes could not be seen: a message
+      // judged legal at 17:59 left over SMTP at 18:04, after the window the
+      // operator configured had shut. The authority reads the real time, so a
+      // verdict that goes stale between the two costs a refusal and the
+      // message returns to the review queue — which is what
+      // `dispatchScheduledSends` already says happens.
       const scheduledSends = await dispatchScheduledSends(
         db,
         async (messageId, at) =>
@@ -438,12 +450,11 @@ export function createWorkflowTaskServices(
             (await providerForMessage(messageId, db, environment)).kind,
             at,
           ),
-        async (messageId, at) => {
+        async (messageId) => {
           const result = await sendApprovedMessage(
             db,
             await providerForMessage(messageId, db, environment),
             { messageId },
-            { clock: () => at },
           );
           return result.ok ? { ok: true } : { ok: false, code: result.code };
         },

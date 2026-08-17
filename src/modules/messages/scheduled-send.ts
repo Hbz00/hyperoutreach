@@ -52,6 +52,183 @@ export function scheduledInstantLabel(
 const LIFETIME_AFTER_OPENING_MS = 24 * 60 * 60_000;
 
 /**
+ * How far ahead of the click an operator-chosen intent may still be anchored.
+ *
+ * A week, because a week is the longest wait a *calendar* can impose: the
+ * working days repeat weekly, so `nextWorkingInstant` can never answer with an
+ * instant more than one round of them away. Anything beyond that comes from a
+ * configured delay — `contactMinimumDelayMinutes` alone accepts a year — and an
+ * intent standing for a year is not a decision anybody made on the day they
+ * clicked.
+ *
+ * The same bound decides what the card offers, in `scheduleOfferLabel`. That is
+ * the point of it being one constant: a wait the intent may not stand for is
+ * never advertised as one, so the button and the expiry cannot promise
+ * different things.
+ */
+const MAX_OPERATOR_INTENT_ANCHOR_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * How long an intent the operator chose has to live, given the refusal they
+ * chose it against.
+ *
+ * The card's button names the instant the refusal clears — `nextLegalSendInstant`
+ * — and until this existed the intent it created was still given its day from
+ * the *click*. With the shipped 24-hour contact delay those two are the same
+ * instant to the second: the button promised a delivery time exactly equal to
+ * the expiry of the intent it wrote, so the lane spent a day rechecking and
+ * then expired the click five minutes before the only look that could have
+ * sent it. Nothing was delivered and nothing was wrong-looking until the day
+ * was over.
+ *
+ * The day is therefore counted from the promised instant, exactly as
+ * `LIFETIME_AFTER_OPENING_MS` already says it should be ("measured from the
+ * first legal instant rather than from the click"). The lane keeps its
+ * five-minute cadence in the meantime, so a delay that clears earlier than its
+ * upper bound still goes out earlier — only the deadline moved.
+ *
+ * What the anchor is read from is deliberately *not* the refusal that was
+ * reported. Three cases say why, and all three are ordinary rather than exotic:
+ *
+ * - The policy answers with the first refusal it hits, and it checks the window
+ *   before the delays. A click made after hours is told `OUTSIDE_WORKING_HOURS`
+ *   even when a longer contact delay is what will actually hold the send.
+ * - A rolling cap names no instant, so reading the reported code gave it the
+ *   plain day. A day that starts on a Friday afternoon is spent on a weekend
+ *   during which nothing could have gone out, and the click was dead before
+ *   the cap ever cleared. The cap has no *instant*, but it does have a window,
+ *   and it is a day wide.
+ * - Even for the delay it does report, the distance to the promised instant is
+ *   mostly calendar on a Friday: 24 hours of delay becomes a three-day wait,
+ *   which the old one-day cap silently truncated back to two.
+ *
+ * So the anchor is the worst wait the settings can impose — the longest of the
+ * two delays, never less than the cap's own day — projected onto the calendar,
+ * and only the part `scheduleSendIntent` does not already absorb is added. That
+ * function opens the intent at the next working instant, so for a shut window
+ * with no delay configured the promised instant and the opening are the same
+ * one and this returns the day unchanged — the case that was never broken.
+ *
+ * Over-estimating here is safe and under-estimating is not: the lifetime only
+ * decides when the intent gives up, never when it sends. Every attempt still
+ * goes through the policy, so an intent that stands longer than it needed to
+ * costs a few more five-minute looks; one that stands too briefly hands the
+ * operator back a click that was about to succeed. The label is read from the
+ * reported code instead, and stays there: naming the worst case on a button
+ * would announce next Tuesday for a send that goes out in sixty seconds.
+ */
+export function operatorIntentLifetimeMs(
+  code: string,
+  now: Date,
+  settings: {
+    timezone: string;
+    workingDays: number[];
+    workingStartMinute: number;
+    workingEndMinute: number;
+    mailboxMinimumDelaySeconds: number;
+    contactMinimumDelayMinutes: number;
+  },
+): number {
+  const opensAt = nextWorkingInstant(now, settings);
+  if (!opensAt) return LIFETIME_AFTER_OPENING_MS;
+  const worstWaitMs = Math.min(
+    worstConfiguredWaitMs(code, settings),
+    MAX_OPERATOR_INTENT_ANCHOR_MS,
+  );
+  const reachable = nextWorkingInstant(
+    new Date(now.getTime() + worstWaitMs),
+    settings,
+  );
+  if (!reachable) return LIFETIME_AFTER_OPENING_MS;
+  const anchor = Math.min(
+    Math.max(0, reachable.getTime() - opensAt.getTime()),
+    MAX_OPERATOR_INTENT_ANCHOR_MS,
+  );
+  return LIFETIME_AFTER_OPENING_MS + anchor;
+}
+
+/**
+ * The longest the settings alone could hold this send back, uncapped.
+ *
+ * The refusal that was reported is not read, on purpose — the policy answers
+ * with the first refusal it hits and checks the window before either delay, so
+ * an after-hours click is told `OUTSIDE_WORKING_HOURS` even when a much longer
+ * contact rule is the thing that will actually hold it. The reported code
+ * contributes one thing only: a rolling cap has no nameable instant but does
+ * have a window, and it is a day wide.
+ */
+function worstConfiguredWaitMs(
+  code: string,
+  settings: {
+    mailboxMinimumDelaySeconds: number;
+    contactMinimumDelayMinutes: number;
+  },
+): number {
+  return Math.max(
+    settings.mailboxMinimumDelaySeconds * 1_000,
+    settings.contactMinimumDelayMinutes * 60_000,
+    isRollingCapBlock(code) ? LIFETIME_AFTER_OPENING_MS : 0,
+  );
+}
+
+/**
+ * Whether an intent written now could still be alive when every wait the
+ * settings can impose has cleared.
+ *
+ * The lifetime and the offer have to be decided on the *same* quantity, and
+ * until this existed they were not: the lifetime read the worst configured
+ * wait, while the button measured the instant the reported refusal clears.
+ * Those agree at the shipped settings and part company as soon as a delay is
+ * configured longer than an intent may be anchored for — a fortnightly contact
+ * rule, say. The button then read the calendar, saw Monday morning, and
+ * offered it; the intent it wrote was a week short of the wait that would
+ * actually hold the send, and came back expired days later.
+ *
+ * `false` means "say nothing": the message stays in the review queue, which is
+ * a worse-looking answer and a truer one than a delivery hour that was never
+ * reachable.
+ */
+function intentCanOutlastTheSettings(
+  code: string,
+  now: Date,
+  settings: {
+    timezone: string;
+    workingDays: number[];
+    workingStartMinute: number;
+    workingEndMinute: number;
+    mailboxMinimumDelaySeconds: number;
+    contactMinimumDelayMinutes: number;
+  },
+): boolean {
+  const opensAt = nextWorkingInstant(now, settings);
+  if (!opensAt) return false;
+  const clears = nextWorkingInstant(
+    new Date(now.getTime() + worstConfiguredWaitMs(code, settings)),
+    settings,
+  );
+  if (!clears) return false;
+  return (
+    clears.getTime() <=
+    opensAt.getTime() + operatorIntentLifetimeMs(code, now, settings)
+  );
+}
+
+/**
+ * Whether this refusal is one of the two whose end the settings cannot name.
+ *
+ * `nextAttemptInstantFor` answers `null` for both, and for the label that is
+ * the honest answer. For the lifetime it is not enough: a cap still clears
+ * inside its own rolling window, and the intent has to be able to keep asking
+ * across it.
+ */
+function isRollingCapBlock(code: string): boolean {
+  return (
+    code === "MAILBOX_DAILY_CAP_REACHED" ||
+    code === "CAMPAIGN_DAILY_CAP_REACHED"
+  );
+}
+
+/**
  * When a transient refusal might stop being one, or `null` when that is not
  * knowable from the settings alone.
  *
@@ -223,10 +400,18 @@ export function autoScheduleIntent(
  * earn an offer, and what the button says, are product rules, and leaving them
  * inline in JSX put them beyond the reach of everything but a browser run.
  *
- * `null` covers four different situations that all mean "no button": the send
+ * `null` covers five different situations that all mean "no button": the send
  * would go out now, the refusal is permanent, the wait is short enough that
- * the send button already took it on without asking, or the message is no
- * longer in a state an intent can be written for.
+ * the send button already took it on without asking, the wait is longer than
+ * an intent may stand for, or the message is no longer in a state an intent can
+ * be written for.
+ *
+ * That fourth one reads the same constant the lifetime does. A settings value
+ * can put a refusal's clearance arbitrarily far out, and a button naming a
+ * date next year would write a click the lane hands straight back — a promise
+ * broken the moment it is made, which is the failure this lane exists to
+ * remove. Saying nothing is the honest answer: the message stays in the review
+ * queue, where the operator can act on it.
  *
  * That last one is not a detail. The verdict is rendered for `drafted` cards
  * too — the policy accepts that status — and `drafted` is exactly where a send
@@ -254,6 +439,10 @@ export function scheduleOfferLabel(
   if (!isTransientSendBlock(verdict.code)) return null;
   const instant = nextLegalSendInstant(verdict.code, now, settings);
   if (shouldAutoSchedule(instant, now)) return null;
+  // Decided on the same quantity the lifetime is, not on the instant this
+  // refusal happens to name. A cap reaches here with no instant at all, and
+  // gating on one let it through unchecked.
+  if (!intentCanOutlastTheSettings(verdict.code, now, settings)) return null;
   return instant
     ? `Schedule for ${operatorClock(instant, settings.timezone)}`
     : // A rolling daily cap has no instant the settings can name. Saying so is
@@ -289,19 +478,26 @@ export async function scheduleSendIntent(
     messageId: string;
     now: Date;
     /**
-     * The earliest instant the caller already knows the refusal allows, when
-     * it knows one. The send button does — it read the block code — and
-     * passing it keeps the instant stored here identical to the instant the
-     * operator was just shown. The review card does not — its button carries
-     * only a message id, and re-deriving the code would cost two queries on
-     * the click. It settles itself instead: the first look happens as soon as
-     * the calendar opens, that look is refused, and the lane pushes it to the
-     * instant the refusal names.
+     * The earliest instant the caller wants the lane to look, when waiting
+     * until then is right. Only the send button passes it, and only because
+     * the wait it took on without asking is under an hour: the instant stored
+     * is then the instant the operator was just shown, and the two cannot
+     * disagree while nobody is watching.
      *
-     * The cost is that between the click and that first pass, `/outbound` can
-     * name an instant earlier than the button did. Only for a pacing delay
-     * configured longer than an hour — for a shut window, the two agree, since
-     * "when the calendar opens" is the whole answer — and only for one tick.
+     * The review card's click reads the refusal too — it has to, to work out
+     * how long the intent may stand — and still does not pass it. That is the
+     * lane's rule, not an economy: `nextAttemptInstantFor` answers with the
+     * *ceiling* the settings carry for a delay, while the real wait is measured
+     * from the last actual activity and is normally much shorter. Sleeping
+     * until the ceiling would skip every instant the delay genuinely clears in.
+     * So the intent opens as soon as the calendar does, is refused, and is
+     * asked again every five minutes until it goes — which is also why the
+     * lifetime, not the stored instant, is what had to be got right.
+     *
+     * The visible cost is that `/outbound` shows "the first instant the policy
+     * allows" rather than the hour the button named, for as long as the delay
+     * holds. `scheduledInstantLabel` says exactly that instead of printing a
+     * five-minute-away instant as a delivery time.
      */
     notBefore?: Date;
     /** Overrides the lifetime. See `AUTOMATIC_INTENT_LIFETIME_MS`. */
@@ -454,8 +650,19 @@ export async function dispatchScheduledSends(
   // pacing settings exist to prevent.
   const sendLimit = Math.max(options.sendLimit ?? 1, 1);
 
+  // `scheduledAt` travels with the row because every write below is a
+  // compare-and-swap against it. The list is read once and then walked with a
+  // policy read — and, for one row, a whole send — between items, so by the
+  // time a later row is reached the operator may have cancelled its intent and
+  // written a new one from `/review`. Matching on the instant this pass saw
+  // means such a row is left alone instead of being cleared on the strength of
+  // an expiry that belonged to an intent nobody is waiting on any more.
   const due = await db
-    .select({ id: messages.id, expiresAt: messages.sendIntentExpiresAt })
+    .select({
+      id: messages.id,
+      scheduledAt: messages.scheduledAt,
+      expiresAt: messages.sendIntentExpiresAt,
+    })
     .from(messages)
     .where(
       and(
@@ -483,12 +690,15 @@ export async function dispatchScheduledSends(
   let sent = 0;
   for (const row of due) {
     if (row.expiresAt && row.expiresAt.getTime() <= now.getTime()) {
-      await clearIntent(
+      const cleared = await clearIntent(
         db,
-        row.id,
+        row,
         "This scheduled send expired before the policy allowed it",
       );
-      outcomes.push({ messageId: row.id, disposition: "expired" });
+      outcomes.push({
+        messageId: row.id,
+        disposition: cleared ? "expired" : "withdrawn",
+      });
       continue;
     }
 
@@ -497,15 +707,15 @@ export async function dispatchScheduledSends(
     if (!verdict.ok) {
       const code = verdict.code ?? "UNKNOWN";
       if (!isTransientSendBlock(code)) {
-        await clearIntent(
+        const cleared = await clearIntent(
           db,
-          row.id,
+          row,
           `This scheduled send was cancelled: ${code}`,
         );
         outcomes.push({
           messageId: row.id,
-          disposition: "abandoned",
-          reason: code,
+          disposition: cleared ? "abandoned" : "withdrawn",
+          ...(cleared ? { reason: code } : {}),
         });
         continue;
       }
@@ -538,32 +748,37 @@ export async function dispatchScheduledSends(
       // made it is still there — the same words the expiry branch uses,
       // carrying the refusal that outlasted it.
       if (row.expiresAt && nextLook >= row.expiresAt.getTime()) {
-        await clearIntent(
+        const cleared = await clearIntent(
           db,
-          row.id,
+          row,
           `This scheduled send expired before the policy allowed it: ${code}`,
         );
         outcomes.push({
           messageId: row.id,
-          disposition: "expired",
-          reason: code,
+          disposition: cleared ? "expired" : "withdrawn",
+          ...(cleared ? { reason: code } : {}),
         });
         continue;
       }
-      await db
+      const [pushed] = await db
         .update(messages)
         .set({ scheduledAt: new Date(nextLook) })
         .where(
           and(
             eq(messages.id, row.id),
             eq(messages.status, "approved"),
-            isNotNull(messages.scheduledAt),
+            // Against the instant this pass read, not merely against "some
+            // intent exists": a reschedule that landed mid-pass carries its
+            // own instant, and pushing it to this pass's next look would drag
+            // the operator's new choice earlier without being asked.
+            eq(messages.scheduledAt, row.scheduledAt!),
           ),
-        );
+        )
+        .returning({ id: messages.id });
       outcomes.push({
         messageId: row.id,
-        disposition: "waiting",
-        reason: code,
+        disposition: pushed ? "waiting" : "withdrawn",
+        ...(pushed ? { reason: code } : {}),
       });
       continue;
     }
@@ -586,7 +801,7 @@ export async function dispatchScheduledSends(
         and(
           eq(messages.id, row.id),
           eq(messages.status, "approved"),
-          isNotNull(messages.scheduledAt),
+          eq(messages.scheduledAt, row.scheduledAt!),
         ),
       )
       .returning({ id: messages.id });
@@ -611,13 +826,33 @@ export async function dispatchScheduledSends(
   return outcomes;
 }
 
+/**
+ * Ends the intent this pass read, and says whether it was still the one there.
+ *
+ * The guard is the instant, not merely "an intent exists". Between this pass's
+ * read and this write the operator can cancel from `/review` and schedule
+ * again — an ordinary pair of clicks, and there is a whole send in this loop
+ * that can hold it open for the provider's full transport budget. Clearing on
+ * `status = 'approved'` alone threw away that new intent and wrote "expired"
+ * over it, on the strength of an expiry that belonged to the intent they had
+ * just cancelled. A false answer means the row moved on; the caller reports it
+ * as `withdrawn`, which is what the send path already calls that outcome.
+ */
 async function clearIntent(
   db: AppDatabase,
-  messageId: string,
+  row: { id: string; scheduledAt: Date | null },
   lastError: string,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const [cleared] = await db
     .update(messages)
     .set({ scheduledAt: null, sendIntentExpiresAt: null, lastError })
-    .where(and(eq(messages.id, messageId), eq(messages.status, "approved")));
+    .where(
+      and(
+        eq(messages.id, row.id),
+        eq(messages.status, "approved"),
+        eq(messages.scheduledAt, row.scheduledAt!),
+      ),
+    )
+    .returning({ id: messages.id });
+  return Boolean(cleared);
 }

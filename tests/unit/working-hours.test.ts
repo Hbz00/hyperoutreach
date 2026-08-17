@@ -4,6 +4,7 @@ import {
   autoScheduleIntent,
   nextAttemptInstantFor,
   nextLegalSendInstant,
+  operatorIntentLifetimeMs,
   scheduleOfferLabel,
   scheduledInstantLabel,
   shouldAutoSchedule,
@@ -512,5 +513,263 @@ describe("the schedule this card offers", () => {
     );
     expect(label).toContain("18/08/2026");
     expect(label).toContain("9:00");
+  });
+});
+
+// The lifetime an operator-chosen intent gets. The card's button names the
+// instant a refusal clears; until this rule existed, the intent that button
+// created still counted its day from the click, so with the shipped 24-hour
+// contact delay the promised delivery time *was* the expiry, to the second.
+describe("how long an intent the operator chose may stand", () => {
+  const settings = {
+    ...weekdays,
+    mailboxMinimumDelaySeconds: 60,
+    contactMinimumDelayMinutes: 24 * 60,
+  };
+  // Monday 14:00 Paris, inside the window.
+  const midWeek = paris("2026-08-17T12:00:00.000Z");
+  const day = 24 * 60 * 60_000;
+
+  // The regression. Before, this returned exactly one day, which put the
+  // expiry on the same instant the card advertised as the delivery time.
+  it("outlives the instant the card promised", () => {
+    const promised = nextLegalSendInstant(
+      "CONTACT_MINIMUM_DELAY",
+      midWeek,
+      settings,
+    )!;
+    const lifetime = operatorIntentLifetimeMs(
+      "CONTACT_MINIMUM_DELAY",
+      midWeek,
+      settings,
+    );
+    expect(midWeek.getTime() + lifetime).toBeGreaterThan(promised.getTime());
+    // A full day of trying, counted from the promised instant — the rule
+    // `LIFETIME_AFTER_OPENING_MS` already states for the calendar.
+    expect(midWeek.getTime() + lifetime).toBe(promised.getTime() + day);
+  });
+
+  // A rolling cap has no instant the settings can name, and the button says so
+  // rather than inventing one. Its *window* is nameable though — it is a day
+  // wide — and the intent gets that day to keep asking across, plus its own day
+  // of trying. Giving it the plain day instead measured the trying from the
+  // click and spent it waiting for the cap.
+  it("gives a rolling cap its own window plus the day of trying", () => {
+    expect(
+      operatorIntentLifetimeMs("MAILBOX_DAILY_CAP_REACHED", midWeek, settings),
+    ).toBe(2 * day);
+    expect(
+      operatorIntentLifetimeMs("CAMPAIGN_DAILY_CAP_REACHED", midWeek, settings),
+    ).toBe(2 * day);
+  });
+
+  // The cap term only shows itself when nothing else is configured. At the
+  // shipped settings the 24-hour contact delay already equals a day, so it
+  // dominates the same `Math.max` and a test naming a cap there proves the
+  // contact delay instead — the cap could be dropped and stay green.
+  it("gives a rolling cap its window even with no delay configured", () => {
+    const noDelays = {
+      ...settings,
+      mailboxMinimumDelaySeconds: 0,
+      contactMinimumDelayMinutes: 0,
+    };
+    expect(
+      operatorIntentLifetimeMs("MAILBOX_DAILY_CAP_REACHED", midWeek, noDelays),
+    ).toBe(2 * day);
+    // And the refusal that is not a cap gets the plain day, which is what makes
+    // the line above about the cap and not about the calendar.
+    expect(
+      operatorIntentLifetimeMs("CONTACT_MINIMUM_DELAY", midWeek, noDelays),
+    ).toBe(day);
+  });
+
+  // `contactMinimumDelayMinutes` accepts a year. An intent standing for a year
+  // is not a decision anybody made on the day they clicked, so the anchor stops
+  // at the week that is the longest wait a calendar can impose — and the card
+  // stops offering the wait at the same distance, so nothing writes an intent
+  // that would only be handed back.
+  it("caps the anchor rather than standing for as long as the settings allow", () => {
+    const yearLong = {
+      ...settings,
+      contactMinimumDelayMinutes: 365 * 24 * 60,
+    };
+    expect(
+      operatorIntentLifetimeMs("CONTACT_MINIMUM_DELAY", midWeek, yearLong),
+    ).toBe(8 * day);
+    expect(
+      scheduleOfferLabel(
+        { ok: false, code: "CONTACT_MINIMUM_DELAY" },
+        midWeek,
+        yearLong,
+      ),
+    ).toBeNull();
+  });
+
+  // The refusal the policy reports is not the wait that will actually hold the
+  // send: the window is checked before either delay, so a click made after
+  // hours is told OUTSIDE_WORKING_HOURS even when a far longer contact rule is
+  // what really stands in the way. The lifetime knows that and reads the worst
+  // wait the settings can impose. The button has to be decided on the same
+  // quantity, or it offers Monday morning for a send the intent will still be
+  // a week short of.
+  it("offers nothing when a wait the refusal did not mention outlives the intent", () => {
+    const fortnightly = {
+      ...settings,
+      // A fourteen-day per-contact rule. Longer than the week an intent may be
+      // anchored for, so nothing written now can outlast it.
+      contactMinimumDelayMinutes: 14 * 24 * 60,
+    };
+    // Friday 18:05 Paris — after the window, so the policy reports the window.
+    const fridayEvening = paris("2026-08-14T16:05:00.000Z");
+    expect(
+      scheduleOfferLabel(
+        { ok: false, code: "OUTSIDE_WORKING_HOURS" },
+        fridayEvening,
+        fortnightly,
+      ),
+    ).toBeNull();
+    // And the cap, whose instant is null and which therefore skipped the check
+    // entirely, is decided the same way.
+    expect(
+      scheduleOfferLabel(
+        { ok: false, code: "MAILBOX_DAILY_CAP_REACHED" },
+        fridayEvening,
+        fortnightly,
+      ),
+    ).toBeNull();
+    // The shipped configuration still gets its button: a day is well inside
+    // the week, and the intent covers it.
+    expect(
+      scheduleOfferLabel(
+        { ok: false, code: "OUTSIDE_WORKING_HOURS" },
+        fridayEvening,
+        settings,
+      ),
+    ).toContain("Schedule for");
+  });
+
+  // A shut window already agreed with itself: `scheduleSendIntent` opens the
+  // intent when the calendar does, so the day has always been counted from the
+  // promised instant. Adding the weekend a second time would hand a
+  // Friday-evening click two days instead of the one it chose.
+  it("leaves a closed window alone", () => {
+    const fridayEvening = paris("2026-08-14T16:05:00.000Z");
+    expect(
+      operatorIntentLifetimeMs(
+        "OUTSIDE_WORKING_HOURS",
+        fridayEvening,
+        settings,
+      ),
+    ).toBe(day);
+  });
+});
+
+// The same promise, checked on the day of the week that breaks it.
+//
+// Every case below is an operator clicking a button that names an instant, and
+// the only question asked of each is whether the intent that click writes can
+// still be alive when that instant arrives. The mid-week cases above answered
+// yes. These are the ones where the calendar, not the delay, owns most of the
+// wait — and where a lifetime measured only against the refusal that was
+// reported runs out first.
+describe("an intent the operator chose survives to the instant it named", () => {
+  const settings = {
+    ...weekdays,
+    mailboxMinimumDelaySeconds: 60,
+    contactMinimumDelayMinutes: 24 * 60,
+  };
+  const day = 24 * 60 * 60_000;
+  /** Friday 2026-08-14, 14:00 Paris — inside the window, before the weekend. */
+  const fridayAfternoon = paris("2026-08-14T12:00:00.000Z");
+  /** Friday 2026-08-14, 18:05 Paris — five minutes after the window shuts. */
+  const fridayEvening = paris("2026-08-14T16:05:00.000Z");
+
+  /** What `scheduleSendIntent` will store, given the same click. */
+  const expiryFor = (code: string, now: Date, config = settings) => {
+    const opensAt = nextWorkingInstant(now, config)!;
+    return opensAt.getTime() + operatorIntentLifetimeMs(code, now, config);
+  };
+
+  // The shipped configuration, on the most ordinary click there is. The delay
+  // clears on Saturday, so the send is Monday morning and the button says so —
+  // but the day of trying was spent on a weekend during which nothing could
+  // have gone out, and the intent was already dead when Monday came.
+  it("crosses the weekend a Friday-afternoon click has to cross", () => {
+    const promised = nextLegalSendInstant(
+      "CONTACT_MINIMUM_DELAY",
+      fridayAfternoon,
+      settings,
+    )!;
+    // Monday 09:00 Paris, three days out.
+    expect(promised).toEqual(paris("2026-08-17T07:00:00.000Z"));
+    expect(expiryFor("CONTACT_MINIMUM_DELAY", fridayAfternoon)).toBe(
+      promised.getTime() + day,
+    );
+  });
+
+  // A rolling cap names no instant, which is why the button does not name one
+  // either. It still has a window — a day wide — and the intent has to be able
+  // to keep asking across it. On a Friday afternoon that day is the weekend.
+  it("keeps a capped mailbox's click alive until the window reopens", () => {
+    const reopens = nextWorkingInstant(
+      new Date(fridayAfternoon.getTime() + day),
+      settings,
+    )!;
+    expect(reopens).toEqual(paris("2026-08-17T07:00:00.000Z"));
+    expect(
+      expiryFor("MAILBOX_DAILY_CAP_REACHED", fridayAfternoon),
+    ).toBeGreaterThan(reopens.getTime());
+    expect(
+      expiryFor("CAMPAIGN_DAILY_CAP_REACHED", fridayAfternoon),
+    ).toBeGreaterThan(reopens.getTime());
+  });
+
+  // The policy reports the first refusal it hits, and the window is checked
+  // before the delays. So a click made after hours is told "outside working
+  // hours" even when a longer contact delay is the thing that will actually
+  // hold the send — and a lifetime read from the reported code alone expires
+  // the click the evening before the send it was waiting for.
+  it("outlives a delay the reported refusal said nothing about", () => {
+    const threeDayDelay = {
+      ...settings,
+      contactMinimumDelayMinutes: 3 * 24 * 60,
+    };
+    const actuallyLegal = nextWorkingInstant(
+      new Date(
+        fridayEvening.getTime() +
+          threeDayDelay.contactMinimumDelayMinutes * 60_000,
+      ),
+      threeDayDelay,
+    )!;
+    // Tuesday 09:00 Paris: the delay clears Monday evening, after the window.
+    expect(actuallyLegal).toEqual(paris("2026-08-18T07:00:00.000Z"));
+    expect(
+      expiryFor("OUTSIDE_WORKING_HOURS", fridayEvening, threeDayDelay),
+    ).toBeGreaterThan(actuallyLegal.getTime());
+  });
+
+  // The other half of the same rule. A wait no intent may stand for is not
+  // offered as one: the card declines rather than writing a click that will be
+  // handed back, which is the failure this whole lane exists to remove.
+  it("does not offer a wait longer than an intent may stand for", () => {
+    const yearLongDelay = {
+      ...settings,
+      contactMinimumDelayMinutes: 365 * 24 * 60,
+    };
+    expect(
+      scheduleOfferLabel(
+        { ok: false, code: "CONTACT_MINIMUM_DELAY" },
+        fridayAfternoon,
+        yearLongDelay,
+      ),
+    ).toBeNull();
+    // A week out is still a decision the operator may take.
+    expect(
+      scheduleOfferLabel(
+        { ok: false, code: "CONTACT_MINIMUM_DELAY" },
+        fridayAfternoon,
+        { ...settings, contactMinimumDelayMinutes: 5 * 24 * 60 },
+      ),
+    ).toContain("Schedule for");
   });
 });

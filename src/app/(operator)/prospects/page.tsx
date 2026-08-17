@@ -342,7 +342,14 @@ export default async function ProspectsPage({
       <section className="panel table-panel">
         <div className="panel-heading">
           <h2>People</h2>
-          <span className="muted">{rows.length}</span>
+          {/* People, not rows. The query left-joins enrollments, so a contact
+              in two campaigns is two rows — deliberately, because each row is
+              that person in that campaign. Counting rows announced more
+              prospects than exist, next to the number the dashboard reads
+              straight from `contacts`. */}
+          <span className="muted">
+            {new Set(rows.map((row) => row.contactId)).size}
+          </span>
         </div>
         <div className="table-wrap">
           <table>

@@ -408,6 +408,16 @@ export default async function ProspectDetailPage({
                     name="stepIndex"
                     value={enrollment.currentStep}
                   />
+                  {/* One token per render, like every other queued command.
+                      A deliberate second click is a new render and so a new
+                      row; a resubmitted form is the same token and answers
+                      "already queued" rather than spending a second turn on
+                      the operator's ChatGPT window. */}
+                  <input
+                    type="hidden"
+                    name="requestToken"
+                    value={crypto.randomUUID()}
+                  />
                   <button>Generate step {enrollment.currentStep + 1}</button>
                 </form>
                 <form
@@ -486,7 +496,15 @@ export default async function ProspectDetailPage({
             attempt {item.attempt} {item.error ?? ""}
           </pre>
         ))}
-        <h3>Recent agent runs</h3>
+        {/* Every other block in this panel is filtered to this contact. This
+            one cannot be: `agent_runs` records the agent, the model and the
+            structured input, and carries no column tying a run to a contact or
+            an account — a research run is about a company, a classification is
+            about a reply. Saying "recent agent runs" beside a prospect's name
+            read as this prospect's, which is how an operator concludes the
+            wrong company was researched. The heading says what the rows are
+            until the table can answer the narrower question. */}
+        <h3>Recent agent runs, across the installation</h3>
         {runs.map((run) => (
           <pre key={run.id} className="audit-row">
             {run.createdAt.toISOString()} {run.agent} · {run.model} ·{" "}

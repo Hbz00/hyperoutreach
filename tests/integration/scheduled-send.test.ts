@@ -2,14 +2,25 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import * as schema from "@/lib/db/schema";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
+import { DatabaseMockMailProvider } from "@/modules/mailboxes/mock-mail-provider";
 import {
   AUTOMATIC_INTENT_LIFETIME_MS,
   cancelSendIntent,
   dispatchScheduledSends,
+  nextLegalSendInstant,
+  operatorIntentLifetimeMs,
   scheduleSendIntent,
 } from "@/modules/messages/scheduled-send";
 import { updateOperatorSendingSettings } from "@/modules/settings/service";
@@ -459,6 +470,198 @@ describe("sending at the next legal slot", () => {
     expect(stored.sendRequestedAt).not.toBeNull();
   });
 
+  // Reading the wall clock when the lane looks is only half of it. The look is
+  // a cheap opinion; the authority is the policy `sendApprovedMessage`
+  // re-evaluates under a row lock, and that happens after up to three provider
+  // round trips — each of which may take the full 150-second transport budget
+  // on a slow SMTP server. Handing the lane's instant down to the send froze
+  // that authority on the moment of the look, so those minutes could not be
+  // seen: a message judged legal at 17:59 left the building at 18:04, after
+  // the window the operator configured had shut. Nothing in the audit said so,
+  // because the row recorded the frozen instant too.
+  it("re-reads the clock at the final check, so a slow provider cannot outlast the window", async () => {
+    // UTC and every day, so only the hour decides — the calendar is not what
+    // this test is about, and the suite must mean the same thing on a Sunday.
+    await settings({
+      timezone: "UTC",
+      workingDays: [0, 1, 2, 3, 4, 5, 6],
+      workingStartMinute: 9 * 60,
+      workingEndMinute: 18 * 60,
+    });
+    const seeded = await seed();
+    const beforeClose = new Date("2026-08-19T17:59:00.000Z");
+    const afterClose = new Date("2026-08-19T18:04:00.000Z");
+    await db
+      .update(schema.messages)
+      .set({
+        scheduledAt: beforeClose,
+        sendIntentExpiresAt: new Date("2026-08-20T09:00:00.000Z"),
+      })
+      .where(eq(schema.messages.id, seeded.message.id));
+
+    // The slow provider, and nothing else about it: the draft round trip takes
+    // five minutes of wall time, exactly as a stalling SMTP server would.
+    const createDraft = DatabaseMockMailProvider.prototype.createDraft;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(beforeClose);
+    DatabaseMockMailProvider.prototype.createDraft = async function (input) {
+      vi.setSystemTime(afterClose);
+      return createDraft.call(this, input);
+    };
+    let round: { scheduledSends: Array<{ disposition: string }> };
+    try {
+      const services = createWorkflowTaskServices(db, {});
+      round = (await services["recover-stale-work"]({
+        observedAt: beforeClose.toISOString(),
+        limit: 1,
+      })) as { scheduledSends: Array<{ disposition: string }> };
+    } finally {
+      DatabaseMockMailProvider.prototype.createDraft = createDraft;
+      vi.useRealTimers();
+    }
+
+    // The lane's look said yes at 17:59. The authority, reading the real
+    // clock, says no at 18:04 — so the message comes back to the operator
+    // instead of leaving after hours.
+    expect(round.scheduledSends).toEqual([
+      {
+        messageId: seeded.message.id,
+        disposition: "abandoned",
+        reason: "OUTSIDE_WORKING_HOURS",
+      },
+    ]);
+    const stored = await read(seeded.message.id);
+    expect(stored.status).not.toBe("sent");
+    expect(stored.sentAt).toBeNull();
+  });
+
+  // The same replacement, one branch over. The test above lands on the expiry
+  // branch; this one lands on the ordinary push-forward, which is where most
+  // rows in most passes end up and which carries its own copy of the guard. A
+  // pass that pushed a replaced intent to its own next look would drag the
+  // operator's new choice hours earlier without being asked.
+  it("leaves a replaced intent alone on the ordinary push forward too", async () => {
+    await settings({
+      workingDays: [0, 1, 2, 3, 4, 5, 6],
+      workingStartMinute: 0,
+      workingEndMinute: 24 * 60,
+    });
+    const first = await seed();
+    const replaced = await seed();
+    const now = new Date("2026-08-17T10:00:00.000Z");
+    await db
+      .update(schema.messages)
+      .set({
+        scheduledAt: new Date(now.getTime() - 60_000),
+        sendIntentExpiresAt: new Date(now.getTime() + 60 * 60_000),
+      })
+      .where(eq(schema.messages.id, first.message.id));
+    // Not expired, unlike the test above: this row is still perfectly alive, so
+    // the pass reaches it with a refusal to push rather than an intent to end.
+    await db
+      .update(schema.messages)
+      .set({
+        scheduledAt: new Date(now.getTime() - 30_000),
+        sendIntentExpiresAt: new Date(now.getTime() + 60 * 60_000),
+      })
+      .where(eq(schema.messages.id, replaced.message.id));
+
+    const rescheduledFor = new Date(now.getTime() + 6 * 60 * 60_000);
+    const outcomes = await dispatchScheduledSends(
+      db,
+      async (messageId) => {
+        if (messageId === first.message.id) {
+          expect(await cancelSendIntent(db, replaced.message.id)).toBe(true);
+          const again = await scheduleSendIntent(db, {
+            messageId: replaced.message.id,
+            now,
+            notBefore: rescheduledFor,
+          });
+          if (!again.ok) throw new Error(again.code);
+        }
+        return { ok: false, code: "MAILBOX_DAILY_CAP_REACHED" };
+      },
+      async () => {
+        throw new Error("no send is expected in this pass");
+      },
+      { now },
+    );
+
+    expect(
+      outcomes.find((outcome) => outcome.messageId === replaced.message.id),
+    ).toEqual({ messageId: replaced.message.id, disposition: "withdrawn" });
+    // The operator's instant, not this pass's five minutes.
+    expect((await read(replaced.message.id)).scheduledAt).toEqual(
+      rescheduledFor,
+    );
+  });
+
+  // The list of due intents is read once and then walked, with a policy read
+  // between items and, for one of them, a whole send that can hold the pass
+  // open for the provider's full transport budget. That is plenty of time for
+  // the operator to cancel a standing intent on `/review` and schedule it
+  // again — two ordinary clicks. Reaching that row afterwards and clearing it
+  // on the strength of the expiry this pass read threw the new intent away and
+  // wrote "expired" over a decision made seconds earlier.
+  it("leaves alone an intent the operator replaced while the pass was running", async () => {
+    await settings({
+      workingDays: [0, 1, 2, 3, 4, 5, 6],
+      workingStartMinute: 0,
+      workingEndMinute: 24 * 60,
+    });
+    const first = await seed();
+    const replaced = await seed();
+    const now = new Date("2026-08-17T10:00:00.000Z");
+    // `first` sorts ahead, so it is the row being worked on when the operator
+    // acts; `replaced` carries an expiry this pass would otherwise act on.
+    await db
+      .update(schema.messages)
+      .set({
+        scheduledAt: new Date(now.getTime() - 60_000),
+        sendIntentExpiresAt: new Date(now.getTime() + 60 * 60_000),
+      })
+      .where(eq(schema.messages.id, first.message.id));
+    await db
+      .update(schema.messages)
+      .set({
+        scheduledAt: new Date(now.getTime() - 30_000),
+        sendIntentExpiresAt: new Date(now.getTime() - 1_000),
+      })
+      .where(eq(schema.messages.id, replaced.message.id));
+
+    const rescheduledFor = new Date(now.getTime() + 6 * 60 * 60_000);
+    const outcomes = await dispatchScheduledSends(
+      db,
+      async (messageId) => {
+        if (messageId === first.message.id) {
+          // The operator, on /review, while this pass is still working.
+          expect(await cancelSendIntent(db, replaced.message.id)).toBe(true);
+          const again = await scheduleSendIntent(db, {
+            messageId: replaced.message.id,
+            now,
+            notBefore: rescheduledFor,
+          });
+          if (!again.ok) throw new Error(again.code);
+        }
+        return { ok: false, code: "MAILBOX_MINIMUM_DELAY" };
+      },
+      async () => {
+        throw new Error("no send is expected in this pass");
+      },
+      { now },
+    );
+
+    expect(
+      outcomes.find((outcome) => outcome.messageId === replaced.message.id),
+    ).toEqual({ messageId: replaced.message.id, disposition: "withdrawn" });
+    const stored = await read(replaced.message.id);
+    expect(stored.scheduledAt).toEqual(rescheduledFor);
+    expect(stored.sendIntentExpiresAt!.getTime()).toBeGreaterThan(
+      now.getTime(),
+    );
+    expect(stored.lastError).toBeNull();
+  });
+
   // The stage runs third, after two stages that may take minutes, so the
   // tick's `observedAt` is stale by the time it is reached. The rest of the
   // stage completes work already asked for and a late clock only makes it
@@ -788,6 +991,201 @@ describe("sending at the next legal slot", () => {
     expect((await read(seeded.message.id)).scheduledAt).toEqual(
       new Date(click.getTime() + 5 * 60_000),
     );
+  });
+
+  // The regression this whole lifetime rule exists for, driven end to end.
+  //
+  // The card offers "Schedule for <the instant the contact delay clears>" and
+  // the click writes an intent. Counted from the click, that intent's day ends
+  // on the very instant the button promised — so the lane spent 24 hours
+  // rechecking and then expired the click five minutes before the only look
+  // that could have sent it. Nothing was delivered, and nothing looked wrong
+  // until the day was over.
+  it("survives to the instant the card promised, and sends there", async () => {
+    await settings({ contactMinimumDelayMinutes: 24 * 60 });
+    const seeded = await seed();
+    // Monday 14:00 Paris, well inside the window, as the card's offer requires.
+    const click = new Date("2026-08-17T12:00:00.000Z");
+    const promised = nextLegalSendInstant("CONTACT_MINIMUM_DELAY", click, {
+      timezone: "Europe/Paris",
+      workingDays: [1, 2, 3, 4, 5],
+      workingStartMinute: 9 * 60,
+      workingEndMinute: 18 * 60,
+      mailboxMinimumDelaySeconds: 0,
+      contactMinimumDelayMinutes: 24 * 60,
+    })!;
+
+    const scheduled = await scheduleSendIntent(db, {
+      messageId: seeded.message.id,
+      now: click,
+      lifetimeMs: operatorIntentLifetimeMs("CONTACT_MINIMUM_DELAY", click, {
+        timezone: "Europe/Paris",
+        workingDays: [1, 2, 3, 4, 5],
+        workingStartMinute: 9 * 60,
+        workingEndMinute: 18 * 60,
+        mailboxMinimumDelaySeconds: 0,
+        contactMinimumDelayMinutes: 24 * 60,
+      }),
+    });
+    if (!scheduled.ok) throw new Error(scheduled.code);
+    // The intent can now outlive the instant it was created for.
+    expect(scheduled.expiresAt.getTime()).toBeGreaterThan(promised.getTime());
+
+    // Walk the lane forward on its five-minute cadence, refusing until the
+    // delay genuinely clears, exactly as the policy would.
+    const sent: string[] = [];
+    let dispositions: string[] = [];
+    for (
+      let at = click.getTime();
+      at <= promised.getTime() + 60_000;
+      at += 5 * 60_000
+    ) {
+      const outcomes = await dispatchScheduledSends(
+        db,
+        async () =>
+          at < promised.getTime()
+            ? { ok: false, code: "CONTACT_MINIMUM_DELAY" }
+            : { ok: true },
+        async (messageId) => {
+          sent.push(messageId);
+          return { ok: true };
+        },
+        { now: new Date(at) },
+      );
+      dispositions = dispositions.concat(
+        outcomes.map((outcome) => outcome.disposition),
+      );
+      if (sent.length > 0) break;
+    }
+
+    expect(sent).toEqual([seeded.message.id]);
+    expect(dispositions).not.toContain("expired");
+  });
+
+  // The same click, made on the day of the week that used to kill it.
+  //
+  // Friday afternoon, inside the window, with the shipped 24-hour contact
+  // delay: the card offers Monday 09:00 because the delay clears on Saturday
+  // and Saturday is not a working day. The intent's day of trying was counted
+  // from the click, so it was spent on a weekend during which nothing could
+  // have gone out — and at 18:05 that same Friday, when the lane pushed its
+  // next look to Monday, that look was already past the expiry and the click
+  // was handed back. Four hours after it was made, for a send three days out.
+  it("survives the weekend a Friday-afternoon click has to cross", async () => {
+    await settings({ contactMinimumDelayMinutes: 24 * 60 });
+    const seeded = await seed();
+    const paris = {
+      timezone: "Europe/Paris",
+      workingDays: [1, 2, 3, 4, 5],
+      workingStartMinute: 9 * 60,
+      workingEndMinute: 18 * 60,
+      mailboxMinimumDelaySeconds: 0,
+      contactMinimumDelayMinutes: 24 * 60,
+    };
+    // Friday 2026-08-14, 14:00 Paris.
+    const click = new Date("2026-08-14T12:00:00.000Z");
+    const promised = nextLegalSendInstant(
+      "CONTACT_MINIMUM_DELAY",
+      click,
+      paris,
+    )!;
+    expect(promised).toEqual(MONDAY_MORNING);
+
+    const scheduled = await scheduleSendIntent(db, {
+      messageId: seeded.message.id,
+      now: click,
+      lifetimeMs: operatorIntentLifetimeMs(
+        "CONTACT_MINIMUM_DELAY",
+        click,
+        paris,
+      ),
+    });
+    if (!scheduled.ok) throw new Error(scheduled.code);
+    expect(scheduled.expiresAt.getTime()).toBeGreaterThan(promised.getTime());
+
+    // The three looks that decide it: one while the delay still holds, one at
+    // the moment the window shuts — where the lane jumps to Monday and the old
+    // rule expired the click — and Monday's, where it goes.
+    const dispositions: string[] = [];
+    const sent: string[] = [];
+    for (const [at, allowed] of [
+      [new Date("2026-08-14T12:05:00.000Z"), false],
+      [new Date("2026-08-14T16:05:00.000Z"), false],
+      [MONDAY_MORNING, true],
+    ] as const) {
+      const outcomes = await dispatchScheduledSends(
+        db,
+        async () =>
+          allowed
+            ? { ok: true }
+            : {
+                ok: false,
+                code:
+                  at.getTime() < new Date("2026-08-14T16:00:00.000Z").getTime()
+                    ? "CONTACT_MINIMUM_DELAY"
+                    : "OUTSIDE_WORKING_HOURS",
+              },
+        async (messageId) => {
+          sent.push(messageId);
+          return { ok: true };
+        },
+        { now: at },
+      );
+      dispositions.push(...outcomes.map((outcome) => outcome.disposition));
+      // The look at 18:05 must park the intent on Monday morning, not end it.
+      if (at.getTime() === new Date("2026-08-14T16:05:00.000Z").getTime()) {
+        expect(await read(seeded.message.id)).toMatchObject({
+          status: "approved",
+          scheduledAt: MONDAY_MORNING,
+        });
+      }
+    }
+
+    expect(dispositions).toEqual(["waiting", "waiting", "sent"]);
+    expect(sent).toEqual([seeded.message.id]);
+  });
+
+  // A rolling cap names no instant, so the card does not name one either — but
+  // the cap still clears inside its own day, and on a Friday afternoon that day
+  // is the weekend. The intent has to be able to keep asking across it.
+  it("keeps a Friday click on a capped mailbox alive until Monday", async () => {
+    const seeded = await seed();
+    const paris = {
+      timezone: "Europe/Paris",
+      workingDays: [1, 2, 3, 4, 5],
+      workingStartMinute: 9 * 60,
+      workingEndMinute: 18 * 60,
+      mailboxMinimumDelaySeconds: 0,
+      contactMinimumDelayMinutes: 0,
+    };
+    const click = new Date("2026-08-14T12:00:00.000Z");
+
+    const scheduled = await scheduleSendIntent(db, {
+      messageId: seeded.message.id,
+      now: click,
+      lifetimeMs: operatorIntentLifetimeMs(
+        "MAILBOX_DAILY_CAP_REACHED",
+        click,
+        paris,
+      ),
+    });
+    if (!scheduled.ok) throw new Error(scheduled.code);
+
+    // The look that shuts the window jumps to Monday; the intent must outlive
+    // it rather than be handed back on the spot.
+    const shutting = await dispatchScheduledSends(
+      db,
+      async () => ({ ok: false, code: "OUTSIDE_WORKING_HOURS" }),
+      async () => {
+        throw new Error("nothing may be sent while the window is shut");
+      },
+      { now: new Date("2026-08-14T16:05:00.000Z") },
+    );
+
+    expect(shutting.map((outcome) => outcome.disposition)).toEqual(["waiting"]);
+    expect(await read(seeded.message.id)).toMatchObject({
+      scheduledAt: MONDAY_MORNING,
+    });
   });
 
   // One intent buys one attempt. The lane takes the intent before it sends, so

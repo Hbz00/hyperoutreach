@@ -86,7 +86,46 @@ export async function POST(request: Request) {
   const source = loginSource(request);
   const throttle = loginThrottle.check(source);
   const globalThrottle = globalLoginThrottle.check("all-sources");
-  if (!throttle.allowed || !globalThrottle.allowed) {
+  const next = safeOperatorRedirect(parsed.success ? parsed.data.next : null);
+  // The credentials are checked before the throttle decides, and that ordering
+  // is the whole point of it.
+  //
+  // This installation has one account. The per-source window is keyed on a
+  // forwarded header the client writes, so an attacker rotates it and never
+  // meets their own limit; the global window exists to bound guessing anyway.
+  // With the throttle answering first, a hundred wrong passwords from anywhere
+  // — a minute of unauthenticated requests — filled that global window and the
+  // only operator could no longer sign in, because their correct password was
+  // never looked at. A throttle that locks the account holder out of their own
+  // installation is a denial of service handed to whoever finds the login page.
+  //
+  // A correct password is not a guess, so it is not what the throttle is for.
+  //
+  // What this costs, stated plainly rather than left to be discovered. Before,
+  // a full window refused *everyone*, so an attacker past the limit could not
+  // tell a right password from a wrong one and guessing was capped at the
+  // window. Now a right password answers 303 and a wrong one 429, which is an
+  // oracle: the windows no longer bound a distributed guessing attack, they
+  // bound its noise. That is not a bug to fix here — it is unavoidable. "A
+  // correct password always works" and "an attacker cannot test passwords" are
+  // the same statement negated, so an installation with one shared secret and
+  // no out-of-band recovery has to pick, and being unable to reach your own
+  // installation is the worse failure: anyone can cause it, from anywhere, in
+  // under a minute, while the secret itself is twelve characters or more.
+  // The real bound belongs at a trusted reverse proxy, which is what the
+  // README has always told the operator to run and now says why.
+  //
+  // Two smaller facts, so the next reader does not have to derive them: a
+  // wrong password past the limit is refused *without* being counted (the
+  // branch below returns above `recordFailure`), and that changes nothing,
+  // because both windows are fixed rather than sliding — once the limit is
+  // reached neither the refusal nor the instant it lifts can move. And the
+  // comparison is a constant-time buffer compare, not a KDF, so running it
+  // ahead of the throttle adds no work an attacker can amplify.
+  const authenticated =
+    parsed.success &&
+    verifyOperatorCredentials(parsed.data.email, parsed.data.password);
+  if (!authenticated && (!throttle.allowed || !globalThrottle.allowed)) {
     const retryAfterSeconds = !throttle.allowed
       ? throttle.retryAfterSeconds
       : globalThrottle.allowed
@@ -100,11 +139,7 @@ export async function POST(request: Request) {
       },
     );
   }
-  const next = safeOperatorRedirect(parsed.success ? parsed.data.next : null);
-  if (
-    !parsed.success ||
-    !verifyOperatorCredentials(parsed.data.email, parsed.data.password)
-  ) {
+  if (!authenticated) {
     loginThrottle.recordFailure(source);
     globalLoginThrottle.recordFailure("all-sources");
     const query = new URLSearchParams({
@@ -114,6 +149,9 @@ export async function POST(request: Request) {
     return mutableRedirect(`/login?${query.toString()}`, 303);
   }
   loginThrottle.recordSuccess(source);
+  // Cleared too, so a burst of guesses does not keep refusing the next wrong
+  // password long after the operator has demonstrated they are here.
+  globalLoginThrottle.recordSuccess("all-sources");
   let token: string;
   try {
     token = createOperatorSession().token;

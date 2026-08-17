@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -28,7 +28,9 @@ const NOW = new Date("2026-08-16T12:00:00.000Z");
 
 let fixtureNumber = 0;
 
-async function campaignFixture(options: { personalized?: boolean } = {}) {
+async function campaignFixture(
+  options: { personalized?: boolean; nullDeclaration?: boolean } = {},
+) {
   fixtureNumber += 1;
   const suffix = `${fixtureNumber}-${crypto.randomUUID().slice(0, 8)}`;
   const [mailbox] = await db
@@ -92,6 +94,15 @@ async function campaignFixture(options: { personalized?: boolean } = {}) {
         : {}),
     },
   ]);
+  // Before the enrollment exists, because the database makes a used version's
+  // steps immutable — which is also why this state can only ever arrive at
+  // insert time, from outside the application.
+  if (options.nullDeclaration) {
+    await db.execute(
+      sql`update sequence_steps set personalization_schema = 'null'::jsonb
+          where campaign_version_id = ${version!.id}`,
+    );
+  }
   await db
     .update(schema.campaignVersions)
     .set({ publishedAt: NOW })
@@ -113,6 +124,7 @@ async function campaignFixture(options: { personalized?: boolean } = {}) {
     mailbox: mailbox!,
     account: account!,
     campaign: campaign!,
+    version: version!,
     enrollment: enrollment!,
   };
 }
@@ -162,13 +174,10 @@ describe("what goes out today", () => {
   });
 
   // A step that asks the AI for a sentence has no text to preview: the
-  // sentence is written when the message is generated, not before.
-  // The declaration is written straight into the row here, deliberately.
-  // `sequenceStepsSchema` refuses an AI field on any step after the first,
-  // because follow-up generation does not call the agent — so no campaign
-  // published through the product can currently reach this state. The
-  // projection keeps the branch, and this keeps it honest, for when follow-up
-  // generation moves into the queue.
+  // sentence is written when the message is generated, not before. Any step
+  // may declare one — the follow-up path hands such a step to the command
+  // queue rather than generating it inline — so this is a state a published
+  // campaign reaches normally.
   it("does not invent a preview for a step that will be personalized", async () => {
     const fixture = await campaignFixture({ personalized: true });
 
@@ -177,6 +186,23 @@ describe("what goes out today", () => {
     const row = due.find((item) => item.enrollmentId === fixture.enrollment.id);
     expect(row).toMatchObject({ subject: null, body: null });
     expect(row!.note).toContain("Personalized at generation");
+  });
+
+  // `personalization_schema` is `jsonb not null`, which does not exclude the
+  // JSON value `null` — a hand-written UPDATE or a restored dump can put one
+  // there. The projection reads every due row in one `map`, so a single such
+  // row used to throw and take the whole page with it, hiding every follow-up
+  // rather than one. `stepDeclaresPersonalization` is the tree's one answer to
+  // "does this step need an agent", and it already treats malformed as
+  // "declares nothing".
+  it("survives a step whose declaration is stored as JSON null", async () => {
+    const fixture = await campaignFixture({ nullDeclaration: true });
+
+    const due = await readDueFollowUps(db, { now: NOW });
+
+    const row = due.find((item) => item.enrollmentId === fixture.enrollment.id);
+    expect(row).toBeDefined();
+    expect(row!.note).toContain("Projected");
   });
 
   // The counter has to agree with the policy or it promises capacity that is

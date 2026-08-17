@@ -237,6 +237,16 @@ export default async function SettingsPage({
                               name="mailboxId"
                               value={mailbox.id}
                             />
+                            {/* One token per render, like every other queued
+                                command: a resubmitted form answers "already
+                                queued" instead of enqueuing the same sync
+                                twice. Without it the route substitutes a fresh
+                                random key and the dedupe index never fires. */}
+                            <input
+                              type="hidden"
+                              name="requestToken"
+                              value={crypto.randomUUID()}
+                            />
                             <button className="button-secondary">
                               Sync now
                             </button>

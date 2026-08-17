@@ -324,14 +324,25 @@ export default async function ReviewPage({
                     </div>
                     <div>
                       <dt>Research</dt>
-                      <dd>{row.account.researchStatus}</dd>
+                      <dd>
+                        {
+                          describeStatus("research", row.account.researchStatus)
+                            .label
+                        }
+                      </dd>
                     </div>
                     <div>
                       <dt>Email resolution</dt>
                       <dd>
-                        {row.contact.emailResolutionStatus} ·{" "}
+                        {
+                          describeStatus(
+                            "emailResolution",
+                            row.contact.emailResolutionStatus,
+                          ).label
+                        }{" "}
+                        ·{" "}
                         {row.acceptedEmail
-                          ? `${Math.round(Number(row.acceptedEmail.confidence) * 100)}% (${row.acceptedEmail.source}, ${row.acceptedEmail.status})`
+                          ? `${Math.round(Number(row.acceptedEmail.confidence) * 100)}% (${row.acceptedEmail.source}, ${describeStatus("emailCandidate", row.acceptedEmail.status).label.toLowerCase()})`
                           : "no accepted candidate"}
                       </dd>
                     </div>

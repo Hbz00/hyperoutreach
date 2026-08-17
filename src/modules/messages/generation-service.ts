@@ -136,6 +136,50 @@ export async function generateOutreachProposal(
           message: "Enrollment is no longer active",
         } as const;
       }
+      /**
+       * Says out loud that this enrolment is now holding a question for a
+       * human, for the enrolments no other path says it for.
+       *
+       * `reviewMessage` only accepts an answer from a `ready_for_review`
+       * enrolment, and the follow-up lane states that itself: it promotes
+       * `waiting` the moment it claims, before the message is even written. So
+       * the two states that lane claims — `waiting` and `approved` — are left
+       * alone here; they are on their way to the same place and moving them
+       * early would take the step out of the lane's hands.
+       *
+       * The states the lane cannot claim had nobody to say it for them.
+       * `manual_review` is the ordinary one: a soft bounce, a definite SMTP
+       * recipient refusal, or a held non-terminal reply all park an enrolment
+       * there with no `next_action_at`, and the prospect page offers
+       * "Generate step N" on exactly those. The message was written, the
+       * review card rendered its Approve button, and the click answered
+       * "Enrollment is not awaiting message review" — with no way out but
+       * Stop, which discards the sequence.
+       *
+       * Terminal enrolments never reach this: the guard above refuses them.
+       */
+      const awaitReview = async (fromState: string, messageId: string) => {
+        if (
+          fromState === "waiting" ||
+          fromState === "approved" ||
+          fromState === "ready_for_review"
+        ) {
+          return;
+        }
+        await tx
+          .update(enrollments)
+          .set({ state: "ready_for_review" })
+          .where(eq(enrollments.id, parsed.data.enrollmentId));
+        await tx.insert(stateTransitions).values({
+          entityType: "enrollment",
+          entityId: parsed.data.enrollmentId,
+          fromState,
+          toState: "ready_for_review",
+          reason: "generated_message_awaiting_review",
+          metadata: { stepIndex: parsed.data.stepIndex, messageId },
+        });
+      };
+
       const [existing] = await tx
         .select()
         .from(messages)
@@ -148,6 +192,14 @@ export async function generateOutreachProposal(
         )
         .limit(1);
       if (existing) {
+        // Asking again for a message that is already there writes nothing —
+        // but it is also exactly what an operator does when the Approve button
+        // refused them, so the pair this rule exists to unstick is repaired
+        // here too. Only for a proposal: a message already approved or gone is
+        // not a question anybody is still holding.
+        if (enrollmentGuard && existing.status === "proposed") {
+          await awaitReview(enrollmentGuard.state, existing.id);
+        }
         return {
           ok: true,
           disposition: "existing",
@@ -274,6 +326,7 @@ export async function generateOutreachProposal(
         toState: "proposed",
         reason: "deterministic_generation",
       });
+      if (enrollmentGuard) await awaitReview(enrollmentGuard.state, message.id);
       await tx.insert(workflowEvents).values({
         entityType: "message",
         entityId: message.id,

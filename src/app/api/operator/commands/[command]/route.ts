@@ -44,9 +44,13 @@ import { isTransientSendBlock } from "@/modules/messages/send-policy";
 import {
   autoScheduleIntent,
   cancelSendIntent,
+  operatorIntentLifetimeMs,
   scheduleSendIntent,
 } from "@/modules/messages/scheduled-send";
-import type { SendMessageResult } from "@/modules/messages/send-service";
+import {
+  readSendPolicyVerdict,
+  type SendMessageResult,
+} from "@/modules/messages/send-service";
 import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
 import { ingestInboundMessage } from "@/modules/replies/inbound-service";
 import { updateOperatorSendingSettings } from "@/modules/settings/service";
@@ -711,9 +715,42 @@ export async function POST(
     if (!uuidSchema.safeParse(messageId).success)
       return destination(request, "/review", "Invalid message");
     const clickedAt = new Date();
+    // Which refusal this click is accepting, re-read here rather than trusted
+    // from the form. The card's button names the instant that refusal clears,
+    // and the intent has to be able to live to it: with the shipped 24-hour
+    // contact delay, a day counted from the click ends on the very instant the
+    // button promised, and the lane expires it five minutes before the only
+    // look that could have sent it. One policy read on one click buys the
+    // difference between a promise kept and a click that dies overnight.
+    const [context] = await db
+      .select({
+        provider: mailboxConnections.provider,
+        settings: operatorSendingSettings,
+      })
+      .from(messages)
+      .leftJoin(
+        mailboxConnections,
+        eq(mailboxConnections.id, messages.mailboxId),
+      )
+      .innerJoin(operatorSendingSettings, eq(operatorSendingSettings.id, 1))
+      .where(eq(messages.id, messageId!))
+      .limit(1);
+    const verdict = context
+      ? await readSendPolicyVerdict(
+          db,
+          messageId!,
+          context.provider ?? "mock",
+          clickedAt,
+        )
+      : null;
+    const lifetimeMs =
+      context && verdict && !verdict.ok && isTransientSendBlock(verdict.code)
+        ? operatorIntentLifetimeMs(verdict.code, clickedAt, context.settings)
+        : undefined;
     const scheduled = await scheduleSendIntent(db, {
       messageId: messageId!,
       now: clickedAt,
+      ...(lifetimeMs === undefined ? {} : { lifetimeMs }),
     });
     return destination(
       request,
@@ -875,7 +912,7 @@ export async function POST(
       label: "Mailbox sync",
       actor: session.email,
       returnTo: "/settings",
-      dedupeKey: `ui:inbound-sync:${mailboxId}:${randomUUID()}`,
+      dedupeKey: `ui:inbound-sync:${mailboxId}:${value(formData, "requestToken") ?? randomUUID()}`,
       payload: { mailboxId: mailboxId! },
     });
   }

@@ -8,6 +8,7 @@ import * as schema from "@/lib/db/schema";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
 import { enrollContact } from "@/modules/campaigns/service";
 import { MockMailProvider } from "@/modules/mailboxes/mock-mail-provider";
+import { reviewMessage } from "@/modules/messages/review-service";
 import { evaluateSendPolicy } from "@/modules/messages/send-policy";
 import { sendApprovedMessage } from "@/modules/messages/send-service";
 import {
@@ -412,6 +413,78 @@ describe("the first message is written without being asked twice", () => {
       ...(await messagesFor(firstEnrollment.id)),
       ...(await messagesFor(secondEnrollment.id)),
     ]).toHaveLength(2);
+  });
+
+  // A proposal is a question, and the operator has to be able to answer it.
+  //
+  // `reviewMessage` only takes an answer from an enrolment that is
+  // `ready_for_review`, and the follow-up lane says so itself: it promotes
+  // `waiting` to `ready_for_review` when it claims, before the message exists.
+  // Nothing said it for the states that lane cannot claim. `manual_review` is
+  // the ordinary one — a soft bounce, a definite SMTP refusal, or a held
+  // non-terminal reply all park an enrolment there with no `next_action_at` —
+  // and the prospect page offers "Generate step N" on exactly those. The
+  // message was written, shown on `/review` with its Approve button, and the
+  // click came back "Enrollment is not awaiting message review". The only way
+  // out was Stop, which discards the prospect's sequence.
+  it("lets the operator approve a message they generated on a held enrolment", async () => {
+    const fixture = await prospect({ acceptedEmail: true });
+    const enrollment = await enroll(fixture);
+    // As a soft bounce or a definite recipient refusal leaves it: parked for a
+    // human, with nothing scheduled and no inbound hold outstanding.
+    await db
+      .update(schema.enrollments)
+      .set({
+        state: "manual_review",
+        nextActionAt: null,
+        nextActionToken: null,
+      })
+      .where(eq(schema.enrollments.id, enrollment.id));
+
+    await drain();
+
+    const [message] = await messagesFor(enrollment.id);
+    expect(message?.status).toBe("proposed");
+    const reviewed = await reviewMessage(db, {
+      messageId: message!.id,
+      action: { kind: "approve" },
+      actor: "operator",
+    });
+    expect(reviewed.ok).toBe(true);
+  });
+
+  // The same rule, for the pair the bug already created. An enrolment that is
+  // holding a proposal it cannot approve is unblocked by asking for the
+  // message again — which is what an operator does — even though generation
+  // finds the row already there and writes nothing.
+  it("unblocks an enrolment already holding a proposal it could not approve", async () => {
+    const fixture = await prospect({ acceptedEmail: true });
+    const enrollment = await enroll(fixture);
+    await drain();
+    const [message] = await messagesFor(enrollment.id);
+    await db
+      .update(schema.enrollments)
+      .set({
+        state: "manual_review",
+        nextActionAt: null,
+        nextActionToken: null,
+      })
+      .where(eq(schema.enrollments.id, enrollment.id));
+
+    await enqueueOperatorCommand(db, {
+      command: "generate-message",
+      payload: { enrollmentId: enrollment.id, stepIndex: 0 },
+      requestedBy: "operator",
+      dedupeKey: `ui:generate:${enrollment.id}:0:${crypto.randomUUID()}`,
+    });
+    await drain(new Date(NOW.getTime() + 60_000));
+
+    const reviewed = await reviewMessage(db, {
+      messageId: message!.id,
+      action: { kind: "approve" },
+      actor: "operator",
+    });
+    expect(reviewed.ok).toBe(true);
   });
 
   // The other half of the same rule: a deterministic generation costs no turn,

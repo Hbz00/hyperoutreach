@@ -25,6 +25,7 @@ import {
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import { interpolateStrict } from "@/modules/messages/interpolation";
+import { stepDeclaresPersonalization } from "@/modules/messages/personalization-declaration";
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -208,13 +209,12 @@ export async function readDueFollowUps(
     .orderBy(asc(enrollments.nextActionAt));
 
   return rows.map((row) => {
-    const declaresAiFields =
-      Array.isArray(
-        (row.personalizationSchema as { fields?: unknown }).fields,
-      ) &&
-      ((row.personalizationSchema as { fields: unknown[] }).fields.length ??
-        0) > 0;
-    if (declaresAiFields) {
+    // The tree's one answer to "does this step need an agent", rather than a
+    // fourth private copy of the shape check. The copy this replaces also
+    // dereferenced the column without a guard: `personalization_schema` is
+    // `jsonb not null`, which does not exclude the JSON value `null`, and a
+    // single such row would have taken the whole page down.
+    if (stepDeclaresPersonalization(row.personalizationSchema)) {
       return {
         enrollmentId: row.enrollmentId,
         contactName: row.contactFullName,

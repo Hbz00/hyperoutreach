@@ -132,9 +132,23 @@ the mock seed against it.
 All mutations re-authenticate the signed session and verify its exact CSRF token.
 Health, the Microsoft OAuth callback, and the Graph webhook are public; OAuth
 initiation requires either an operator session or the server-side bearer token.
-The application bounds failed login attempts per forwarded client address;
-operators should still apply a trusted reverse-proxy rate limit for distributed
-or multi-process deployments.
+The application bounds failed login attempts per forwarded client address and
+across all addresses. Those windows exist to damp noise and to keep a wrong
+password cheap; they are deliberately not what stops a determined guessing
+attack, and the trusted reverse-proxy rate limit is not optional advice for
+distributed or multi-process deployments — it is the bound.
+
+The reason is worth stating rather than leaving to be discovered. The forwarded
+address is written by the client, so an attacker rotates it and never meets
+their own window. Only the shared window is left, and a shared window that
+refuses everyone locks the single operator out of their own installation after
+a minute of anonymous requests from anywhere. So the credentials are evaluated
+before the windows decide, and a correct password is always admitted. The cost
+is that a wrong password answers 429 and a right one answers 303, which tells
+an attacker whether a guess was right. That is unavoidable here: "a correct
+password always works" and "an attacker cannot test passwords" are the same
+statement negated, and with one shared secret and no out-of-band recovery the
+availability of the account is the property worth keeping.
 
 Stop the local database without deleting its named volume:
 
@@ -430,7 +444,15 @@ safety-critical order:
 1. reconcile every available non-mock inbound mailbox and ingest/classify
    matched replies;
 2. reconcile due follow-ups;
-3. recover stale work.
+3. recover stale work, which also dispatches the sends the operator scheduled
+   for a later legal instant;
+4. drain the operator command queue — the research, discovery, resolution and
+   generation work a page asked for, run here rather than inside the request.
+
+The command queue is last on purpose: it is the only stage whose duration the
+operator chooses, and the three ahead of it keep the mailbox, the sequence and
+the send queue moving on every tick regardless. It spends at most one AI turn
+per cycle, because that turn holds the operator's single ChatGPT window.
 
 An inbound failure stops the cycle before any due send. Mailbox health also
 remains a deterministic send-policy gate. A process-local guard makes the next
@@ -500,8 +522,11 @@ or database lease. When diagnosing a production `npm start` process, invoke the
 same snippet with `NODE_ENV=production node --input-type=module` so Next's
 production `.env*` selection is preserved.
 
-Settings, and only Settings in this iteration, shows the persisted maintenance
-projection:
+Settings and `/outbound` both show the persisted maintenance projection —
+Settings as configuration state, `/outbound` because everything on that page is
+executed by the cycle and a queue that is merely slow must be distinguishable
+from one that is dead. Both read the same resolver and the same sanitized
+failure text; neither exposes the lease owner token. The six states are:
 
 - **Not started** — no cycle has ever been recorded;
 - **Running** — a cycle owns the lease and its heartbeat is current;
@@ -517,6 +542,12 @@ while its heartbeat is current. The no-owner overdue window is the greater of
 minutes with the default 600-second research deadline). Settings also shows the automation
 provider/mode, active-cycle timestamps when applicable, the last success, and a
 sanitized historical failure without exposing the lease token or credentials.
+
+`config/maintenance.json` carries the cycle's timings. `intervalMs`,
+`heartbeatIntervalMs`, `staleLeaseMs`, `aggregateBudgetMs`, `transportMarginMs`
+and the two shutdown grace values are read at runtime. `stageMaximumsMs` is
+not: it records how `aggregateBudgetMs` was derived from the four stages, and
+changing it alone changes nothing.
 
 For Trigger.dev Cloud, create a project, set `WORKFLOW_PROVIDER=trigger`,
 `TRIGGER_PROJECT_REF`, and the server-only `TRIGGER_SECRET_KEY`, then run:
