@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
@@ -5,6 +7,11 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import * as schema from "@/lib/db/schema";
+import type {
+  StructuredAIProvider,
+  StructuredResponseRequest,
+  StructuredResponseResult,
+} from "@/lib/ai/providers/types";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
 import { createOrGetAccount } from "@/modules/accounts/service";
 import {
@@ -19,6 +26,7 @@ import { acceptManualEmail } from "@/modules/email-resolution/manual-service";
 import { resolveContactEmail } from "@/modules/email-resolution/service";
 import {
   advanceAddressLadder,
+  applyConventionDemotion,
   latchConventionDemotions,
   liftConventionDemotion,
   readAddressLadderMetrics,
@@ -39,9 +47,19 @@ import { reviewMessage } from "@/modules/messages/review-service";
 import { sendApprovedMessage } from "@/modules/messages/send-service";
 import { ingestInboundMessage } from "@/modules/replies/inbound-service";
 import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
-import { listSuppressions } from "@/modules/suppression/service";
+import {
+  addSuppression,
+  listSuppressions,
+} from "@/modules/suppression/service";
 import { findDueEnrollments } from "@/modules/workflows/follow-up-service";
 import { readParkedEnrollments } from "@/modules/workflows/parked-enrollments";
+import {
+  drainOperatorCommands,
+  enqueueOperatorCommand,
+} from "@/modules/workflows/operator-command-queue";
+import { WorkflowRuntime } from "@/modules/workflows/runtime";
+import { createWorkflowTaskServices } from "@/modules/workflows/service-factory";
+import type { WorkflowTaskName } from "@/modules/workflows/task-contracts";
 
 const { testUrl } = resolveDatabaseUrls(process.env);
 const client = postgres(testUrl, { max: 8 });
@@ -293,21 +311,27 @@ async function hardBounce(
     receivedAt?: Date;
     /** The clock the ladder records this death against. */
     now?: Date;
+    /** A message other than the fixture's own, for a colleague's send. */
+    message?: typeof schema.messages.$inferSelect;
+    /** The mailbox that message left from, when it is not the fixture's. */
+    mailbox?: typeof schema.mailboxConnections.$inferSelect;
   } = {},
 ) {
-  if (!fixture.message) throw new Error("nothing was sent to bounce");
+  const inbox = overrides.mailbox ?? fixture.mailbox;
+  const bouncing = overrides.message ?? fixture.message;
+  if (!bouncing) throw new Error("nothing was sent to bounce");
   sequence += 1;
   return ingestInboundMessage(
     db,
     classifier,
     {
-      mailboxId: fixture.mailbox.id,
+      mailboxId: inbox.id,
       providerMessageId: `dsn-ladder-${sequence}`,
-      outreachId: fixture.message.outreachId ?? undefined,
-      conversationId: fixture.message.conversationId ?? undefined,
-      inReplyTo: fixture.message.internetMessageId ?? undefined,
+      outreachId: bouncing.outreachId ?? undefined,
+      conversationId: bouncing.conversationId ?? undefined,
+      inReplyTo: bouncing.internetMessageId ?? undefined,
       sender: "postmaster@example.net",
-      recipient: fixture.mailbox.email,
+      recipient: inbox.email,
       bouncedRecipient: overrides.bouncedRecipient ?? fixture.rungOne,
       subject: "Delivery status notification",
       body: "Recipient address rejected: user unknown",
@@ -371,6 +395,146 @@ async function setLadderSettings(
       ...overrides,
     })
     .where(eq(schema.operatorSendingSettings.id, 1));
+}
+
+/**
+ * The research surface behind the queue, answering the public-address question
+ * with a fixed set of samples.
+ *
+ * Used by the tests that walk the operator's own path: `resolve-email` reached
+ * through the queue runs the production bundle, not the static evidence
+ * provider the fixtures inject directly.
+ */
+class FixedSampleResearchProvider implements StructuredAIProvider {
+  constructor(private readonly samples: Array<Record<string, string>>) {}
+
+  async run<T>(
+    request: StructuredResponseRequest<T>,
+  ): Promise<StructuredResponseResult<T>> {
+    return {
+      responseId: `fixed_${randomUUID()}`,
+      model: request.model,
+      output: { samples: this.samples } as unknown as T,
+      sources: this.samples.map((sample) => ({
+        url: sample.sourceUrl!,
+        provenance: "model_declared_after_search" as const,
+      })),
+      usage: null,
+      toolUsage: null,
+      costUsd: null,
+      costAvailability: "unavailable" as const,
+    };
+  }
+}
+
+/**
+ * Drains the queue the way the maintenance cycle does, until it stops moving.
+ *
+ * One pass stops at its first AI turn by design, so a resolution followed by a
+ * generation needs more than one — looping until a pass drains nothing is what
+ * the cycle itself does.
+ */
+async function drainLadderCommands(
+  samples: Array<Record<string, string>>,
+): Promise<void> {
+  const provider = new FixedSampleResearchProvider(samples);
+  const services = createWorkflowTaskServices(
+    db,
+    { AI_PROVIDER: "chatgpt_desktop", MAIL_PROVIDER: "mock" },
+    {
+      createBundle: () => ({
+        mode: "chatgpt_desktop" as const,
+        usesRealInfrastructure: true,
+        research: {
+          provider,
+          model: "test-research-model",
+          effort: "High",
+          operationTimeoutMs: 30_000,
+        },
+        nonWeb: { provider, model: "test-fast-model", effort: "Instant" },
+      }),
+      createRealDns: () => new MockDnsMxResolver(true),
+      createMockDns: () => new MockDnsMxResolver(true),
+    },
+  );
+  for (let pass = 0; pass < 6; pass += 1) {
+    const drained = await drainOperatorCommands(db, (input) =>
+      new WorkflowRuntime(db, services).execute(
+        input.task as WorkflowTaskName,
+        input.payload,
+        { runId: input.runId, attempt: input.attempt },
+      ),
+    );
+    if (drained.length === 0) return;
+  }
+}
+
+/**
+ * Enrols one more contact of the fixture's company in the same campaign and
+ * puts step zero on the wire, so a second person at that company has a live
+ * message to bounce.
+ */
+async function sendFirstStep(
+  fixture: Awaited<ReturnType<typeof ladderFixture>>,
+  contactId: string,
+) {
+  /**
+   * Its own mailbox, deliberately.
+   *
+   * The inbound path locks the mailbox before the domain, so two bounces
+   * arriving on one mailbox serialise there and never contend for the domain
+   * lock at all — which would make a concurrency test about the domain lock
+   * prove nothing. Two mailboxes leave the domain as the only shared lock.
+   */
+  sequence += 1;
+  const [ownMailbox] = await db
+    .insert(schema.mailboxConnections)
+    .values({
+      provider: "mock",
+      email: `operator-peer-${sequence}@example.com`,
+      normalizedEmail: `operator-peer-${sequence}@example.com`,
+      status: "available",
+    })
+    .returning();
+  if (!ownMailbox) throw new Error("colleague mailbox missing");
+  const enrollment = await enrollContact(db, {
+    campaignId: fixture.campaign.id,
+    campaignVersionId: fixture.version.id,
+    contactId,
+    mailboxId: ownMailbox.id,
+  });
+  if (!enrollment.ok) throw new Error(enrollment.message);
+  const [accepted] = await db
+    .select()
+    .from(schema.emailCandidates)
+    .where(
+      and(
+        eq(schema.emailCandidates.contactId, contactId),
+        eq(schema.emailCandidates.status, "accepted"),
+      ),
+    )
+    .limit(1);
+  if (!accepted) throw new Error("colleague has no accepted address");
+  const proposal = await generateOutreachProposal(db, {
+    enrollmentId: enrollment.enrollment.id,
+    stepIndex: 0,
+    recipient: accepted.normalizedEmail,
+  });
+  if (!proposal.ok) throw new Error(proposal.message);
+  const review = await reviewMessage(db, {
+    messageId: proposal.message.id,
+    action: { kind: "approve" },
+    actor: "operator",
+  });
+  if (!review.ok) throw new Error(review.message);
+  const sent = await sendApprovedMessage(
+    db,
+    new MockMailProvider(),
+    { messageId: proposal.message.id },
+    { clock: () => sentAt },
+  );
+  if (!sent.ok) throw new Error(sent.code);
+  return { message: sent.message, mailbox: ownMailbox };
 }
 
 describe("address attempt ladder", () => {
@@ -2611,6 +2775,649 @@ describe("address attempt ladder", () => {
       // The old employer discredited `first.last` for itself. The new employer
       // never ran it, and its best-evidenced address stays ahead.
       expect(best!.ladderRank).toBeLessThan(second!.ladderRank);
+    });
+  });
+  /**
+   * Findings from a third, adversarial review of the ladder work.
+   *
+   * Each of these was reproduced against PostgreSQL before anything was
+   * changed, and each one is about the same seam: a contact who has changed
+   * employer holds candidate rows at two domains, and a verdict is always about
+   * one of them.
+   */
+  describe("address ladder — adversarial review", () => {
+    /**
+     * Gives one contact a set of candidate rows at a company they have left,
+     * exactly as an employer move leaves them: the rows survive, and every one
+     * of them is `rejected`.
+     */
+    async function formerEmployerRows(
+      contactId: string,
+      formerDomain: string,
+      rows: Array<{ local: string; pattern: string; ladderRank: number }>,
+    ) {
+      await db.insert(schema.emailCandidates).values(
+        rows.map((row) => ({
+          contactId,
+          email: `${row.local}@${formerDomain}`,
+          normalizedEmail: `${row.local}@${formerDomain}`,
+          domain: formerDomain,
+          pattern: row.pattern,
+          confidence: "0.970",
+          source: "public_pattern" as const,
+          status: "rejected" as const,
+          ladderRank: row.ladderRank,
+        })),
+      );
+    }
+
+    /**
+     * A demotion at the company somebody works at now must not reach back into
+     * the addresses of the company they left.
+     *
+     * `applyConventionDemotion` re-ranks the current company's ladder and then
+     * looks for a replacement — and the replacement was drawn from every row the
+     * contact holds, at any domain, whatever its status. A former employer's
+     * rejected row still carries the rank it was written with, so it sorted
+     * ahead of the surviving rung and became the address in use: a message
+     * addressed to a company the prospect has left, from a verdict that company
+     * never took part in.
+     */
+    it("does not promote a former employer's address when this company demotes a convention", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      const formerDomain = `former-${sequence}.example`;
+      await formerEmployerRows(fixture.contact.id, formerDomain, [
+        { local: "alice.former", pattern: "firstlast", ladderRank: 1 },
+      ]);
+
+      await db.transaction(async (tx) =>
+        applyConventionDemotion(tx, {
+          accountId: fixture.account.id,
+          domain: fixture.domain,
+          // Both of this company's conventions are discredited, so nothing it
+          // owns is a legal replacement and the correct answer is to change
+          // nothing.
+          demotedPatterns: new Set(["first.last", "f.last"]),
+        }),
+      );
+
+      const rows = await candidates(fixture.contact.id);
+      const accepted = rows.find((row) => row.status === "accepted");
+      expect(accepted?.domain).toBe(fixture.domain);
+      expect(rows.find((row) => row.domain === formerDomain)?.status).toBe(
+        "rejected",
+      );
+    });
+
+    /**
+     * The same seam, reached from the other side: restoring a convention at a
+     * company the prospect has left put that company's address back in use over
+     * the one their current employer's resolution had established.
+     */
+    it("does not put a former employer's address back in use when its convention is restored", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      const formerDomain = `former-lift-${sequence}.example`;
+      await formerEmployerRows(fixture.contact.id, formerDomain, [
+        { local: "alice.formerlift", pattern: "first.last", ladderRank: 1 },
+      ]);
+      await db.insert(schema.conventionDemotions).values({
+        domain: formerDomain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:00:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+      });
+
+      const acceptedBefore = (await candidates(fixture.contact.id)).find(
+        (row) => row.status === "accepted",
+      );
+      expect(acceptedBefore?.domain).toBe(fixture.domain);
+
+      const lifted = await liftConventionDemotion(db, {
+        domain: formerDomain,
+        pattern: "first.last",
+        actor: "operator@example.com",
+        justification: "The company confirmed the convention in writing",
+        confirmedConventionInUse: true,
+      });
+      expect(lifted).toMatchObject({ ok: true, disposition: "lifted" });
+
+      const rows = await candidates(fixture.contact.id);
+      const accepted = rows.find((row) => row.status === "accepted");
+      // The prospect's address in use still belongs to the company they work at.
+      expect(accepted?.normalizedEmail).toBe(acceptedBefore?.normalizedEmail);
+      expect(accepted?.domain).toBe(fixture.domain);
+    });
+
+    /**
+     * A restore reaches the ladders the verdict reordered — and no others.
+     *
+     * The regression this guards: scoping the restore to the domain must not
+     * quietly stop it doing its job for the contacts who are actually there.
+     */
+    it("still puts back the ladder of a contact who works where the convention was restored", async () => {
+      await setLadderSettings({ addressLadderDemotionMinimumPeople: 2 });
+      const fixture = await ladderFixture({ send: false });
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:00:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+      });
+      await db.transaction(async (tx) =>
+        applyConventionDemotion(tx, {
+          accountId: fixture.account.id,
+          domain: fixture.domain,
+          demotedPatterns: new Set(["first.last"]),
+        }),
+      );
+      expect(
+        (await candidates(fixture.contact.id)).find(
+          (row) => row.status === "accepted",
+        )?.normalizedEmail,
+      ).toBe(fixture.rungTwo);
+
+      const lifted = await liftConventionDemotion(db, {
+        domain: fixture.domain,
+        pattern: "first.last",
+        actor: "operator@example.com",
+        justification: "Checked with the company",
+        confirmedConventionInUse: true,
+      });
+      expect(lifted).toMatchObject({ ok: true, disposition: "lifted" });
+      expect(
+        (await candidates(fixture.contact.id)).find(
+          (row) => row.status === "accepted",
+        )?.normalizedEmail,
+      ).toBe(fixture.rungOne);
+    });
+
+    /**
+     * One bounce offers the operator one re-addressed message.
+     *
+     * A contact enrolled in two campaigns on the same address can have both
+     * messages in flight when the first failure comes back. The design settles
+     * it: the sibling stops on the suppression as it did before the ladder
+     * existed, because advancing both doubles a send the operator was offered
+     * once. The death is still recorded — that is a fact about the address.
+     */
+    it("advances one enrollment when the same dead address bounces in two campaigns", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      const second = await createDraftCampaign(db, {
+        name: `Sibling campaign ${sequence}`,
+        type: "commercial_outreach",
+        targetDescription: "Operations leaders",
+        configuration: {
+          automaticFollowUps: false,
+          holdNonTerminalReplies: true,
+          requireProfessionalRelevance: false,
+          campaignDailyCap: 100,
+        },
+        steps: [
+          {
+            delayMinutes: 0,
+            subjectTemplate: "Sibling {{first_name}}",
+            bodyTemplate: "Sibling body for {{company}}",
+          },
+        ],
+      });
+      if (!second.ok) throw new Error(second.message);
+      const publishedSecond = await publishCampaignVersion(db, {
+        campaignId: second.campaign.id,
+        campaignVersionId: second.version.id,
+      });
+      if (!publishedSecond.ok) throw new Error(publishedSecond.message);
+      const siblingEnrollment = await enrollContact(db, {
+        campaignId: second.campaign.id,
+        campaignVersionId: second.version.id,
+        contactId: fixture.contact.id,
+        mailboxId: fixture.mailbox.id,
+      });
+      if (!siblingEnrollment.ok) throw new Error(siblingEnrollment.message);
+      const siblingProposal = await generateOutreachProposal(db, {
+        enrollmentId: siblingEnrollment.enrollment.id,
+        stepIndex: 0,
+        recipient: fixture.rungOne,
+      });
+      if (!siblingProposal.ok) throw new Error(siblingProposal.message);
+      // Both messages left before either failure came back.
+      await db
+        .update(schema.messages)
+        .set({
+          status: "sent",
+          sentAt: sentAt,
+          sendAttemptedAt: sentAt,
+        })
+        .where(eq(schema.messages.id, siblingProposal.message.id));
+
+      await hardBounce(fixture);
+      const advancedFirst = await enrollmentRow(fixture.enrollmentId);
+      expect(advancedFirst.state).toBe("manual_review");
+
+      const siblingOutcome = await db.transaction(async (tx) =>
+        advanceAddressLadder(tx, {
+          messageId: siblingProposal.message.id,
+          now: new Date("2026-08-18T11:00:00.000Z"),
+          actor: "system:test",
+        }),
+      );
+      expect(siblingOutcome).toMatchObject({
+        kind: "not_advanced",
+        reason: "address_dead_on_another_message",
+        endsEnrollment: true,
+      });
+      // The sibling's own message is still recorded dead: that is a fact about
+      // the address, and the breaker counts it.
+      const [siblingMessage] = await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.id, siblingProposal.message.id))
+        .limit(1);
+      expect(siblingMessage?.addressDeadAt).not.toBeNull();
+      // Exactly one re-addressed message was asked for, and it is the first
+      // enrollment's. The sibling keeps only the generation its enrolment
+      // queued; nothing new was asked for on the back of this death.
+      const queued = await db
+        .select()
+        .from(schema.operatorCommands)
+        .where(eq(schema.operatorCommands.command, "generate-message"));
+      const readdressed = queued.filter(
+        (row) =>
+          row.dedupeKey?.includes(":after:") &&
+          (row.payload.enrollmentId === fixture.enrollmentId ||
+            row.payload.enrollmentId === siblingEnrollment.enrollment.id),
+      );
+      expect(readdressed).toHaveLength(1);
+      expect(readdressed[0]!.payload.enrollmentId).toBe(fixture.enrollmentId);
+    });
+    /**
+     * The way back from a parked prospect, walked the way the operator walks it.
+     *
+     * "A bound pauses; it never condemns" is only true if raising the bound and
+     * re-resolving actually produces a message somebody can approve. Every
+     * other test of this path calls the generator directly, which proves the
+     * generator works and not that the operator can reach it — so this one goes
+     * through the queue, the same commands the two buttons post, and ends with
+     * a send to the rung the bounce made necessary.
+     */
+    it("brings a parked prospect back through the operator's own queue", async () => {
+      await setLadderSettings({ addressLadderMaxAdvancesPerAccountPerDay: 0 });
+      /**
+       * The queue starts empty. Every fixture above enrols a contact, which
+       * queues a generation nothing in those tests ever drains — and the queue
+       * serves the oldest row first, so this test would drain forty of them
+       * before reaching its own and would be asserting on somebody else's
+       * message.
+       */
+      await db.delete(schema.operatorCommands);
+      const fixture = await ladderFixture();
+      /**
+       * The enrolment queues its own step-zero generation, and in a running
+       * installation the cycle has drained it long before any bounce. Draining
+       * it here is what makes the parked assertion below mean what it says:
+       * "parked" excludes an enrollment something is already queued to move.
+       */
+      await drainLadderCommands(fixture.publicSamples);
+      await hardBounce(fixture);
+
+      // Parked: the bound stopped the advance, and the review queue says so.
+      expect(await enrollmentRow(fixture.enrollmentId)).toMatchObject({
+        state: "manual_review",
+        currentStep: 0,
+        stopReason: null,
+        nextActionAt: null,
+      });
+      expect(
+        (await readParkedEnrollments(db)).some(
+          (row) => row.enrollmentId === fixture.enrollmentId,
+        ),
+      ).toBe(true);
+
+      // The operator raises the bound and asks the company again.
+      await setLadderSettings({});
+      await enqueueOperatorCommand(db, {
+        command: "resolve-email",
+        payload: { contactId: fixture.contact.id, confidenceThreshold: 0.85 },
+        requestedBy: "operator@example.com",
+        dedupeKey: `unpark:resolve:${fixture.contact.id}`,
+      });
+      await drainLadderCommands(fixture.publicSamples);
+      const afterResolve = await candidates(fixture.contact.id);
+      expect(
+        afterResolve.find((row) => row.status === "accepted")?.normalizedEmail,
+      ).toBe(fixture.rungTwo);
+
+      /**
+       * Still parked, deliberately. Resolution moves the address; it does not
+       * originate a send, and no first send in this product is
+       * system-originated.
+       */
+      expect((await enrollmentRow(fixture.enrollmentId)).state).toBe(
+        "manual_review",
+      );
+
+      // The second button: write the message for the step that bounced. No
+      // recipient is posted — the queue reads the rung that is now in use.
+      await enqueueOperatorCommand(db, {
+        command: "generate-message",
+        payload: { enrollmentId: fixture.enrollmentId, stepIndex: 0 },
+        requestedBy: "operator@example.com",
+        dedupeKey: `unpark:generate:${fixture.enrollmentId}`,
+      });
+      await drainLadderCommands(fixture.publicSamples);
+      const [proposed] = await db
+        .select()
+        .from(schema.messages)
+        .where(
+          and(
+            eq(schema.messages.enrollmentId, fixture.enrollmentId),
+            eq(schema.messages.direction, "outbound"),
+            isNull(schema.messages.addressDeadAt),
+          ),
+        );
+      expect(proposed).toMatchObject({
+        recipient: fixture.rungTwo,
+        stepIndex: 0,
+        status: "proposed",
+      });
+
+      // Approved by a human, then sent — the ladder never sends anything itself.
+      const review = await reviewMessage(db, {
+        messageId: proposed!.id,
+        action: { kind: "approve" },
+        actor: "operator",
+      });
+      expect(review.ok).toBe(true);
+      const sent = await sendApprovedMessage(
+        db,
+        fixture.provider,
+        { messageId: proposed!.id },
+        { clock: () => new Date("2026-08-19T10:00:00.000Z") },
+      );
+      expect(sent).toMatchObject({ ok: true, disposition: "sent" });
+      expect(
+        (await readParkedEnrollments(db)).some(
+          (row) => row.enrollmentId === fixture.enrollmentId,
+        ),
+      ).toBe(false);
+      // The dead address stays permanently suppressed through all of it.
+      const suppressions = await listSuppressions(db, { scope: "email" });
+      expect(
+        suppressions.some((entry) => entry.normalizedValue === fixture.rungOne),
+      ).toBe(true);
+    });
+
+    /**
+     * Two people at one company, proven dead at the same moment on two
+     * connections, still latch the verdict their combined record supports.
+     *
+     * Under `read committed` each transaction sees only its own death, so each
+     * counts one and neither reaches the two-person floor — unless something
+     * serialises them. That something is the domain action lock the *inbound*
+     * bounce path takes, and this test guards it: two mailboxes, two
+     * enrolments, two recipients, so the domain is the only lock they share.
+     *
+     * It says nothing about the refusal path, which takes its own lock and has
+     * its own test ("waits for the company's lock before recording a refusal").
+     * Stated because the two paths reach the same delivery record by different
+     * routes, and a reader who assumed one test covered both would be wrong.
+     */
+    it("latches a verdict two simultaneous deaths reached together", async () => {
+      await setLadderSettings({ addressLadderDemotionMinimumPeople: 2 });
+      const fixture = await ladderFixture({ extraContacts: 1 });
+      const colleague = fixture.colleagues[0]!;
+      const peer = await sendFirstStep(fixture, colleague.id);
+
+      await Promise.all([
+        hardBounce(fixture),
+        hardBounce(fixture, {
+          message: peer.message,
+          mailbox: peer.mailbox,
+          bouncedRecipient: peer.message.recipient,
+        }),
+      ]);
+
+      const latched = await db
+        .select()
+        .from(schema.conventionDemotions)
+        .where(eq(schema.conventionDemotions.domain, fixture.domain));
+      expect(latched).toHaveLength(1);
+      expect(latched[0]).toMatchObject({
+        pattern: "first.last",
+        liftedAt: null,
+      });
+      expect(latched[0]!.peopleProvenDead).toBeGreaterThanOrEqual(2);
+    });
+    /**
+     * A definite recipient refusal discovered while *resuming* a claimed send.
+     *
+     * This is the one path that reaches the delivery record without any action
+     * lock of its own — a reconciliation, not a send — and it is now the path
+     * that acquires the domain lock before opening its transaction. Everything
+     * else that records a death either holds that lock already or arrives
+     * through the inbound bounce path, so without this test the acquisition
+     * itself was never executed: the send-path refusal enters the same function
+     * having already taken the lock and skips it entirely.
+     */
+    it("advances the ladder from a refusal found while resuming a claimed send", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      await db
+        .update(schema.mailboxConnections)
+        .set({ provider: "smtp_imap" })
+        .where(eq(schema.mailboxConnections.id, fixture.mailbox.id));
+      const proposal = await generateOutreachProposal(db, {
+        enrollmentId: fixture.enrollmentId,
+        stepIndex: 0,
+        recipient: fixture.rungOne,
+      });
+      if (!proposal.ok) throw new Error(proposal.message);
+      const approved = await reviewMessage(db, {
+        messageId: proposal.message.id,
+        action: { kind: "approve" },
+        actor: "operator",
+      });
+      expect(approved.ok).toBe(true);
+      // Left exactly as a process that died mid-send leaves it: claimed, in
+      // flight, with a provider draft and nothing confirmed.
+      await db
+        .update(schema.messages)
+        .set({
+          status: "sending",
+          providerDraftId: `draft-resume-${sequence}`,
+          sendAttemptToken: randomUUID(),
+          sendClaimedAt: sentAt,
+        })
+        .where(eq(schema.messages.id, proposal.message.id));
+
+      const mock = new MockMailProvider();
+      const refusing: MailProvider = {
+        kind: "smtp_imap",
+        createDraft: (input) => mock.createDraft(input),
+        sendDraft: () => {
+          throw new Error("the resumed send must not be attempted again");
+        },
+        reconcile: async (input) => ({
+          status: "rejected",
+          draftId: input.draftId!,
+          responseCode: 550,
+          response: "550 5.1.1 No such user",
+          smtpErrorCode: "EENVELOPE",
+          hardBounce: true,
+        }),
+      };
+      const outcome = await sendApprovedMessage(
+        db,
+        refusing,
+        { messageId: proposal.message.id },
+        { clock: () => bouncedAt },
+      );
+      expect(outcome).toMatchObject({ ok: false, code: "PERMANENT_REJECTION" });
+
+      // The address is dead, permanently suppressed, and the prospect is on the
+      // next rung with a message queued for the operator to approve.
+      const [dead] = await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.id, proposal.message.id));
+      expect(dead?.addressDeadAt).not.toBeNull();
+      expect(
+        (await listSuppressions(db, { scope: "email" })).some(
+          (entry) => entry.normalizedValue === fixture.rungOne,
+        ),
+      ).toBe(true);
+      const rows = await candidates(fixture.contact.id);
+      expect(
+        rows.find((row) => row.status === "accepted")?.normalizedEmail,
+      ).toBe(fixture.rungTwo);
+      expect((await enrollmentRow(fixture.enrollmentId)).state).toBe(
+        "manual_review",
+      );
+    });
+    /**
+     * The refusal path waits for the company's action lock before it touches
+     * that company's delivery record.
+     *
+     * Proved by holding the lock from outside rather than by racing two
+     * refusals: a race would pass or fail on timing, and a test that only
+     * usually fails is worse than no test. Here the lock is taken on a
+     * connection of this test's own, the refusal is started, and the assertion
+     * is that it has not written anything while the lock is held — which is
+     * exactly what is false when the acquisition is removed, because the path
+     * then goes straight to its transaction.
+     *
+     * What it buys: two refusals at one company under `read committed` each see
+     * only their own death, so each counts one, neither reaches the
+     * two-distinct-people floor, and the verdict is never written down —
+     * leaving it to a live ratio that later attempts reporting nothing dilute
+     * away. That is silence restoring a convention, which is the one thing the
+     * latch exists to prevent.
+     */
+    it("waits for the company's lock before recording a refusal", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      await db
+        .update(schema.mailboxConnections)
+        .set({ provider: "smtp_imap" })
+        .where(eq(schema.mailboxConnections.id, fixture.mailbox.id));
+      const proposal = await generateOutreachProposal(db, {
+        enrollmentId: fixture.enrollmentId,
+        stepIndex: 0,
+        recipient: fixture.rungOne,
+      });
+      if (!proposal.ok) throw new Error(proposal.message);
+      const approved = await reviewMessage(db, {
+        messageId: proposal.message.id,
+        action: { kind: "approve" },
+        actor: "operator",
+      });
+      expect(approved.ok).toBe(true);
+      await db
+        .update(schema.messages)
+        .set({
+          status: "sending",
+          providerDraftId: `draft-lock-${sequence}`,
+          sendAttemptToken: randomUUID(),
+          sendClaimedAt: sentAt,
+        })
+        .where(eq(schema.messages.id, proposal.message.id));
+
+      const mock = new MockMailProvider();
+      const refusing: MailProvider = {
+        kind: "smtp_imap",
+        createDraft: (input) => mock.createDraft(input),
+        sendDraft: () => {
+          throw new Error("the resumed send must not be attempted again");
+        },
+        reconcile: async (input) => ({
+          status: "rejected",
+          draftId: input.draftId!,
+          responseCode: 550,
+          response: "550 5.1.1 No such user",
+          smtpErrorCode: "EENVELOPE",
+          hardBounce: true,
+        }),
+      };
+
+      // The same key `withActionLocks` builds, held on a connection nothing
+      // else in this test uses.
+      const holder = postgres(testUrl, { max: 1 });
+      const lockKey = `domain:${fixture.domain}`;
+      const dead = async () => {
+        const [row] = await db
+          .select({ addressDeadAt: schema.messages.addressDeadAt })
+          .from(schema.messages)
+          .where(eq(schema.messages.id, proposal.message.id))
+          .limit(1);
+        return row?.addressDeadAt ?? null;
+      };
+      let refusal: ReturnType<typeof sendApprovedMessage>;
+      try {
+        await holder`select pg_advisory_lock(hashtextextended(${lockKey}, 0))`;
+        refusal = sendApprovedMessage(
+          db,
+          refusing,
+          { messageId: proposal.message.id },
+          { clock: () => bouncedAt },
+        );
+        // Long enough for the whole refusal to have run several times over if
+        // nothing were holding it: the transaction it is waiting on is a
+        // handful of statements.
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        expect(await dead()).toBeNull();
+      } finally {
+        await holder`select pg_advisory_unlock(hashtextextended(${lockKey}, 0))`;
+        await holder.end();
+      }
+      // And once the lock is free it completes exactly as it does alone.
+      expect(await refusal).toMatchObject({
+        ok: false,
+        code: "PERMANENT_REJECTION",
+      });
+      expect(await dead()).not.toBeNull();
+    });
+    /**
+     * The blocked-rung list answers for every company the contact holds rows
+     * at, not for whichever one happened to come back first.
+     *
+     * A domain-scoped suppression blocks every address on that domain, so the
+     * domain has to be asked about rather than inferred from the addresses —
+     * and a contact who changed employer holds rows at two. Asking once with
+     * the first row's domain was wrong in both orderings: it either missed the
+     * suppressed company's rungs entirely, or reported the *other* company's
+     * rungs as blocked by a suppression that has nothing to do with them. This
+     * asserts the exact set, so either mistake fails it.
+     */
+    it("names the blocked rungs of every company the contact holds", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      const formerDomain = `former-blocked-${sequence}.example`;
+      await formerEmployerRows(fixture.contact.id, formerDomain, [
+        { local: "alice.formerblocked", pattern: "first.last", ladderRank: 1 },
+        { local: "a.formerblocked", pattern: "f.last", ladderRank: 2 },
+      ]);
+      const suppressed = await addSuppression(db, {
+        scope: "domain",
+        value: formerDomain,
+        reason: "manual",
+        actor: "operator@example.com",
+        notes: "The former employer asked to be left alone",
+      });
+      expect(suppressed.ok).toBe(true);
+
+      const blocked = await readBlockedRungs(db, fixture.contact.id);
+      expect([...blocked].sort()).toEqual([
+        `a.formerblocked@${formerDomain}`,
+        `alice.formerblocked@${formerDomain}`,
+      ]);
+      // And the current employer's ladder is untouched by a suppression that
+      // belongs to a company the prospect has left.
+      expect(blocked.has(fixture.rungOne)).toBe(false);
+      expect(blocked.has(fixture.rungTwo)).toBe(false);
     });
   });
 });

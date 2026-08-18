@@ -222,3 +222,20 @@ export function isLadderCircuitOpen(input: {
     input.sendsProvenDead * 100 >= input.sendsAttempted * input.thresholdPercent
   );
 }
+
+/**
+ * The refusals that are a bound the operator sets, and can therefore raise.
+ *
+ * One list, because three things have to agree about it and a hand-written copy
+ * in any of them would go stale silently: whether the prospect is parked rather
+ * than ended, whether the contact reads "a bound stopped the attempt", and
+ * whether the parked list can name the setting to change. A fourth bound added
+ * here fails the presentation guard until it has a sentence, which is the point.
+ *
+ * Lives in the pure module so the guard can read it without a database.
+ */
+export const LADDER_PARKING_REASONS = [
+  "circuit_open",
+  "account_daily_cap",
+  "rung_ceiling",
+] as const;

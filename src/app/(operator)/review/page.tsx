@@ -23,6 +23,7 @@ import {
   readLadderSettings,
 } from "@/modules/email-resolution/ladder-service";
 import {
+  describeLadderHold,
   describeResolutionReason,
   describeStatus,
   describeStopReason,
@@ -261,8 +262,20 @@ export default async function ReviewPage({
               item.accountId === row.account.id ||
               item.contactId === row.contact.id,
           );
+          /**
+           * The ladder of the company this message is addressed at, only.
+           *
+           * A contact who has changed employer keeps the candidate rows of the
+           * company they left, and a ladder belongs to one company. Counting
+           * them all inflated "rung 2 of 5" with addresses this message was
+           * never going to use, and compared confidences across two companies
+           * to decide whether the order here was a tie. The prospect page has
+           * always scoped it this way; this is the same rule.
+           */
           const contactLadder = ladderRows.filter(
-            (candidate) => candidate.contactId === row.contact.id,
+            (candidate) =>
+              candidate.contactId === row.contact.id &&
+              candidate.domain === row.acceptedEmail?.domain,
           );
           const demoted =
             demotedByDomain.get(row.acceptedEmail?.domain ?? "") ??
@@ -642,6 +655,17 @@ export default async function ReviewPage({
                       {row.resolutionReason
                         ? describeResolutionReason(row.resolutionReason)
                         : "waiting on a decision"}
+                      {/* Naming the bound is what turns "raise a setting" into
+                          an instruction: three of them produce the same
+                          sentence above and only one of them is in the way. */}
+                      {row.heldBy && describeLadderHold(row.heldBy) ? (
+                        <>
+                          <br />
+                          <span className="muted">
+                            {describeLadderHold(row.heldBy)}
+                          </span>
+                        </>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

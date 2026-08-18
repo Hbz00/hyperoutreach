@@ -5,8 +5,9 @@
 > passent désormais par l’app ChatGPT desktop de l’opérateur ; l’adaptateur API a
 > été supprimé et l’adaptateur Codex débranché. Les contrats d’agents, les schémas,
 > les preuves et le reste de l’architecture décrits ici restent valables ; `README.md`
-> fait foi pour le chemin IA courant. Le produit a evolue depuis et ce document peut 
-> ne plus être 100% d'actualité. Le code source est la seule source de verité.
+> fait foi pour le chemin IA courant. Le produit a évolué depuis et ce document
+> peut ne plus être totalement à jour. Le code source est la seule source de
+> vérité.
 
 ## 1. Conclusion d’architecture
 

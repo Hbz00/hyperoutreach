@@ -34,6 +34,7 @@ import {
   isConventionDemoted,
   isLadderCircuitOpen,
   LADDER_FAILURE_WINDOW_MS,
+  LADDER_PARKING_REASONS,
   rankLadderRungs,
 } from "@/modules/email-resolution/ladder";
 
@@ -633,14 +634,27 @@ async function promoteBestUsableRung(
         (row.pattern === null || !input.demotedPatterns.has(row.pattern)),
     )
     .sort((left, right) => left.ladderRank - right.ladderRank)[0];
+  /**
+   * The address in use at *this* company, and nothing else.
+   *
+   * `rows` is scoped to the domain, so a contact who has since changed employer
+   * has no accepted row here — and this must then do nothing. Without the check
+   * a restore at a company the prospect has left promoted one of that company's
+   * rows, and the un-accept below, which was not domain-scoped, took the address
+   * their *current* employer's resolution had established out of use to make
+   * room for it. Putting an order back is only ever a re-pointing of an
+   * acceptance this domain already holds; it never creates one.
+   */
   const accepted = rows.find((row) => row.status === "accepted");
-  if (!best || accepted?.normalizedEmail === best.normalizedEmail) return false;
+  if (!accepted) return false;
+  if (!best || accepted.normalizedEmail === best.normalizedEmail) return false;
   await tx
     .update(emailCandidates)
     .set({ status: "candidate" })
     .where(
       and(
         eq(emailCandidates.contactId, input.contactId),
+        eq(emailCandidates.domain, input.domain),
         eq(emailCandidates.status, "accepted"),
       ),
     );
@@ -953,10 +967,27 @@ export async function readBlockedRungs(
     .from(emailCandidates)
     .where(eq(emailCandidates.contactId, contactId));
   if (rows.length === 0) return new Set();
-  return readSuppressedAddresses(db, {
-    addresses: rows.map((row) => row.normalizedEmail),
-    domain: rows[0]!.domain,
-  });
+  /**
+   * Asked once per domain the contact holds rows at.
+   *
+   * A domain-scoped suppression entry blocks every address on that domain, so
+   * the domain has to be asked about rather than inferred from the addresses —
+   * and a contact who has changed employer holds rows at two of them. Asking
+   * with the first row's domain answered for one company and silently reported
+   * the other's blocked rungs as usable, on the page whose whole job is to show
+   * the operator which rungs are blocked.
+   */
+  const blocked = new Set<string>();
+  for (const domain of new Set(rows.map((row) => row.domain))) {
+    const here = await readSuppressedAddresses(db, {
+      addresses: rows
+        .filter((row) => row.domain === domain)
+        .map((row) => row.normalizedEmail),
+      domain,
+    });
+    for (const address of here) blocked.add(address);
+  }
+  return blocked;
 }
 
 export type LadderCircuitState = {
@@ -1084,6 +1115,7 @@ export type LadderStopReason =
   | "all_remaining_suppressed"
   | "undelivered_send_outstanding"
   | "employment_changed"
+  | "address_dead_on_another_message"
   | "enrollment_ended"
   | "already_recorded"
   | "unknown_message";
@@ -1120,19 +1152,19 @@ export type LadderAdvanceOutcome =
  * ended, or the feature deliberately switched off — which is a request to behave
  * exactly as the product did before the ladder existed.
  */
+const PARKING_REASONS: ReadonlySet<LadderStopReason> =
+  new Set<LadderStopReason>(LADDER_PARKING_REASONS);
+
 function refusalEndsEnrollment(reason: LadderStopReason): boolean {
-  switch (reason) {
-    case "circuit_open":
-    case "account_daily_cap":
-    case "rung_ceiling":
-      return false;
-    // Another call already decided what happens to this enrollment. Writing a
-    // terminal outcome over the top would undo an advance it may have made.
-    case "already_recorded":
-      return false;
-    default:
-      return true;
-  }
+  // Read from the shared list rather than repeated here, so a fourth bound
+  // cannot park a prospect in one place and end them in another. The typed
+  // `Set` is also what makes the list a compile error if it ever names a
+  // refusal that is not a stop reason.
+  if (PARKING_REASONS.has(reason)) return false;
+  // Another call already decided what happens to this enrollment. Writing a
+  // terminal outcome over the top would undo an advance it may have made.
+  if (reason === "already_recorded") return false;
+  return true;
 }
 
 /**
@@ -1184,6 +1216,13 @@ function contactReasonFor(
     case "enrollment_ended":
     case "already_recorded":
     case "unknown_message":
+    /**
+     * Another message already answered for this address, and the answer is on
+     * the contact already: the ladder that advanced wrote the rung now in use.
+     * Writing anything here would overwrite a live resolution with a verdict
+     * about an address that is no longer the one being tried.
+     */
+    case "address_dead_on_another_message":
       return null;
     /**
      * The ladder is switched off, so this bounce ended the prospect exactly as
@@ -1303,7 +1342,11 @@ export async function advanceAddressLadder(
 
   const settings = await readLadderSettings(tx);
   const [dying] = await tx
-    .select({ id: emailCandidates.id, pattern: emailCandidates.pattern })
+    .select({
+      id: emailCandidates.id,
+      pattern: emailCandidates.pattern,
+      deadAt: emailCandidates.deadAt,
+    })
     .from(emailCandidates)
     .where(
       and(
@@ -1473,6 +1516,26 @@ export async function advanceAddressLadder(
   };
 
   if (employmentChanged) return refuse("employment_changed");
+  /**
+   * The same address, proven dead once, advances one ladder.
+   *
+   * A contact enrolled in a second campaign can have both messages in flight
+   * when the first failure comes back, and each one is a different message — so
+   * the `address_dead_at` compare-and-swap above, which stops one death being
+   * counted twice, says nothing about this. What does say it is the candidate
+   * row: it was already dead when this report arrived, which means another
+   * message proved this address and the operator has already been offered the
+   * re-addressed message it produced.
+   *
+   * Advancing again would offer a second copy at the same new address, to the
+   * same human, which is what the send policy exists to prevent. So the sibling
+   * stops on the suppression exactly as it did before the ladder existed — its
+   * own message is still recorded dead a moment earlier, because that is a fact
+   * about the address and the circuit breaker counts it.
+   */
+  if (dying && dying.deadAt !== null) {
+    return refuse("address_dead_on_another_message");
+  }
   /**
    * A sequence somebody *ended* is never resurrected by a late delivery failure.
    *
@@ -1799,16 +1862,31 @@ export async function applyConventionDemotion(
         deadAt: emailCandidates.deadAt,
       })
       .from(emailCandidates)
-      .where(eq(emailCandidates.contactId, candidateContact.id));
+      /**
+       * This company's rows only, exactly as the re-ranking above.
+       *
+       * A contact who has changed employer keeps the rows of the company they
+       * left, and those rows still carry the rank they were written with —
+       * nothing re-ranks a domain no verdict was reached at. Drawing the
+       * replacement from every row the contact holds therefore let a former
+       * employer's address, never re-ranked and still at rung one, outrank this
+       * company's surviving rung and become the address in use: a message
+       * offered to a company the prospect has left, on the strength of a
+       * verdict that company took no part in.
+       */
+      .where(
+        and(
+          eq(emailCandidates.contactId, candidateContact.id),
+          eq(emailCandidates.domain, input.domain),
+        ),
+      );
     const accepted = rows.find((row) => row.status === "accepted");
     if (!accepted?.pattern || !input.demotedPatterns.has(accepted.pattern)) {
       continue;
     }
     const suppressed = await readSuppressedAddresses(tx, {
       addresses: rows.map((row) => row.normalizedEmail),
-      domain: accepted.normalizedEmail.slice(
-        accepted.normalizedEmail.lastIndexOf("@") + 1,
-      ),
+      domain: input.domain,
     });
     const replacement = rows
       .filter(
@@ -1826,6 +1904,7 @@ export async function applyConventionDemotion(
       .where(
         and(
           eq(emailCandidates.contactId, candidateContact.id),
+          eq(emailCandidates.domain, input.domain),
           eq(emailCandidates.status, "accepted"),
         ),
       );
@@ -1868,6 +1947,23 @@ export type AddressLadderMetrics = {
   exhausted: number;
   /** Prospects an untried address remains for, stopped by a bound. */
   limited: number;
+  /**
+   * The two bounds that had no measurement beside them.
+   *
+   * A bound the operator sets and cannot see biting is a number they tune
+   * blind. The circuit breaker always showed its share; the per-company daily
+   * cap and the per-contact rung ceiling showed nothing, so the only way to
+   * learn either was in the way — a prospect parked with `ladder_limit_reached`
+   * — was to read an audit row.
+   *
+   * `busiestAccountAdvances` is what the cap is actually compared against: the
+   * cap is per company, so a total across companies could sit far above it
+   * without any single company being near it.
+   */
+  advancesLastDay: number;
+  busiestAccountAdvances: number;
+  /** Prospects who have spent every address the rung ceiling allows. */
+  atRungCeiling: number;
   sendsAttempted: number;
   sendsProvenDead: number;
   sendsAcknowledged: number;
@@ -1921,12 +2017,59 @@ export async function readAddressLadderMetrics(
         when ${contacts.emailResolutionReason} = 'ladder_limit_reached' then 1 end)::int`,
     })
     .from(contacts);
+  /**
+   * The advance bound's own measurement, over the same rolling day the bound
+   * counts, and grouped the way the bound is applied: per company.
+   */
+  const advanceRows = await db
+    .select({
+      accountId: contacts.accountId,
+      advances: sql<number>`count(*)::int`,
+    })
+    .from(emailCandidates)
+    .innerJoin(contacts, eq(contacts.id, emailCandidates.contactId))
+    .where(
+      gte(
+        emailCandidates.advancedAt,
+        new Date(input.now.getTime() - 24 * 60 * 60_000),
+      ),
+    )
+    .groupBy(contacts.accountId);
+  /**
+   * Addresses spent, per person per company, which is exactly what the ceiling
+   * counts — an attempt that never reached the send transaction still proves
+   * the address does not exist, so a death counts whether or not the attempt
+   * clock was stamped.
+   */
+  const atCeiling = await db
+    .select({ contactId: emailCandidates.contactId })
+    .from(emailCandidates)
+    .where(
+      or(
+        isNotNull(emailCandidates.firstAttemptedAt),
+        isNotNull(emailCandidates.deadAt),
+      ),
+    )
+    .groupBy(emailCandidates.contactId, emailCandidates.domain)
+    .having(sql`count(*) >= ${settings.maxRungs}`);
   return {
     onFirstRung: rungs?.onFirstRung ?? 0,
     onLaterRung: rungs?.onLaterRung ?? 0,
     advanced: rungs?.advanced ?? 0,
     exhausted: stopped?.exhausted ?? 0,
     limited: stopped?.limited ?? 0,
+    advancesLastDay: advanceRows.reduce(
+      (total, row) => total + row.advances,
+      0,
+    ),
+    busiestAccountAdvances: advanceRows.reduce(
+      (most, row) => Math.max(most, row.advances),
+      0,
+    ),
+    // Distinct people, which is the word on the label. The grouping above is
+    // per person *per company*, because the ceiling is — so somebody who
+    // changed employer and reached it at both would otherwise be counted twice.
+    atRungCeiling: new Set(atCeiling.map((row) => row.contactId)).size,
     sendsAttempted: circuit.sendsAttempted,
     sendsProvenDead: circuit.sendsProvenDead,
     sendsAcknowledged: circuit.sendsAcknowledged,

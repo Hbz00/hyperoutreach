@@ -391,7 +391,7 @@ refusals stay on the existing retry path. A report naming a different recipient
 than the one addressed advances nothing. Silence is never a signal in either
 direction: it is not read as delivery and not read as failure.
 
-Five rules bound what may advance:
+Six rules bound what may advance:
 
 - Every _attempted_ message on the enrollment must be proven dead. One that was
   attempted and is not — including one whose delivery is merely uncertain — blocks
@@ -402,6 +402,11 @@ Five rules bound what may advance:
 - A sequence somebody _ended_ is never resurrected. The one terminal state that
   may advance is a sequence that completed by running out of steps, which is where
   a one-step campaign lives.
+- One death advances one ladder. A contact enrolled in a second campaign can have
+  both messages in flight when the first failure comes back; the second one is
+  recorded dead — the breaker counts it — and then stops on the suppression exactly
+  as it did before the ladder existed, because advancing it too would offer a
+  second copy at the same new address to the same human.
 - The contact's employment must not have changed since the dead message.
 - A suppressed address is never offered as a rung, and says so. A suppression is
   permanent and keyed on the address alone, so a colleague's failed guess can own
@@ -513,7 +518,9 @@ prospects there deliberately, and any other silent failure to queue work lands
 there too. They are never resumed automatically — an advance is a send, and no
 first send in this product is system-originated — so the list links to the
 prospect, where resolving the company again promotes whichever address is still
-standing.
+standing. Each row names the bound that is in the way, because three settings
+produce the same `ladder_limit_reached` sentence and raising the wrong one
+changes nothing.
 
 Accepting an address **by hand** overrides confidence, MX and evidence, and
 deliberately does not override delivery: an address a bounce has already proven

@@ -11,6 +11,17 @@ export type ParkedEnrollment = {
   accountName: string;
   campaignName: string;
   resolutionReason: string | null;
+  /**
+   * Which bound stopped the advance, when a bound is what did.
+   *
+   * The contact's reason says "an address remains, but a ladder bound stopped
+   * the attempt", which is the right sentence and only half an instruction:
+   * three different settings can produce it and raising the wrong one changes
+   * nothing. The specific bound was already being written to the audit event
+   * the ladder emits; nothing was reading it back, so the one screen that
+   * exists to make a parked prospect actionable could not say what to do.
+   */
+  heldBy: string | null;
 };
 
 /**
@@ -39,6 +50,20 @@ export async function readParkedEnrollments(
       accountName: accounts.name,
       campaignName: campaigns.name,
       resolutionReason: contacts.emailResolutionReason,
+      // The most recent hold, because a prospect can be parked, released and
+      // parked again by a different bound. Written out rather than
+      // interpolated: Drizzle qualifies an interpolated column inside a `where`
+      // fragment but not inside a select projection, where the bare name would
+      // bind to this subquery's own table.
+      heldBy: sql<string | null>`(
+        select held.payload->>'reason'
+        from workflow_events held
+        where held.entity_type = 'enrollment'
+          and held.entity_id = enrollments.id
+          and held.workflow_name = 'address_ladder'
+          and held.event = 'address_ladder.held'
+        order by held.completed_at desc nulls last, held.created_at desc
+        limit 1)`,
     })
     .from(enrollments)
     .innerJoin(contacts, eq(contacts.id, enrollments.contactId))

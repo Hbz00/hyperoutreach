@@ -670,4 +670,182 @@ describe("populated migration upgrades", () => {
     expect(requestedAt.get(proposed)).toBeNull();
     expect(requestedAt.get(sent)).toBeNull();
   });
+  /**
+   * Every migration up to and including `tag`, read from the journal rather
+   * than listed by hand.
+   *
+   * The tests above name their files one by one, which was workable at eleven
+   * migrations and is how migrations 0028 onwards came to have no populated
+   * coverage at all: nobody extends a thirty-entry literal. The journal is the
+   * same order the migrator uses, so this cannot drift from it.
+   */
+  async function applyMigrationsThrough(tag: string): Promise<void> {
+    const journal = JSON.parse(
+      await readFile("drizzle/meta/_journal.json", "utf8"),
+    ) as { entries: Array<{ idx: number; tag: string }> };
+    const target = journal.entries.find((entry) => entry.tag === tag);
+    if (!target) throw new Error(`No migration tagged ${tag}`);
+    for (const entry of journal.entries
+      .filter((candidate) => candidate.idx <= target.idx)
+      .sort((left, right) => left.idx - right.idx)) {
+      await applyMigration(`${entry.tag}.sql`);
+    }
+  }
+
+  /**
+   * The address ladder arrives on a database that already holds candidates and
+   * messages.
+   *
+   * Two things could have gone wrong and neither is visible on a fresh
+   * database: a `not null` column with a default has to land on populated rows,
+   * and the step-uniqueness index is *narrowed* in place — dropped and rebuilt
+   * with `address_dead_at is null` added to its predicate — which builds
+   * against whatever rows are already there.
+   */
+  it("brings the address ladder to a populated database", async () => {
+    await applyMigrationsThrough("0032_message_send_intent_expiry");
+    const [{ accountId }] = await client<[{ accountId: string }]>`
+      insert into accounts (name, normalized_name, domain)
+      values ('Populated Ladder', 'populated ladder', 'populated-ladder.example')
+      returning id as "accountId"
+    `;
+    const [{ contactId }] = await client<[{ contactId: string }]>`
+      insert into contacts (account_id, first_name, last_name, full_name, normalized_full_name)
+      values (${accountId}, 'Alice', 'Legacy', 'Alice Legacy', 'alice legacy')
+      returning id as "contactId"
+    `;
+    for (const [local, pattern, status] of [
+      ["alice.legacy", "first.last", "accepted"],
+      ["a.legacy", "f.last", "candidate"],
+      ["alicelegacy", "firstlast", "candidate"],
+    ] as const) {
+      await client`
+        insert into email_candidates (contact_id, email, normalized_email, domain, pattern, confidence, source, status)
+        values (${contactId}, ${`${local}@populated-ladder.example`},
+          ${`${local}@populated-ladder.example`}, 'populated-ladder.example',
+          ${pattern}, 0.900, 'public_pattern', ${status}::email_candidate_status)
+      `;
+    }
+    const [{ campaignId }] = await client<[{ campaignId: string }]>`
+      insert into campaigns (name, type, target_description)
+      values ('Legacy', 'commercial_outreach', 'Legacy targets')
+      returning id as "campaignId"
+    `;
+    const [{ versionId }] = await client<[{ versionId: string }]>`
+      insert into campaign_versions (campaign_id, version, configuration, published_at)
+      values (${campaignId}, 1, '{}', now()) returning id as "versionId"
+    `;
+    const [{ enrollmentId }] = await client<[{ enrollmentId: string }]>`
+      insert into enrollments (campaign_id, campaign_version_id, contact_id)
+      values (${campaignId}, ${versionId}, ${contactId})
+      returning id as "enrollmentId"
+    `;
+    const [{ messageId }] = await client<[{ messageId: string }]>`
+      insert into messages (
+        enrollment_id, step_index, direction, outreach_id, subject, body,
+        recipient, status, contact_account_id, employment_version
+      ) values (
+        ${enrollmentId}, 0, 'outbound', 'legacy-step-zero', 'Hello', 'Body',
+        'alice.legacy@populated-ladder.example', 'sent', ${accountId}::uuid, 1
+      ) returning id as "messageId"
+    `;
+
+    await applyMigration("0033_optimal_jackal.sql");
+
+    // Every row that predates the ladder is on rung one, and nothing else moved.
+    const ranks = await client<
+      Array<{ ladderRank: number; deadAt: string | null }>
+    >`
+      select ladder_rank as "ladderRank", dead_at as "deadAt" from email_candidates
+    `;
+    expect(ranks).toHaveLength(3);
+    expect(ranks.every((row) => row.ladderRank === 1)).toBe(true);
+    expect(ranks.every((row) => row.deadAt === null)).toBe(true);
+
+    // The narrowed index still refuses a second *live* message at one step.
+    await expect(
+      client`
+        insert into messages (
+          enrollment_id, step_index, direction, outreach_id, subject, body,
+          recipient, status, contact_account_id, employment_version
+        ) values (
+          ${enrollmentId}, 0, 'outbound', 'legacy-duplicate', 'Hello', 'Body',
+          'a.legacy@populated-ladder.example', 'proposed', ${accountId}::uuid, 1
+        )
+      `,
+    ).rejects.toMatchObject({ code: "23505" });
+
+    // And allows exactly one replacement once the first is proven dead, which
+    // is the single fact the predicate was narrowed by.
+    await client`
+      update messages set address_dead_at = now() where id = ${messageId}
+    `;
+    await client`
+      insert into messages (
+        enrollment_id, step_index, direction, outreach_id, subject, body,
+        recipient, status, contact_account_id, employment_version
+      ) values (
+        ${enrollmentId}, 0, 'outbound', 'legacy-readdressed', 'Hello', 'Body',
+        'a.legacy@populated-ladder.example', 'proposed', ${accountId}::uuid, 1
+      )
+    `;
+    await expect(
+      client`
+        insert into messages (
+          enrollment_id, step_index, direction, outreach_id, subject, body,
+          recipient, status, contact_account_id, employment_version
+        ) values (
+          ${enrollmentId}, 0, 'outbound', 'legacy-third', 'Hello', 'Body',
+          'alicelegacy@populated-ladder.example', 'proposed', ${accountId}::uuid, 1
+        )
+      `,
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  /**
+   * The settings singleton predates the ladder, so its bounds arrive as column
+   * defaults on a row nobody rewrites. A `0` or a `null` there would disable
+   * the feature, or open the circuit breaker on the first send, without anybody
+   * choosing it.
+   */
+  it("gives an existing settings row the ladder defaults", async () => {
+    await applyMigrationsThrough("0032_message_send_intent_expiry");
+    // An earlier migration already seeds the singleton, which is the point:
+    // the row the ladder columns land on is one nothing rewrites afterwards.
+    await client`insert into operator_sending_settings (id) values (1) on conflict do nothing`;
+    const [before] = await client<Array<{ id: number }>>`
+      select id from operator_sending_settings where id = 1
+    `;
+    expect(before?.id).toBe(1);
+    await applyMigration("0033_optimal_jackal.sql");
+    const [row] = await client<
+      Array<{
+        enabled: boolean;
+        maxRungs: number;
+        advances: number;
+        ratePercent: number;
+        minimumSends: number;
+        people: number;
+        share: number;
+      }>
+    >`
+      select address_ladder_enabled as "enabled",
+        address_ladder_max_rungs as "maxRungs",
+        address_ladder_max_advances_per_account_per_day as "advances",
+        address_ladder_failure_rate_percent as "ratePercent",
+        address_ladder_failure_rate_minimum_sends as "minimumSends",
+        address_ladder_demotion_minimum_people as "people",
+        address_ladder_demotion_failure_share_percent as "share"
+      from operator_sending_settings where id = 1
+    `;
+    expect(row).toEqual({
+      enabled: true,
+      maxRungs: 3,
+      advances: 2,
+      ratePercent: 30,
+      minimumSends: 20,
+      people: 2,
+      share: 50,
+    });
+  });
 });

@@ -613,7 +613,41 @@ async function markPermanentlyRejected(
   messageId: string,
   rejection: Extract<NonNullable<MailReconciliation>, { status: "rejected" }>,
   now: Date,
+  options: { holdsDomainLock?: boolean } = {},
 ): Promise<void> {
+  /**
+   * The company's delivery record is rewritten here, so this takes the same
+   * lock the inbound bounce path takes before doing the same thing.
+   *
+   * A demotion is decided by counting the distinct people one convention has
+   * been proven dead for at one domain, and latched the moment the count is
+   * reached. Two refusals at one company arriving on two connections each see
+   * only their own death under `read committed`, so each counts one, neither
+   * reaches the floor, and the verdict never gets written down — leaving it to
+   * a live ratio that later attempts reporting nothing dilute away. That is
+   * silence restoring a convention, which is the one thing the latch exists to
+   * prevent.
+   *
+   * Acquired *before* the transaction opens, which is the order the inbound
+   * path already uses: domain lock first, enrollment row lock second. Taking it
+   * the other way round — inside the transaction, after the row lock — is what
+   * would make the two paths deadlock against each other.
+   */
+  if (!options.holdsDomainLock) {
+    const [addressed] = await db
+      .select({ recipient: messages.recipient })
+      .from(messages)
+      .where(eq(messages.id, messageId))
+      .limit(1);
+    const lockDomain = addressed?.recipient.split("@")[1];
+    if (lockDomain) {
+      return withActionLocks(db, [actionLockKey.domain(lockDomain)], (locked) =>
+        markPermanentlyRejected(locked, messageId, rejection, now, {
+          holdsDomainLock: true,
+        }),
+      );
+    }
+  }
   const reason = `SMTP ${rejection.responseCode}${rejection.response ? `: ${rejection.response}` : ""}`;
   await db.transaction(async (tx) => {
     await tx.execute(
@@ -2080,6 +2114,10 @@ export async function sendApprovedMessage(
               messageId,
               confirmation,
               clock(),
+              // This block already holds the domain lock, and re-entering
+              // `withActionLocks` would reserve a second connection that waits
+              // for the one this session is holding.
+              { holdsDomainLock: true },
             );
           }
           const finalized =

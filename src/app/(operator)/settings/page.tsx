@@ -530,7 +530,10 @@ export default async function SettingsPage({
                   defaultValue={settings.addressLadderMaxRungs}
                 />
                 <small className="muted">
-                  Counted as addresses attempted, not advances taken.
+                  Counted as addresses attempted, not advances taken.{" "}
+                  {ladderMetrics.atRungCeiling} prospect
+                  {ladderMetrics.atRungCeiling === 1 ? " has" : "s have"} spent
+                  every address this allows.
                 </small>
               </label>
               <label>
@@ -547,6 +550,10 @@ export default async function SettingsPage({
                 <small className="muted">
                   Also what lets a company&rsquo;s delivery record demote a
                   wrong convention before a third colleague is offered it.
+                  Measured now: {ladderMetrics.advancesLastDay} advance
+                  {ladderMetrics.advancesLastDay === 1 ? "" : "s"} in the last
+                  day, the busiest company using{" "}
+                  {ladderMetrics.busiestAccountAdvances} of its allowance.
                 </small>
               </label>
               <label>

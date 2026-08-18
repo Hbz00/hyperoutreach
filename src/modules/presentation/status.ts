@@ -185,3 +185,26 @@ const MANUAL_EMAIL_REFUSALS: Record<string, string> = {
 export function describeManualEmailRefusal(code: string): string {
   return MANUAL_EMAIL_REFUSALS[code] ?? code;
 }
+
+/**
+ * Which bound parked a prospect, and what raising it would do.
+ *
+ * `ladder_limit_reached` tells the operator an address remains and something
+ * they set is in the way; it cannot tell them which of three settings, and
+ * raising the wrong one changes nothing. These sentences name the setting, so
+ * the parked list is an instruction rather than a puzzle.
+ */
+const LADDER_HOLD_REASONS: Record<string, string> = {
+  // Each one names the control by the words on it, so the sentence is a route
+  // to the field rather than a description of it.
+  rung_ceiling:
+    "the rung ceiling — raise “Addresses one contact may cost” in Settings",
+  account_daily_cap:
+    "this company’s advance cap for today — raise “Advances per company per day” in Settings, or come back tomorrow",
+  circuit_open:
+    "the circuit breaker — the explicit-failure share is over “Stop advancing above this failure share” in Settings",
+};
+
+export function describeLadderHold(value: string): string | null {
+  return LADDER_HOLD_REASONS[value] ?? null;
+}

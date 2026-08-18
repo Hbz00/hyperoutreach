@@ -12,9 +12,11 @@ import {
   operatorCommandStatus,
   stopReason,
 } from "@/lib/db/schema";
+import { LADDER_PARKING_REASONS } from "@/modules/email-resolution/ladder";
 import {
   describeStatus,
   describeStopReason,
+  describeLadderHold,
   type StatusKind,
 } from "@/modules/presentation/status";
 
@@ -70,5 +72,36 @@ describe("status presentation", () => {
     expect(describeStopReason("unknown_future_reason")).toBe(
       "unknown_future_reason",
     );
+  });
+  /**
+   * The three bounds a prospect can be parked by each name their own setting.
+   *
+   * They collapse into one `ladder_limit_reached` sentence on the contact,
+   * which is true and is only half an instruction: raising the wrong one of
+   * three settings changes nothing. Anything else the ladder refuses on is not
+   * a bound, and must return nothing rather than invent a setting to raise.
+   */
+  it("names the setting behind every bound that parks a prospect", () => {
+    // Driven by the list the ladder itself parks on, not by a copy of it. A
+    // fourth bound added there arrives here with no sentence and fails, which
+    // is the only way a hand-written list of three would not have gone stale.
+    expect(LADDER_PARKING_REASONS.length).toBeGreaterThan(0);
+    for (const reason of LADDER_PARKING_REASONS) {
+      const sentence = describeLadderHold(reason);
+      expect(sentence, `${reason} has no sentence`).not.toBeNull();
+      expect(sentence).toContain("Settings");
+      expect(sentence).not.toContain("_");
+    }
+    for (const terminal of [
+      "no_remaining_rung",
+      "all_remaining_suppressed",
+      "undelivered_send_outstanding",
+      "employment_changed",
+      "enrollment_ended",
+      "feature_disabled",
+      "address_dead_on_another_message",
+    ]) {
+      expect(describeLadderHold(terminal), terminal).toBeNull();
+    }
   });
 });

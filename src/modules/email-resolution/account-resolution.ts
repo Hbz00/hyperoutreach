@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, ne, sql } from "drizzle-orm";
 
 import { contacts, emailCandidates } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
@@ -50,37 +50,4 @@ export async function findAccountContactsNeedingResolution(
     // has to be the same one every time or a repeated click spends a second.
     .orderBy(asc(contacts.createdAt), asc(contacts.id));
   return rows;
-}
-
-/**
- * How many of a company's contacts the action above would act on, for the button
- * that offers it. Counted with the same rule, so the number and the action can
- * never disagree.
- */
-export async function countAccountContactsNeedingResolution(
-  db: AppDatabase,
-  input: { accountId: string },
-): Promise<number> {
-  const rows = await findAccountContactsNeedingResolution(db, input);
-  return rows.length;
-}
-
-/** Kept exported for the read models that ask the same question of one contact. */
-export async function hasWrittenAddress(
-  db: AppDatabase,
-  contactId: string,
-): Promise<boolean> {
-  const [row] = await db
-    .select({ id: emailCandidates.id })
-    .from(emailCandidates)
-    .where(
-      and(
-        eq(emailCandidates.contactId, contactId),
-        eq(emailCandidates.status, "accepted"),
-        isNotNull(emailCandidates.firstAttemptedAt),
-        isNull(emailCandidates.deadAt),
-      ),
-    )
-    .limit(1);
-  return Boolean(row);
 }
