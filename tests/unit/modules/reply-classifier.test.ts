@@ -15,7 +15,23 @@ describe("reply classification boundary", () => {
     ["No thanks, not interested", "negative"],
     ["Could you share pricing?", "question"],
     ["Please contact Marie instead", "referral"],
-    ["Delivery status notification", "automated"],
+    // Every shape below is one a real mail system produces when the transport
+    // could not parse the report itself — the only case that ever reaches a
+    // classifier, since a structured DSN sets `bounceKind` and skips it. All
+    // four were put to the production classifier, which answered `bounce` with
+    // 0.99 confidence; a local stand-in that answered otherwise would make
+    // every test written against it prove the wrong thing.
+    ["Delivery status notification", "bounce"],
+    ["Undelivered Mail Returned to Sender: user unknown", "bounce"],
+    [
+      "Your message couldn't be delivered — RESOLVER.ADR.RecipientNotFound",
+      "bounce",
+    ],
+    ["Address not found. 550 5.1.1 the account does not exist", "bounce"],
+    ["452 4.2.2 Mailbox full, the server will retry", "bounce"],
+    // Automated and not a failure: the category that used to swallow all of
+    // the above.
+    ["This is an automated message; do not reply", "automated"],
     ["Noted", "unknown"],
   ])("classifies deterministic local text", async (body, category) => {
     const result = await new DeterministicReplyClassifier().classify({

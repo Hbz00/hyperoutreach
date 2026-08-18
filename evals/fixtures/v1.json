@@ -15,7 +15,7 @@
   },
   "fixtureProvenance": {
     "method": "synthetic_contract",
-    "description": "One hundred explicit synthetic captured-output cases for offline evaluator contract and mutation regression testing; not an empirical model benchmark.",
+    "description": "One hundred explicit synthetic captured-output cases for offline evaluator contract and mutation regression testing; not an empirical model benchmark. The three unparsed-bounce reply cases are the exception: their expected category was taken from the production classifier (ChatGPT desktop, GPT-5.6 Sol, Instant), which answered `bounce` at 0.99 confidence on each, so the offline classifier is held to what production actually does.",
     "independentlyVerified": false
   },
   "prospects": [
@@ -5117,6 +5117,51 @@
       },
       "observedCategory": "bounce",
       "bounceKind": "soft",
+      "holdNonTerminal": true,
+      "expectedCategory": "bounce",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
+    },
+    {
+      "id": "unparsed-bounce-postfix",
+      "input": {
+        "subject": "Undelivered Mail Returned to Sender",
+        "body": "This is the mail system at host mail.example.net. I'm sorry to have to inform you that your message could not be delivered to one or more recipients. 550 5.1.1 Recipient address rejected: User unknown in local recipient table.",
+        "sender": "MAILER-DAEMON@mail.example.net"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "bounce",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
+    },
+    {
+      "id": "unparsed-bounce-microsoft",
+      "input": {
+        "subject": "Undeliverable: Question sur votre flotte",
+        "body": "Your message couldn't be delivered. The email address you entered couldn't be found. Remote Server returned '550 5.1.10 RESOLVER.ADR.RecipientNotFound'.",
+        "sender": "postmaster@wayne.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "bounce",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
+    },
+    {
+      "id": "unparsed-bounce-soft",
+      "input": {
+        "subject": "Delivery delayed",
+        "body": "Your message has not been delivered yet. 452 4.2.2 Mailbox full. The server will retry for 48 hours.",
+        "sender": "MAILER-DAEMON@mail.example.net"
+      },
+      "bounceKind": null,
       "holdNonTerminal": true,
       "expectedCategory": "bounce",
       "expectedTerminal": false,

@@ -141,3 +141,34 @@ describe("convention restore form wiring", () => {
     expect(form.match(/required/g) ?? []).toHaveLength(2);
   });
 });
+
+describe("prospect page enrollment actions", () => {
+  /**
+   * The rule, not the list.
+   *
+   * Offering to write a message for a prospect the product considers finished
+   * queues work the send policy then refuses — a button that spends an AI turn
+   * to produce a message nobody can send. `failed` sat in that list for the
+   * whole life of the product without anyone noticing, because nothing writes
+   * it; the next state added carelessly would not be so harmless.
+   */
+  it("never offers to generate a message for a terminal enrollment", async () => {
+    const { GENERATABLE_ENROLLMENT_STATES, TERMINAL_ENROLLMENT_STATES } =
+      await import("@/modules/campaigns/enrollment-state");
+    const offered = (GENERATABLE_ENROLLMENT_STATES as readonly string[]).filter(
+      (state) =>
+        (TERMINAL_ENROLLMENT_STATES as readonly string[]).includes(state),
+    );
+    expect(offered).toEqual([]);
+    expect(GENERATABLE_ENROLLMENT_STATES.length).toBeGreaterThan(3);
+    // And the page renders from that list rather than keeping its own copy.
+    const page = await readFile(
+      resolve(
+        process.cwd(),
+        "src/app/(operator)/prospects/[contactId]/page.tsx",
+      ),
+      "utf8",
+    );
+    expect(page).toContain("GENERATABLE_ENROLLMENT_STATES");
+  });
+});

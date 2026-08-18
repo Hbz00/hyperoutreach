@@ -56,8 +56,28 @@ export class DeterministicReplyClassifier implements ReplyClassifier {
         0.98,
         "Out-of-office phrase",
       ],
+      /**
+       * A delivery failure, before anything else automated.
+       *
+       * Ordered first among the machine-generated shapes because a bounce *is*
+       * an automated message, and the looser rule below used to claim it: a
+       * Gmail failure notice came back `automated`, and the three other shapes
+       * a real mail system produces matched nothing at all. That matters beyond
+       * this classifier — the production one is asked the same question, and a
+       * local stand-in that disagrees with it about what a bounce is makes every
+       * test written against it prove the wrong thing.
+       *
+       * Reached only when the transport could not parse the report itself: a
+       * structured DSN sets `bounceKind` and never consults a classifier.
+       */
       [
-        /(?:delivery status notification|automated message|do not reply)/,
+        /(?:mailer-daemon|postmaster@|delivery status notification|undelivered mail|undeliverable|delivery (?:has )?failed|delivery delayed|could not be delivered|address not found|recipient (?:address )?rejected|user unknown|recipientnotfound|mailbox (?:is )?full|\b[45]\.\d{1,3}\.\d{1,3}\b)/,
+        "bounce",
+        0.9,
+        "Delivery-failure phrase",
+      ],
+      [
+        /(?:automated message|do not reply)/,
         "automated",
         0.95,
         "Automated-message phrase",

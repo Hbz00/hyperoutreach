@@ -16,6 +16,7 @@ import {
   workflowEvents,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { GENERATABLE_ENROLLMENT_STATES } from "@/modules/campaigns/enrollment-state";
 import { StatusBadge } from "@/modules/presentation/status-badge";
 import {
   describeResolutionReason,
@@ -631,15 +632,9 @@ export default async function ProspectDetailPage({
                   : ""}
               </p>
             </div>
-            {[
-              "ready_for_review",
-              "approved",
-              "active",
-              "waiting",
-              "manual_review",
-              "paused",
-              "failed",
-            ].includes(enrollment.state) ? (
+            {(GENERATABLE_ENROLLMENT_STATES as readonly string[]).includes(
+              enrollment.state,
+            ) ? (
               <div className="header-actions">
                 <form
                   action="/api/operator/commands/generate-message"
