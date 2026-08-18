@@ -85,9 +85,17 @@ export class DeterministicReplyClassifier implements ReplyClassifier {
        * Reached only when the transport could not parse the report itself: a
        * structured DSN sets `bounceKind` and never consults a classifier.
        */
-      // Unambiguous even from a human: nobody discussing freight writes these.
+      /**
+       * Unambiguous whoever sent it.
+       *
+       * A bare enhanced status code is not on this list. `5.2.1` is a version
+       * number, a clause reference, a pallet count — "we run 5.2.1 in
+       * production" is a sentence a person writes. What no person writes is an
+       * SMTP reply code paired with one, which is why the pair is here and the
+       * lone code is admitted only from a mail system below.
+       */
       [
-        /(?:delivery status notification|undelivered mail returned to sender|recipientnotfound|\b[45]\.\d{1,3}\.\d{1,3}\b)/,
+        /(?:delivery status notification|undelivered mail returned to sender|recipientnotfound|\b[45]\d{2}\s+[45]\.\d{1,3}\.\d{1,3}\b)/,
         "bounce",
         0.9,
         "Delivery-status report",
@@ -96,7 +104,7 @@ export class DeterministicReplyClassifier implements ReplyClassifier {
       ...(machineSender
         ? ([
             [
-              /(?:undeliverable|delivery (?:has )?failed|delivery delayed|could not be delivered|address not found|recipient (?:address )?rejected|user unknown|mailbox (?:is )?full)/,
+              /(?:undeliverable|delivery (?:has )?failed|delivery delayed|could not be delivered|address not found|recipient (?:address )?rejected|user unknown|mailbox (?:is )?full|\b[45]\.\d{1,3}\.\d{1,3}\b)/,
               "bounce",
               0.9,
               "Delivery-failure phrase from a mail system",

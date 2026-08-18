@@ -5183,6 +5183,21 @@
       "expectedSuppression": false,
       "expectedState": "replied",
       "expectedStopReason": "question"
+    },
+    {
+      "id": "human-writes-a-version-number",
+      "input": {
+        "subject": "RE: votre flotte",
+        "body": "We run 5.2.1 in production; the migration is planned for October.",
+        "sender": "paul.martin@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "unknown",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
     }
   ],
   "policies": [

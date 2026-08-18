@@ -417,7 +417,20 @@ export async function latchConventionDemotions(
    * watermark this transaction holds a lock on, which no concurrent restore can
    * move under it.
    */
-  for (const outcome of newly) {
+  /**
+   * Locked in name order, which is the only order two transactions can agree on.
+   *
+   * `newly` arrives sorted by how many people each convention was attempted for,
+   * and a bounce increments that count for its own convention before reading the
+   * list. Two failures at one domain, on two conventions with equal counts, each
+   * therefore put its own first — and took the two row locks in opposite orders.
+   * Postgres resolves that by killing one of them; the delivery report it was
+   * processing is replayed by the pending-inbound sweep, so nothing is lost, but
+   * it is a self-inflicted stall on a path that holds no other lock.
+   */
+  for (const outcome of [...newly].sort((left, right) =>
+    left.pattern.localeCompare(right.pattern),
+  )) {
     const [locked] = await tx
       .select({
         id: conventionDemotions.id,
@@ -568,6 +581,93 @@ const liftSchema = z.object({
  * and the stamp becomes the point the record restarts from, so being wrong
  * costs the next failures rather than nothing.
  */
+/**
+ * Puts the best address this ladder still has back in use.
+ *
+ * A demotion moved the accepted address off the discredited convention for
+ * contacts nobody had written to. Restoring the verdict puts the *order* back,
+ * but a rank is not an address in use — without this the operator restores a
+ * convention and the prospect keeps being addressed with the second choice
+ * until the next resolution happens to run. Reordering and re-addressing are
+ * the same act to the person reading the screen.
+ *
+ * Only a rung that was never attempted, is not proven dead, is not suppressed
+ * and belongs to no still-demoted convention. No `advancedAt`: this is a
+ * re-ranking, not an advance, and only a death spends the daily advance bound.
+ */
+async function promoteBestUsableRung(
+  tx: Transaction,
+  input: {
+    contactId: string;
+    domain: string;
+    demotedPatterns: ReadonlySet<string>;
+    reason: string;
+  },
+): Promise<boolean> {
+  const rows = await tx
+    .select({
+      normalizedEmail: emailCandidates.normalizedEmail,
+      ladderRank: emailCandidates.ladderRank,
+      pattern: emailCandidates.pattern,
+      status: emailCandidates.status,
+      firstAttemptedAt: emailCandidates.firstAttemptedAt,
+      deadAt: emailCandidates.deadAt,
+    })
+    .from(emailCandidates)
+    .where(
+      and(
+        eq(emailCandidates.contactId, input.contactId),
+        eq(emailCandidates.domain, input.domain),
+      ),
+    );
+  const suppressed = await readSuppressedAddresses(tx, {
+    addresses: rows.map((row) => row.normalizedEmail),
+    domain: input.domain,
+  });
+  const best = rows
+    .filter(
+      (row) =>
+        row.deadAt === null &&
+        row.firstAttemptedAt === null &&
+        !suppressed.has(row.normalizedEmail) &&
+        (row.pattern === null || !input.demotedPatterns.has(row.pattern)),
+    )
+    .sort((left, right) => left.ladderRank - right.ladderRank)[0];
+  const accepted = rows.find((row) => row.status === "accepted");
+  if (!best || accepted?.normalizedEmail === best.normalizedEmail) return false;
+  await tx
+    .update(emailCandidates)
+    .set({ status: "candidate" })
+    .where(
+      and(
+        eq(emailCandidates.contactId, input.contactId),
+        eq(emailCandidates.status, "accepted"),
+      ),
+    );
+  await tx
+    .update(emailCandidates)
+    .set({ status: "accepted" })
+    .where(
+      and(
+        eq(emailCandidates.contactId, input.contactId),
+        eq(emailCandidates.normalizedEmail, best.normalizedEmail),
+      ),
+    );
+  await tx.insert(stateTransitions).values({
+    entityType: "contact",
+    entityId: input.contactId,
+    fromState: "email_resolved",
+    toState: "email_resolved",
+    reason: input.reason,
+    metadata: {
+      previousAddress: accepted?.normalizedEmail ?? null,
+      nextAddress: best.normalizedEmail,
+      pattern: best.pattern,
+    },
+  });
+  return true;
+}
+
 export async function liftConventionDemotion(
   db: AppDatabase,
   rawInput: unknown,
@@ -648,6 +748,12 @@ export async function liftConventionDemotion(
             .where(
               and(
                 eq(emailCandidates.domain, parsed.data.domain),
+                // Only ladders that actually hold this convention. Lifting one
+                // verdict cannot change the order of a ladder that never
+                // contained it, and this loop runs inside the domain lock that
+                // the inbound path also takes — so its size is how long a
+                // restore blocks that company's delivery reports.
+                eq(emailCandidates.pattern, parsed.data.pattern),
                 sql`not exists (
                   select 1
                   from messages written
@@ -656,17 +762,51 @@ export async function liftConventionDemotion(
                     and written.direction = 'outbound')`,
               ),
             );
+          let restored = 0;
           for (const row of unwritten) {
+            /**
+             * Re-asked per contact, not trusted from the listing above.
+             *
+             * The listing took no lock, and a message can be generated between
+             * it and this loop. The promotion below moves the accepted address,
+             * and moving it out from under a message that already names it
+             * leaves the send policy refusing that message for a reason the
+             * operator was never told — which is the whole reason the "unwritten
+             * only" rule exists. The demotion path asks the same question for
+             * the same reason.
+             */
+            const [written] = await tx
+              .select({ id: messages.id })
+              .from(messages)
+              .innerJoin(enrollments, eq(enrollments.id, messages.enrollmentId))
+              .where(
+                and(
+                  eq(enrollments.contactId, row.contactId),
+                  eq(messages.direction, "outbound"),
+                ),
+              )
+              .limit(1);
+            if (written) continue;
             await rewriteLadderRanks(tx, {
               contactId: row.contactId,
               domain: parsed.data.domain,
               demotedPatterns,
             });
+            if (
+              await promoteBestUsableRung(tx, {
+                contactId: row.contactId,
+                domain: parsed.data.domain,
+                demotedPatterns,
+                reason: "address_convention_restored",
+              })
+            ) {
+              restored += 1;
+            }
           }
           return {
             ok: true,
             disposition: "lifted",
-            rerankedContacts: unwritten.length,
+            rerankedContacts: restored,
           } as const;
         }),
     );

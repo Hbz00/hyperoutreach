@@ -2213,6 +2213,22 @@ describe("address attempt ladder", () => {
       expect(
         demotedOrder.find((row) => row.pattern === "first.last")?.ladderRank,
       ).toBeGreaterThan(1);
+      // And the address in use moves with it, which is what the demotion does
+      // for a contact nobody has written to.
+      const fallback = demotedOrder.find((row) => row.pattern === "f.last")!;
+      await db
+        .update(schema.emailCandidates)
+        .set({ status: "candidate" })
+        .where(
+          and(
+            eq(schema.emailCandidates.contactId, untouched.id),
+            eq(schema.emailCandidates.status, "accepted"),
+          ),
+        );
+      await db
+        .update(schema.emailCandidates)
+        .set({ status: "accepted" })
+        .where(eq(schema.emailCandidates.id, fallback.id));
 
       const lifted = await liftConventionDemotion(db, {
         domain: fixture.domain,
@@ -2230,6 +2246,92 @@ describe("address attempt ladder", () => {
       expect(
         restored.find((row) => row.pattern === "first.last")?.ladderRank,
       ).toBe(1);
+      // And the address actually in use goes back with the order. A rank the
+      // prospect is not being written to is not a restoration.
+      expect(restored.find((row) => row.status === "accepted")?.pattern).toBe(
+        "first.last",
+      );
+      // Every unwritten ladder at this domain that was not already on its best
+      // usable rung is put back, which is more than the one this test stages:
+      // the two contacts whose first choice is proven dead are moved onto the
+      // address that is still standing, and that is the same repair.
+      expect(
+        (lifted as { rerankedContacts: number }).rerankedContacts,
+      ).toBeGreaterThanOrEqual(1);
+    });
+
+    it("leaves a prospect whose message is already written exactly where it is", async () => {
+      await setLadderSettings({
+        addressLadderDemotionMinimumPeople: 2,
+        addressLadderDemotionFailureSharePercent: 50,
+      });
+      const fixture = await ladderFixture({ send: false, extraContacts: 1 });
+      const pinned = fixture.colleagues[0]!;
+      // The demotion had moved this prospect onto the second convention, and a
+      // message was then written naming that address.
+      const rows = await candidates(pinned.id);
+      const fallback = rows.find((row) => row.pattern === "f.last")!;
+      await db
+        .update(schema.emailCandidates)
+        .set({ status: "candidate" })
+        .where(
+          and(
+            eq(schema.emailCandidates.contactId, pinned.id),
+            eq(schema.emailCandidates.status, "accepted"),
+          ),
+        );
+      await db
+        .update(schema.emailCandidates)
+        .set({ status: "accepted", ladderRank: 1 })
+        .where(eq(schema.emailCandidates.id, fallback.id));
+      await db
+        .update(schema.emailCandidates)
+        .set({ ladderRank: 2 })
+        .where(
+          and(
+            eq(schema.emailCandidates.contactId, pinned.id),
+            eq(schema.emailCandidates.pattern, "first.last"),
+          ),
+        );
+      const enrollment = await enrollContact(db, {
+        campaignId: fixture.campaign.id,
+        campaignVersionId: fixture.version.id,
+        contactId: pinned.id,
+        mailboxId: fixture.mailbox.id,
+      });
+      if (!enrollment.ok) throw new Error(enrollment.message);
+      const proposal = await generateOutreachProposal(db, {
+        enrollmentId: enrollment.enrollment.id,
+        stepIndex: 0,
+        recipient: fallback.normalizedEmail,
+      });
+      if (!proposal.ok) throw new Error(proposal.message);
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:00:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+      });
+
+      await liftConventionDemotion(db, {
+        domain: fixture.domain,
+        pattern: "first.last",
+        actor: "operator",
+        justification: "Both had left the company",
+        confirmedConventionInUse: true,
+      });
+
+      const after = (await candidates(pinned.id)).find(
+        (row) => row.status === "accepted",
+      );
+      // A message already names this address. Moving acceptance out from under
+      // it leaves the send policy refusing that message for a reason nobody was
+      // told about — the outcome the "unwritten only" rule exists for. The
+      // listing excludes them; the re-ask inside the loop covers the case where
+      // the message is written while the loop runs, which no single-threaded
+      // test can stage and which the demotion path guards the same way.
+      expect(after?.normalizedEmail).toBe(fallback.normalizedEmail);
     });
 
     it("shows the evidence a demoted convention stands on now, not only what decided it", async () => {

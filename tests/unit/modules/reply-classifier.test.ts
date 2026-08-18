@@ -69,6 +69,17 @@ describe("reply classification boundary", () => {
       "MAILER-DAEMON@transport-nord.example",
       "bounce",
     ],
+    // A bare status triple is a version number as often as it is an SMTP code.
+    [
+      "We run 5.2.1 in production; the migration is planned for October.",
+      "marie.durand@transport-nord.example",
+      "unknown",
+    ],
+    [
+      "Diagnostic code 5.2.1, the mailbox is over quota.",
+      "postmaster@transport-nord.example",
+      "bounce",
+    ],
   ])(
     "reads the sender before calling freight talk a bounce",
     async (body, sender, category) => {
