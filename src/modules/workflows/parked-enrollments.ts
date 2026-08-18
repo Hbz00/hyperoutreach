@@ -48,10 +48,24 @@ export async function readParkedEnrollments(
       and(
         eq(enrollments.state, "manual_review"),
         isNull(enrollments.nextActionAt),
-        // Written out rather than interpolated: Drizzle renders an interpolated
-        // column unqualified inside a raw fragment, and an unqualified `id`
-        // binds to the subquery's own table — a correlation that silently
-        // compares a row with itself and is always false.
+        /**
+         * An enrollment holding an unclassified reply is not parked.
+         *
+         * An inbound record puts the enrollment in exactly this state —
+         * `manual_review` with no schedule — while its classification is still
+         * pending or has failed, and the maintenance cycle reprocesses it every
+         * minute with no operator involved, releasing it back to the state it
+         * held before. Listing those said "nothing will move this" about rows
+         * something moves on its own, which is the one claim this list makes.
+         * The ladder zeroes the count when it takes an enrollment over, so a
+         * genuinely parked prospect always reads zero here.
+         */
+        eq(enrollments.inboundHoldCount, 0),
+        // The correlation is written out rather than interpolated. Drizzle
+        // qualifies an interpolated column inside a `where` fragment but not
+        // inside a select projection, where the bare name binds to the
+        // subquery's own table and the comparison silently becomes false.
+        // Spelling it out is the one form that reads the same in both places.
         sql`not exists (
           select 1 from messages waiting_on_review
           where waiting_on_review.enrollment_id = enrollments.id

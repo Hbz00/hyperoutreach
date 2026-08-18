@@ -407,12 +407,16 @@ again.
 
 **A parked prospect becomes visible, not automatic.** A bound the operator can
 raise parks the enrollment, and nothing was showing them. The review queue now
-lists every enrollment in `manual_review` with no message written and no command
-queued to write one — which also catches any other silent failure to queue work,
-not only the ladder's. Automatic resumption when the bound clears was rejected:
-an advance is a send, and "offered, not automatic" is the invariant the whole
-feature rests on. Raising the cap and re-resolving the prospect is the operator's
-move, from the page the list links to.
+lists every enrollment in `manual_review` with no message written, no command
+queued to write one, and no unclassified reply on hold — which also catches any
+other silent failure to queue work, not only the ladder's. The hold exclusion is
+what makes the claim true: an inbound record puts an enrollment in exactly that
+state while its classification is pending, and the maintenance cycle releases it
+every minute with no operator involved, so listing those would have said "nothing
+will move this" about rows something moves on its own. Automatic resumption when
+the bound clears was rejected: an advance is a send, and "offered, not automatic"
+is the invariant the whole feature rests on. Raising the cap and re-resolving the
+prospect is the operator's move, from the page the list links to.
 
 **An address proven dead cannot be accepted by hand.** Accepting an address
 manually is the operator's strongest move and deliberately overrides confidence,
@@ -428,12 +432,38 @@ nothing down and left the address sendable in every future campaign. Both are
 facts about the address; only the decision about the enrollment belongs behind
 that check.
 
-**"No signal" excludes anything that answered.** The measure exists to test
-whether the domains being written to report undeliverable addresses at all. As
-"attempts minus explicit failures" it was the arithmetic complement of the
+**Every send falls in exactly one bucket.** The "no signal" measure exists to
+test whether the domains being written to report undeliverable addresses at all.
+As "attempts minus explicit failures" it was the arithmetic complement of the
 failure rate and measured nothing else. Sends that produced a reply, an
-out-of-office or an autoresponder are counted separately, as the only positive
-delivery evidence this product ever receives.
+out-of-office or an autoresponder are now counted separately, as the only
+positive delivery evidence this product ever receives — and, because a message
+can carry both a death and a later autoresponder, that count excludes anything
+already proven dead, so the three buckets partition the attempts instead of
+double-subtracting. A temporary failure stays in "nothing came back": it says the
+address may be wrong, never that it is. The per-convention table asks a weaker
+question — how many people no failure was reported for — and is labelled as such
+rather than borrowing the stronger name.
+
+**A ladder belongs to one company.** A contact who changes employer keeps their
+old candidate rows, so their addresses can span two domains, and a verdict is
+always about one. Both the re-ranking and the choice of the next rung are now
+scoped to the mail domain the dead message was sent at. Without it, a former
+employer's untried address could be ranked above a current one and promoted by a
+bounce that had nothing to do with it — and the ladder would have been offering
+the operator a message addressed to a company the prospect has left. For the same
+reason a refusal on a contact who has moved no longer writes anything to their
+address column: that column now describes their _current_ employer's resolution,
+which a late report about the old one has no standing to overturn.
+
+**The regeneration is keyed on the death that caused it.** One death advances the
+ladder exactly once, so a key naming the dead message is unique by construction
+and a repeated delivery report deduplicates into the request already made. Keying
+on the rung let two addresses share a number and the second advance deduplicate
+into nothing; keying on the candidate fixed that, but the loud failure guarding
+it rolled back the permanent suppression written in the same transaction, and
+rolled it back identically on every retry. A key that cannot collide needs
+neither, and the parked list is the backstop if one ever does.
 
 **A demotion is reported against the company it happened at.** The
 installation-wide view pooled every domain's ratio into one verdict, which is a

@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 
 import { actionLockKey, withActionLocks } from "@/lib/db/action-lock";
@@ -157,6 +157,16 @@ export async function acceptManualEmail(
             .from(emailCandidates)
             .where(eq(emailCandidates.normalizedEmail, normalizedEmail))
             .limit(1);
+          /**
+           * `dead_at is null` is part of the write, not only of the check above.
+           *
+           * The reads that guard this path take no row lock, and the transaction
+           * that proves an address dead takes none either — it runs from a
+           * reconciliation that holds no action lock at all. Without the
+           * condition here, a death landing between the check and the write
+           * left the row `accepted` with `dead_at` set: the exact state the
+           * check exists to prevent, reachable by losing a race.
+           */
           const [candidate] = existing
             ? await tx
                 .update(emailCandidates)
@@ -168,7 +178,12 @@ export async function acceptManualEmail(
                   evidence: { actor: parsed.data.actor },
                   verifiedAt: new Date(),
                 })
-                .where(eq(emailCandidates.id, existing.id))
+                .where(
+                  and(
+                    eq(emailCandidates.id, existing.id),
+                    isNull(emailCandidates.deadAt),
+                  ),
+                )
                 .returning()
             : await tx
                 .insert(emailCandidates)
@@ -186,8 +201,13 @@ export async function acceptManualEmail(
                   verifiedAt: new Date(),
                 })
                 .returning();
-          if (!candidate)
+          // No row means the address died while this ran — the update's own
+          // condition refused it — so the operator gets the same answer they
+          // would have got a moment earlier.
+          if (!candidate) {
+            if (existing) return { ok: false, code: "ADDRESS_DEAD" } as const;
             throw new Error("Manual email insert returned no row");
+          }
 
           /**
            * The ladder is re-ranked, exactly as every other writer of candidates
@@ -207,6 +227,10 @@ export async function acceptManualEmail(
           });
           await rewriteLadderRanks(tx, {
             contactId: owner.contact.id,
+            // This company's ladder only. The contact may still hold rows from a
+            // former employer, and ranking those by this company's verdict would
+            // be one company's delivery record reordering another's addresses.
+            domain,
             demotedPatterns,
           });
 

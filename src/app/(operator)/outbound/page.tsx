@@ -149,12 +149,15 @@ export default async function OutboundPage({
         <h2>Address ladder</h2>
         <p className="muted">
           The feature deliberately spends deliverability, so its yield and its
-          cost are read together. A send is only ever counted as delivered when
-          something came back: a reply, an out-of-office, an autoresponder.
-          Everything else with no explicit failure is no signal, never delivered
-          — silence does not prove anything in either direction, and whether the
-          domains being targeted report failures at all is what the “no signal”
-          column measures.
+          cost are read together. Each send falls in exactly one of three
+          buckets. It was proven not to exist — a hard bounce or a definite
+          refusal. Something came back that was not a failure — a reply, an
+          out-of-office, an autoresponder — which proves the mailbox is real. Or
+          nothing came back, which proves nothing in either direction and is
+          never read as delivered. A temporary failure sits in that last bucket
+          too: it says the address may be wrong, never that it is. Whether the
+          domains being written to report bad addresses back at all is what that
+          bucket measures, and it is the assumption the whole feature rests on.
         </p>
         <dl className="facts">
           <div>
@@ -162,8 +165,11 @@ export default async function OutboundPage({
             <dd>{ladderMetrics.onFirstRung}</dd>
           </div>
           <div>
-            <dt>Reached on a later rung</dt>
-            <dd>{ladderMetrics.advanced}</dd>
+            <dt>Alive on a later rung</dt>
+            <dd>
+              {ladderMetrics.onLaterRung}
+              <small>{ladderMetrics.advanced} of them after a death</small>
+            </dd>
           </div>
           <div>
             <dt>No further address to try</dt>
@@ -192,8 +198,11 @@ export default async function OutboundPage({
             </dd>
           </div>
           <div>
-            <dt>No signal at all</dt>
-            <dd>{ladderMetrics.sendsNoSignal}</dd>
+            <dt>Nothing came back</dt>
+            <dd>
+              {ladderMetrics.sendsNoSignal}
+              <small>including temporary failures, which prove nothing</small>
+            </dd>
           </div>
           <div>
             <dt>Circuit breaker</dt>
@@ -220,9 +229,9 @@ export default async function OutboundPage({
                 <th>Convention</th>
                 <th>People attempted</th>
                 <th>Proven dead</th>
-                <th>No signal</th>
+                <th>No failure reported</th>
                 <th>Companies</th>
-                <th>Order</th>
+                <th>Ladder order</th>
               </tr>
             </thead>
             <tbody>
@@ -236,7 +245,16 @@ export default async function OutboundPage({
                   <td>
                     {outcome.demotedDomains.length === 0
                       ? "Normal everywhere"
-                      : `Demoted at ${outcome.demotedDomains.join(", ")}`}
+                      : outcome.demotedDomains.length <= 3
+                        ? `Demoted at ${outcome.demotedDomains.join(", ")}`
+                        : `Demoted at ${outcome.demotedDomains.length} companies`}
+                    {outcome.demotedDomains.length > 3 ? (
+                      // Named in full below the count rather than in the cell: a
+                      // latch never expires, so a common convention accumulates
+                      // companies indefinitely and one comma list stops being
+                      // readable long before it stops being true.
+                      <small>{outcome.demotedDomains.join(", ")}</small>
+                    ) : null}
                   </td>
                 </tr>
               ))}

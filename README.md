@@ -456,6 +456,12 @@ convention keeps it — and it re-ranks only contacts with no outbound message a
 all, so an address a generated message is already pinned to is never moved under
 it.
 
+A ladder belongs to **one company**. A contact who changes employer keeps the
+addresses evidenced at the old one, so their rows can span two domains — and both
+the ordering and the choice of the next rung are scoped to the domain the dead
+message was sent at, so one employer's verdict never reorders another's addresses
+and a former employer's address is never offered as the next thing to try.
+
 The verdict is **written down when it is reached, not recomputed on every read**.
 A live ratio falls: two deaths in four attempts demotes a convention, and four
 later attempts that reported nothing would put it back under the threshold and
@@ -466,24 +472,29 @@ the counts that produced it, and the latch can only add.
 `/outbound` reports the yield beside the cost: how many prospects are alive on rung
 one, how many were reached on a later rung, how many have no further address to
 try, how many were stopped by a bound, and — per convention — how many people were
-attempted, how many were proven dead, at which companies each convention is
-demoted, and how many sends produced **no signal at all**.
+attempted, how many were proven dead, and at which companies each convention is
+demoted.
 
-That last number is deliberately not called "delivered", and it excludes anything
-that answered. A reply, an out-of-office or an autoresponder proves the mailbox
-exists and is counted on its own; everything left is silence. Counted as "attempts
-minus explicit failures" it was the arithmetic complement of the failure rate and
-tested nothing — where the point of the measure is to test whether the domains
-being targeted report failures back in practice, which is the assumption the whole
-feature rests on.
+Every send falls in exactly one of three buckets: **proven not to exist**,
+**something came back that was not a failure**, or **nothing came back**. The
+middle one — a reply, an out-of-office, an autoresponder — is the only positive
+delivery evidence this product ever receives, and it is kept out of the last one.
+Counted as "attempts minus explicit failures", that last bucket was the arithmetic
+complement of the failure rate and tested nothing, where the point of it is to
+test whether the domains being written to report bad addresses back at all. A
+temporary failure sits there too: it says the address may be wrong, never that it
+is. The per-convention table counts _people no failure was reported for_, which is
+a weaker statement and is labelled as one — answering it per convention would mean
+joining every candidate to its replies for a number the question does not need.
 
 The review queue lists every prospect **parked with nothing to move them**: an
-enrollment waiting on a decision with no message written and no work queued to
-write one. A raisable bound puts prospects there deliberately, and any other
-silent failure to queue work lands there too. They are never resumed
-automatically — an advance is a send, and no first send in this product is
-system-originated — so the list links to the prospect, where resolving the
-company again promotes whichever address is still standing.
+enrollment waiting on a decision with no message written, nothing queued to write
+one, and no unclassified reply being reprocessed on its own. A raisable bound puts
+prospects there deliberately, and any other silent failure to queue work lands
+there too. They are never resumed automatically — an advance is a send, and no
+first send in this product is system-originated — so the list links to the
+prospect, where resolving the company again promotes whichever address is still
+standing.
 
 Accepting an address **by hand** overrides confidence, MX and evidence, and
 deliberately does not override delivery: an address a bounce has already proven

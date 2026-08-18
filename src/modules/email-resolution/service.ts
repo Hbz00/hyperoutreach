@@ -972,6 +972,7 @@ export async function resolveContactEmail(
       }
       await rewriteLadderRanks(tx, {
         contactId: owner.contact.id,
+        domain,
         demotedPatterns,
       });
       await tx

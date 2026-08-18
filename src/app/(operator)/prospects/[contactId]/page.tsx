@@ -178,9 +178,21 @@ export default async function ProspectDetailPage({
   // that is right — it would be indistinguishable from "not next yet" if the
   // operator could not see which ones they are.
   const blockedRungs = await readBlockedRungs(db, contactId);
-  const demotedPatterns = new Set(
-    conventions.filter((row) => row.demoted).map((row) => row.pattern),
+  /**
+   * Which convention is demoted, at which company.
+   *
+   * A contact who changed employer keeps the candidate rows from the old one,
+   * so this table can show addresses on two domains — and a demotion is always
+   * one company's verdict. A bare set of pattern names badged a former
+   * employer's address with the current employer's delivery record, which is
+   * the confusion this whole feature exists to remove.
+   */
+  const demotedAt = new Map(
+    conventions.map((row) => [row.pattern, new Set(row.demotedDomains)]),
   );
+  const isDemoted = (candidate: { pattern: string | null; domain: string }) =>
+    candidate.pattern !== null &&
+    (demotedAt.get(candidate.pattern)?.has(candidate.domain) ?? false);
   // Tied is a fact about the evidence, not a stored flag: two rungs the company
   // evidenced exactly as well as each other, whose order between them is
   // therefore arbitrary. The operator approving the message is the only human in
@@ -192,8 +204,8 @@ export default async function ProspectDetailPage({
           (other, otherIndex) =>
             otherIndex !== index &&
             other.confidence === candidate.confidence &&
-            demotedPatterns.has(other.pattern ?? "") ===
-              demotedPatterns.has(candidate.pattern ?? ""),
+            other.domain === candidate.domain &&
+            isDemoted(other) === isDemoted(candidate),
         ),
       )
       .map((candidate) => candidate.confidence),
@@ -448,8 +460,7 @@ export default async function ProspectDetailPage({
                       // "Search the company again" would change anything.
                       <small>{companySearch(candidate.evidence)}</small>
                     ) : null}
-                    {candidate.pattern &&
-                    demotedPatterns.has(candidate.pattern) ? (
+                    {isDemoted(candidate) ? (
                       <small>
                         demoted — this company&rsquo;s delivery record
                         discredits this convention

@@ -1684,14 +1684,150 @@ describe("address attempt ladder", () => {
       expect(row?.resolutionReason).toBe("ladder_limit_reached");
     });
 
-    it("keys the queued regeneration on the address, never on its position", async () => {
+    it("never counts one send as both proven dead and reached", async () => {
       await setLadderSettings({});
       const fixture = await ladderFixture();
-      const before = await candidates(fixture.contact.id);
-      const promoted = before.find(
-        (row) => row.normalizedEmail === fixture.rungTwo,
+      if (!fixture.message) throw new Error("nothing was sent");
+      const before = await readAddressLadderMetrics(db, {
+        now: new Date("2026-08-18T18:00:00.000Z"),
+      });
+      await hardBounce(fixture);
+      // An autoresponder arriving after the bounce, threaded to the same
+      // message: real, and no evidence at all that the address exists.
+      await ingestInboundMessage(db, classifier, {
+        mailboxId: fixture.mailbox.id,
+        providerMessageId: `auto-after-death-${sequence}`,
+        outreachId: fixture.message.outreachId ?? undefined,
+        inReplyTo: `<${fixture.message.outreachId}@mock.hyperoutreach>`,
+        sender: fixture.rungOne,
+        recipient: fixture.mailbox.email,
+        subject: "Automatic reply",
+        body: "I am away from the office until Monday.",
+        receivedAt: new Date("2026-08-18T11:00:00.000Z"),
+      });
+
+      const metrics = await readAddressLadderMetrics(db, {
+        now: new Date("2026-08-18T18:00:00.000Z"),
+      });
+      // Counting this one message in two buckets subtracted it twice from
+      // "nothing came back", and the clamp then hid the inconsistency. The
+      // arithmetic identity alone cannot catch that — `sendsNoSignal` is
+      // derived from the other two, so it absorbs any overlap silently. What
+      // has to be asserted is the count itself.
+      expect(metrics.sendsAcknowledged).toBe(before.sendsAcknowledged);
+      expect(metrics.sendsProvenDead).toBe(before.sendsProvenDead + 1);
+      expect(
+        metrics.sendsProvenDead +
+          metrics.sendsAcknowledged +
+          metrics.sendsNoSignal,
+      ).toBe(metrics.sendsAttempted);
+    });
+
+    it("keeps a former employer's address off the ladder of the company that bounced", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      const elsewhere = await createOrGetAccount(db, {
+        name: `Former ${sequence}`,
+        domain: `former-${sequence}.example`,
+      });
+      if (!elsewhere.ok) throw new Error(elsewhere.message);
+      const formerDomain = elsewhere.account.domain!;
+      // An untried address from a company the contact used to work at, ranked
+      // ahead of everything by an accident of ordering.
+      await db.insert(schema.emailCandidates).values({
+        contactId: fixture.contact.id,
+        email: `alice.former@${formerDomain}`,
+        normalizedEmail: `alice.former@${formerDomain}`,
+        domain: formerDomain,
+        pattern: "first.last",
+        confidence: "0.990",
+        source: "public_pattern",
+        status: "candidate",
+        ladderRank: 1,
+      });
+
+      await hardBounce(fixture);
+
+      const rows = await candidates(fixture.contact.id);
+      const accepted = rows.find((row) => row.status === "accepted");
+      // The next rung is this company's, never the one the prospect left.
+      expect(accepted?.domain).toBe(fixture.domain);
+      expect(accepted?.normalizedEmail).toBe(fixture.rungTwo);
+    });
+
+    it("leaves the address column of a contact who has moved alone", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      const elsewhere = await createOrGetAccount(db, {
+        name: `Moved ${sequence}`,
+        domain: `moved-${sequence}.example`,
+      });
+      if (!elsewhere.ok) throw new Error(elsewhere.message);
+      await db
+        .update(schema.contacts)
+        .set({
+          accountId: elsewhere.account.id,
+          employmentVersion: fixture.contact.employmentVersion + 1,
+          emailResolutionStatus: "resolved",
+          emailResolutionReason: null,
+        })
+        .where(eq(schema.contacts.id, fixture.contact.id));
+
+      await hardBounce(fixture);
+
+      const [contact] = await db
+        .select()
+        .from(schema.contacts)
+        .where(eq(schema.contacts.id, fixture.contact.id));
+      // A late report about the company they left has no standing to
+      // un-resolve the address their current one established.
+      expect(contact?.emailResolutionStatus).toBe("resolved");
+      expect(contact?.emailResolutionReason).toBeNull();
+    });
+
+    it("does not call an enrollment holding an unclassified reply parked", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      // Retire the request enrolment made, so nothing else keeps this
+      // enrollment off the list and the hold is the only discriminator left.
+      await db
+        .update(schema.operatorCommands)
+        .set({ status: "succeeded" })
+        .where(eq(schema.operatorCommands.task, "generate-message"));
+      // The shape an inbound hold leaves behind: manual review, no schedule —
+      // which the maintenance cycle releases on its own, with no operator.
+      await db
+        .update(schema.enrollments)
+        .set({
+          state: "manual_review",
+          nextActionAt: null,
+          nextActionToken: null,
+          inboundHoldCount: 1,
+          inboundHoldAt: new Date("2026-08-18T11:00:00.000Z"),
+        })
+        .where(eq(schema.enrollments.id, fixture.enrollmentId));
+
+      const held = await readParkedEnrollments(db);
+      expect(held.map((row) => row.enrollmentId)).not.toContain(
+        fixture.enrollmentId,
       );
-      if (!promoted) throw new Error("fixture has no second rung");
+      // Releasing the hold is what makes it genuinely parked, which proves the
+      // rest of the predicate was already satisfied and the count is what
+      // decided it.
+      await db
+        .update(schema.enrollments)
+        .set({ inboundHoldCount: 0 })
+        .where(eq(schema.enrollments.id, fixture.enrollmentId));
+      const released = await readParkedEnrollments(db);
+      expect(released.map((row) => row.enrollmentId)).toContain(
+        fixture.enrollmentId,
+      );
+    });
+
+    it("keys the queued regeneration on the death that caused it", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      const deadMessageId = fixture.message!.id;
 
       await hardBounce(fixture);
 
@@ -1699,72 +1835,46 @@ describe("address attempt ladder", () => {
         .select()
         .from(schema.operatorCommands)
         .where(eq(schema.operatorCommands.task, "generate-message"));
-      const forThisAdvance = queued.filter((row) =>
-        row.dedupeKey?.startsWith(
-          `enrollment:${fixture.enrollmentId}:generate:`,
-        ),
-      );
       // A rung number is rewritten by every demotion and every fresh
-      // resolution, so two different addresses on one enrollment can wear the
-      // same one. A candidate id cannot move.
+      // resolution, so two addresses on one enrollment can wear the same one.
+      // One death advances the ladder exactly once, so its own id cannot.
       expect(
-        forThisAdvance.some((row) =>
-          row.dedupeKey?.endsWith(`:candidate:${promoted.id}`),
+        queued.some((row) =>
+          row.dedupeKey?.endsWith(
+            `enrollment:${fixture.enrollmentId}:generate:0:after:${deadMessageId}`,
+          ),
         ),
       ).toBe(true);
     });
 
-    it("refuses to park a prospect it could not queue the regeneration for", async () => {
+    it("does not queue a second regeneration when the same bounce is reported twice", async () => {
       await setLadderSettings({});
       const fixture = await ladderFixture();
-      const before = await candidates(fixture.contact.id);
-      const promoted = before.find(
-        (row) => row.normalizedEmail === fixture.rungTwo,
-      );
-      if (!promoted) throw new Error("fixture has no second rung");
-      // Occupy the exact key this advance will use, which is the shape a
-      // collision takes.
-      await db.insert(schema.operatorCommands).values({
-        command: "generate-message",
-        task: "generate-message",
-        payload: { enrollmentId: fixture.enrollmentId, stepIndex: 0 },
-        requestedBy: "test",
-        dedupeKey: `enrollment:${fixture.enrollmentId}:generate:0:candidate:${promoted.id}`,
-        status: "succeeded",
-      });
-
-      // The failure is loud: the whole death rolls back and the delivery report
-      // is retried, rather than committing a park with nothing to release it.
-      await expect(hardBounce(fixture)).resolves.toMatchObject({
-        ok: false,
-        code: "DATABASE_ERROR",
-      });
-
-      // Nothing half-written. The death is not recorded, the ladder has not
-      // advanced, and the delivery report will be tried again — where the old
-      // behaviour committed the park and dropped the command that releases it,
-      // leaving a prospect nothing would ever move.
-      const [deadMessage] = await db
-        .select()
-        .from(schema.messages)
-        .where(eq(schema.messages.id, fixture.message!.id));
-      expect(deadMessage?.addressDeadAt).toBeNull();
-      const after = await candidates(fixture.contact.id);
-      expect(
-        after.find((row) => row.status === "accepted")?.normalizedEmail,
-      ).toBe(fixture.rungOne);
-      const queued = await db
-        .select()
-        .from(schema.operatorCommands)
-        .where(eq(schema.operatorCommands.task, "generate-message"));
-      // The enrolment's own rung-one request, plus the row planted to collide.
-      expect(
-        queued.filter((row) =>
-          row.dedupeKey?.startsWith(
-            `enrollment:${fixture.enrollmentId}:generate:`,
+      const countAdvances = async () => {
+        const rows = await db
+          .select()
+          .from(schema.operatorCommands)
+          .where(eq(schema.operatorCommands.task, "generate-message"));
+        return rows.filter((row) =>
+          row.dedupeKey?.includes(
+            `enrollment:${fixture.enrollmentId}:generate:0:after:`,
           ),
-        ),
-      ).toHaveLength(2);
+        ).length;
+      };
+
+      await hardBounce(fixture);
+      expect(await countAdvances()).toBe(1);
+      // A delivery report can be reprocessed. The death is recorded once, and
+      // the request it produced is the same request.
+      await hardBounce(fixture);
+      expect(await countAdvances()).toBe(1);
+      // And the suppression the same transaction wrote is still standing —
+      // rolling it back to signal a queueing problem would undo the one fact
+      // this product can establish about an address.
+      const suppressed = await listSuppressions(db, { scope: "email" });
+      expect(
+        suppressed.some((entry) => entry.normalizedValue === fixture.rungOne),
+      ).toBe(true);
     });
 
     it("records the address as dead and suppressed even when the sequence has already ended", async () => {

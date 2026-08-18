@@ -97,11 +97,14 @@ export type ConventionOutcome = {
   /** Distinct people it was proven not to exist for. */
   peopleProvenDead: number;
   /**
-   * Distinct people whose send produced no delivery failure at all.
+   * Distinct people whose send produced no delivery failure.
    *
-   * Deliberately not called "delivered". Silence is not a signal in either
-   * direction, and this column is the number that tests the operator's contested
-   * assumption that non-existent recipients are reported back in practice.
+   * Deliberately not called "delivered", and deliberately a weaker statement
+   * than the installation-wide "nothing came back": this counts people no
+   * failure was reported for, and some of them did answer. Establishing which
+   * ones would mean joining every candidate to its message and its replies on
+   * a page that already reads the whole candidate table, and the per-convention
+   * question — does this address shape bounce — is answered without it.
    */
   peopleNoSignal: number;
   /** Demoted at one domain at least — which, on a single-domain read, is this one. */
@@ -184,8 +187,10 @@ export async function readConventionOutcomes(
     byPattern.set(pattern, created);
     return created;
   };
+  const seenDomains = new Set<string>();
   for (const row of rows) {
     if (row.pattern === null) continue;
+    seenDomains.add(`${row.domain}|${row.pattern}`);
     const outcome = record(row.pattern);
     outcome.peopleAttempted += row.peopleAttempted;
     outcome.peopleProvenDead += row.peopleProvenDead;
@@ -207,18 +212,30 @@ export async function readConventionOutcomes(
     }
   }
   /**
-   * A latched domain with no candidate rows left still counts as demoted.
+   * A latched domain with no candidate rows left still counts as demoted, and
+   * still counts as attempted.
    *
    * The verdict outlives the evidence: candidate rows can be reassigned or
    * cleaned up, and losing them must not quietly restore a convention delivery
-   * discredited.
+   * discredited. The counts that produced the verdict are read back from the
+   * latch, so the row cannot read "nobody was ever written to, and it is
+   * demoted" — a contradiction on its face — and the companies named can never
+   * outnumber the companies counted.
    */
-  for (const key of latched) {
+  for (const [key, counts] of latched) {
     const [domain, pattern] = key.split("|");
     if (!domain || !pattern) continue;
     const outcome = record(pattern);
-    if (!outcome.demotedDomains.includes(domain)) {
-      outcome.demotedDomains.push(domain);
+    if (outcome.demotedDomains.includes(domain)) continue;
+    outcome.demotedDomains.push(domain);
+    if (!seenDomains.has(key)) {
+      outcome.peopleAttempted += counts.peopleAttempted;
+      outcome.peopleProvenDead += counts.peopleProvenDead;
+      outcome.peopleNoSignal += Math.max(
+        0,
+        counts.peopleAttempted - counts.peopleProvenDead,
+      );
+      if (counts.peopleAttempted > 0) outcome.attemptedDomains += 1;
     }
   }
   return [...byPattern.values()]
@@ -247,17 +264,27 @@ export async function readConventionOutcomes(
 async function readLatchedDemotions(
   db: LadderQueryable,
   input: { domain?: string | null },
-): Promise<Set<string>> {
+): Promise<Map<string, { peopleProvenDead: number; peopleAttempted: number }>> {
   const rows = await db
     .select({
       domain: conventionDemotions.domain,
       pattern: conventionDemotions.pattern,
+      peopleProvenDead: conventionDemotions.peopleProvenDead,
+      peopleAttempted: conventionDemotions.peopleAttempted,
     })
     .from(conventionDemotions)
     .where(
       input.domain ? eq(conventionDemotions.domain, input.domain) : undefined,
     );
-  return new Set(rows.map((row) => `${row.domain}|${row.pattern}`));
+  return new Map(
+    rows.map((row) => [
+      `${row.domain}|${row.pattern}`,
+      {
+        peopleProvenDead: row.peopleProvenDead,
+        peopleAttempted: row.peopleAttempted,
+      },
+    ]),
+  );
 }
 
 /**
@@ -355,7 +382,20 @@ export async function readSuppressedAddresses(
  */
 export async function rewriteLadderRanks(
   tx: Transaction,
-  input: { contactId: string; demotedPatterns: ReadonlySet<string> },
+  input: {
+    contactId: string;
+    /**
+     * The mail domain whose ladder this is.
+     *
+     * A contact who changes employer keeps their old candidate rows, so their
+     * rows can span two companies — and a verdict is always about one. Ranking
+     * them together let one company's discredited convention reorder another
+     * company's addresses, and could float a stale former-employer address to
+     * the top of a ladder the next bounce then promotes.
+     */
+    domain: string;
+    demotedPatterns: ReadonlySet<string>;
+  },
 ): Promise<void> {
   const rows = await tx
     .select({
@@ -366,7 +406,12 @@ export async function rewriteLadderRanks(
       ladderRank: emailCandidates.ladderRank,
     })
     .from(emailCandidates)
-    .where(eq(emailCandidates.contactId, input.contactId));
+    .where(
+      and(
+        eq(emailCandidates.contactId, input.contactId),
+        eq(emailCandidates.domain, input.domain),
+      ),
+    );
   const ranked = rankLadderRungs(
     rows.map((row) => ({
       normalizedEmail: row.normalizedEmail,
@@ -465,11 +510,18 @@ export async function readLadderCircuitState(
        * all — and it can only answer that once the sends that *did* produce a
        * signal are taken out of it.
        */
-      sendsAcknowledged: sql<number>`count(case when exists (
-        select 1 from replies answered
-        where answered.message_id = messages.id
-          and answered.classification <> 'bounce'
-      ) then 1 end)::int`,
+      /**
+       * The table and column names are spelled out rather than interpolated.
+       * Drizzle qualifies an interpolated column inside a `where` fragment but
+       * not inside a select projection, where the bare name binds to the
+       * subquery's own table and the comparison silently becomes false.
+       */
+      sendsAcknowledged: sql<number>`count(case when
+        messages.address_dead_at is null and exists (
+          select 1 from replies answered
+          where answered.message_id = messages.id
+            and answered.classification <> 'bounce'
+        ) then 1 end)::int`,
     })
     .from(messages)
     .where(
@@ -605,8 +657,16 @@ function contactReasonFor(
       return "ladder_exhausted";
     case "all_remaining_suppressed":
       return "address_suppressed";
+    /**
+     * The person moved, so this address belonged to a company they have left.
+     *
+     * Writing `unresolved` here overwrote whatever their *current* employer's
+     * resolution had established — a contact with a perfectly good address at
+     * the new company was silently un-resolved by a late report about the old
+     * one. The enrollment's own outcome and the audit record what happened.
+     */
     case "employment_changed":
-      return "employment_changed";
+      return null;
     // Not a bound, and it must not read like one: no setting changes the answer
     // when the person may be holding a message already.
     case "undelivered_send_outstanding":
@@ -784,6 +844,7 @@ export async function advanceAddressLadder(
   if (dying?.pattern && demotedPatterns.has(dying.pattern)) {
     await applyConventionDemotion(tx, {
       accountId: message.contactAccountId ?? contact.accountId,
+      domain: deadDomain,
       demotedPatterns,
     });
   }
@@ -801,7 +862,11 @@ export async function advanceAddressLadder(
     message.contactAccountId !== contact.accountId ||
     message.employmentVersion !== contact.employmentVersion;
   if (!employmentChanged) {
-    await rewriteLadderRanks(tx, { contactId: contact.id, demotedPatterns });
+    await rewriteLadderRanks(tx, {
+      contactId: contact.id,
+      domain: deadDomain,
+      demotedPatterns,
+    });
   }
 
   const refuse = async (
@@ -962,6 +1027,10 @@ export async function advanceAddressLadder(
     return refuse("account_daily_cap");
   }
 
+  // Scoped to the company the dead message was sent at. A contact who has
+  // changed employer keeps their old rows, and offering one of those as the
+  // next rung would write to a former employer's address on the strength of a
+  // bounce at the current one.
   const rungs = await tx
     .select({
       id: emailCandidates.id,
@@ -971,7 +1040,12 @@ export async function advanceAddressLadder(
       deadAt: emailCandidates.deadAt,
     })
     .from(emailCandidates)
-    .where(eq(emailCandidates.contactId, contact.id));
+    .where(
+      and(
+        eq(emailCandidates.contactId, contact.id),
+        eq(emailCandidates.domain, deadDomain),
+      ),
+    );
   const suppressed = await readSuppressedAddresses(tx, {
     addresses: rungs.map((rung) => rung.normalizedEmail),
     domain: deadDomain,
@@ -984,9 +1058,6 @@ export async function advanceAddressLadder(
     maxRungs: settings.maxRungs,
   });
   if (next.kind === "none") return refuse(next.reason);
-  const nextCandidateId = rungs.find(
-    (rung) => rung.normalizedEmail === next.normalizedEmail,
-  )!.id;
 
   await tx
     .update(emailCandidates)
@@ -1059,44 +1130,35 @@ export async function advanceAddressLadder(
   /**
    * The re-addressed message is queued, not sent.
    *
-   * The dedupe key carries the candidate, so a second advance on the same step
-   * is a new request rather than colliding with the row enrolment wrote for rung
-   * one — which is a fixed `enrollment:<id>:generate:0` and would otherwise
-   * answer "already queued" forever.
+   * The key is the death that caused it. One death advances the ladder exactly
+   * once — the `address_dead_at` compare-and-swap above guarantees it — so a
+   * key naming that message is unique by construction, and a repeat of the same
+   * delivery report deduplicates into the request already made, which is what
+   * deduplication is for.
    *
-   * The candidate's id and not its rung: a rung number is rewritten every time a
-   * demotion or a fresh resolution reorders the ladder, so two different
-   * addresses on one enrollment could carry the same rung and the second
-   * advance would silently deduplicate into nothing — leaving the enrollment
-   * parked in `manual_review` with no schedule and no command to produce the
-   * message it is waiting for. A candidate id never moves.
+   * It was the rung number, which a demotion or a fresh resolution rewrites:
+   * two different addresses on one enrollment could wear the same rung, and the
+   * second advance deduplicated into nothing, leaving the enrollment parked in
+   * `manual_review` with no schedule and no command to produce the message it
+   * was waiting for. Keying on the candidate fixed that but left the failure
+   * mode intact for any key that did collide — and the alternative, failing
+   * loudly, rolls back the suppression this same transaction wrote for a
+   * permanently dead address, and rolls it back identically on every retry. The
+   * key that cannot collide needs neither.
    *
    * No recipient in the payload, deliberately: the queue derives it from the
    * accepted candidate, which is the rung just promoted.
    */
-  const [queuedGeneration] = await tx
+  await tx
     .insert(operatorCommands)
     .values({
       command: "generate-message",
       task: "generate-message",
       payload: { enrollmentId: enrollment.id, stepIndex },
       requestedBy: input.actor,
-      dedupeKey: `enrollment:${enrollment.id}:generate:${stepIndex}:candidate:${nextCandidateId}`,
+      dedupeKey: `enrollment:${enrollment.id}:generate:${stepIndex}:after:${message.id}`,
     })
-    .onConflictDoNothing()
-    .returning({ id: operatorCommands.id });
-  /**
-   * A collision on a key built from a candidate id is an invariant breach, not
-   * an operator pressing a button twice: this advance has just promoted that
-   * address for the first time. Failing rolls the whole death back and the
-   * reconciliation retries — noisy, and far better than the silent alternative,
-   * which is a prospect parked forever with nothing queued to release them.
-   */
-  if (!queuedGeneration) {
-    throw new Error(
-      `Address ladder could not queue generation for enrollment ${enrollment.id} step ${stepIndex} candidate ${nextCandidateId}`,
-    );
-  }
+    .onConflictDoNothing();
   await tx.insert(stateTransitions).values({
     entityType: "enrollment",
     entityId: enrollment.id,
@@ -1155,7 +1217,12 @@ export async function advanceAddressLadder(
  */
 export async function applyConventionDemotion(
   tx: Transaction,
-  input: { accountId: string; demotedPatterns: ReadonlySet<string> },
+  input: {
+    accountId: string;
+    /** The mail domain the verdict belongs to — never the account's rows at large. */
+    domain: string;
+    demotedPatterns: ReadonlySet<string>;
+  },
 ): Promise<{ rerankedContactIds: string[] }> {
   if (input.demotedPatterns.size === 0) return { rerankedContactIds: [] };
   const unwritten = await tx
@@ -1198,6 +1265,7 @@ export async function applyConventionDemotion(
     if (written) continue;
     await rewriteLadderRanks(tx, {
       contactId: candidateContact.id,
+      domain: input.domain,
       demotedPatterns: input.demotedPatterns,
     });
     const rows = await tx
@@ -1271,7 +1339,9 @@ export async function applyConventionDemotion(
 export type AddressLadderMetrics = {
   /** Prospects whose address in use is the best-evidenced convention. */
   onFirstRung: number;
-  /** Prospects reached on rung two or later: the feature's actual yield. */
+  /** Prospects whose address in use is rung two or later, however they got there. */
+  onLaterRung: number;
+  /** Prospects moved down the ladder by a death: the feature's actual yield. */
   advanced: number;
   /** Prospects with no further address to try. */
   exhausted: number;
@@ -1303,11 +1373,20 @@ export async function readAddressLadderMetrics(
     thresholdPercent: settings.failureRatePercent,
     minimumSends: settings.failureRateMinimumSends,
   });
+  /**
+   * Split on the rung actually in use, which partitions every accepted address.
+   *
+   * It used to split on `advanced_at`, which records a rung reached *by a
+   * death* — and a demotion promotes a later rung without one, so a contact
+   * moved off a discredited convention fell into neither bucket and vanished
+   * from the count the feature is judged by.
+   */
   const [rungs] = await db
     .select({
       onFirstRung: sql<number>`count(case
-        when ${emailCandidates.ladderRank} = 1
-          and ${emailCandidates.advancedAt} is null then 1 end)::int`,
+        when ${emailCandidates.ladderRank} = 1 then 1 end)::int`,
+      onLaterRung: sql<number>`count(case
+        when ${emailCandidates.ladderRank} > 1 then 1 end)::int`,
       advanced: sql<number>`count(case
         when ${emailCandidates.advancedAt} is not null then 1 end)::int`,
     })
@@ -1323,6 +1402,7 @@ export async function readAddressLadderMetrics(
     .from(contacts);
   return {
     onFirstRung: rungs?.onFirstRung ?? 0,
+    onLaterRung: rungs?.onLaterRung ?? 0,
     advanced: rungs?.advanced ?? 0,
     exhausted: stopped?.exhausted ?? 0,
     limited: stopped?.limited ?? 0,
