@@ -58,6 +58,21 @@ function snapshotFacts(snapshot: unknown): {
  * How the company's address convention was established for this candidate:
  * searched now, or reused from an earlier search of the same company.
  */
+/**
+ * How many public examples of this convention the company search actually found.
+ *
+ * Kept next to the confidence rather than folded into it. Confidence is a fixed
+ * function of this count today, but a demotion reorders rungs without touching
+ * a single confidence — so once delivery has an opinion, one number can no
+ * longer carry both. Two visible quantities: what the samples said, and what
+ * delivery said.
+ */
+function sampleCount(evidence: unknown): number | null {
+  if (typeof evidence !== "object" || evidence === null) return null;
+  const record = evidence as { sampleCount?: unknown };
+  return typeof record.sampleCount === "number" ? record.sampleCount : null;
+}
+
 function companySearch(evidence: unknown): string | null {
   if (typeof evidence !== "object" || evidence === null) return null;
   const record = evidence as { searchedAt?: unknown; evidenceOrigin?: unknown };
@@ -443,6 +458,12 @@ export default async function ProspectDetailPage({
                   </td>
                   <td>
                     {percent(candidate.confidence)}
+                    {sampleCount(candidate.evidence) !== null ? (
+                      <small>
+                        {sampleCount(candidate.evidence)} public example
+                        {sampleCount(candidate.evidence) === 1 ? "" : "s"}
+                      </small>
+                    ) : null}
                     {tiedConfidences.has(candidate.confidence) ? (
                       <small>
                         tied — the order between equally evidenced rungs is

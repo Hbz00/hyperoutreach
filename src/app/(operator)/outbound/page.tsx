@@ -149,10 +149,12 @@ export default async function OutboundPage({
         <h2>Address ladder</h2>
         <p className="muted">
           The feature deliberately spends deliverability, so its yield and its
-          cost are read together. A send that produced no delivery failure is
-          counted as no signal, never as delivered: silence does not prove
-          anything in either direction, and whether the domains being targeted
-          report failures at all is what the “no signal” column measures.
+          cost are read together. A send is only ever counted as delivered when
+          something came back: a reply, an out-of-office, an autoresponder.
+          Everything else with no explicit failure is no signal, never delivered
+          — silence does not prove anything in either direction, and whether the
+          domains being targeted report failures at all is what the “no signal”
+          column measures.
         </p>
         <dl className="facts">
           <div>
@@ -180,6 +182,13 @@ export default async function OutboundPage({
             <dd>
               {ladderMetrics.sendsProvenDead}
               <small>{ladderMetrics.failureSharePercent}% of attempts</small>
+            </dd>
+          </div>
+          <div>
+            <dt>Reached a real mailbox</dt>
+            <dd>
+              {ladderMetrics.sendsAcknowledged}
+              <small>something came back that was not a failure</small>
             </dd>
           </div>
           <div>
@@ -212,6 +221,7 @@ export default async function OutboundPage({
                 <th>People attempted</th>
                 <th>Proven dead</th>
                 <th>No signal</th>
+                <th>Companies</th>
                 <th>Order</th>
               </tr>
             </thead>
@@ -222,12 +232,17 @@ export default async function OutboundPage({
                   <td>{outcome.peopleAttempted}</td>
                   <td>{outcome.peopleProvenDead}</td>
                   <td>{outcome.peopleNoSignal}</td>
-                  <td>{outcome.demoted ? "Demoted somewhere" : "Normal"}</td>
+                  <td>{outcome.attemptedDomains}</td>
+                  <td>
+                    {outcome.demotedDomains.length === 0
+                      ? "Normal everywhere"
+                      : `Demoted at ${outcome.demotedDomains.join(", ")}`}
+                  </td>
                 </tr>
               ))}
               {conventionOutcomes.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="empty">
+                  <td colSpan={6} className="empty">
                     No address has been attempted yet.
                   </td>
                 </tr>

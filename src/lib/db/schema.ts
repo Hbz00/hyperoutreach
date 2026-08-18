@@ -445,6 +445,46 @@ export const emailCandidates = pgTable(
   ],
 );
 
+/**
+ * A convention this domain's own delivery record has discredited, latched.
+ *
+ * Demotion was a live ratio over every attempt ever made, and a live ratio can
+ * fall: two deaths out of four attempts demotes, and four more attempts that
+ * reported nothing brought it back under the threshold and un-demoted it. That
+ * is silence acting as confirmation, which is the one thing this product's
+ * delivery loop must never allow — it can prove an address dead and it can
+ * never prove one alive.
+ *
+ * So the moment the threshold is met the verdict is written here, with the
+ * counts that produced it, and it stays. Reading a domain's demoted conventions
+ * is this table unioned with the live ratio: the latch can only add.
+ *
+ * A demotion reorders and never removes, so the cost of a latch that ages badly
+ * is that one convention sits at the back of the ladder at one domain. The cost
+ * of dilution is a convention delivery discredited being offered first again.
+ */
+export const conventionDemotions = pgTable(
+  "convention_demotions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    /** The mail domain, never the account: an account can move, a domain cannot. */
+    domain: text("domain").notNull(),
+    pattern: text("pattern").notNull(),
+    demotedAt: timestamp("demoted_at", { withTimezone: true }).notNull(),
+    /** The evidence as it stood when the verdict was reached. */
+    peopleProvenDead: integer("people_proven_dead").notNull(),
+    peopleAttempted: integer("people_attempted").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("convention_demotions_domain_pattern_unique").on(
+      table.domain,
+      table.pattern,
+    ),
+    index("convention_demotions_domain_idx").on(table.domain),
+  ],
+);
+
 export const campaigns = pgTable(
   "campaigns",
   {
@@ -1139,6 +1179,10 @@ export const replies = pgTable(
     ),
     index("replies_enrollment_id_idx").on(table.enrollmentId),
     index("replies_classification_idx").on(table.classification),
+    // "Did anything come back on this send?" is asked once per outbound message
+    // in the breaker's window, and answering it is what separates silence from
+    // a mailbox that exists.
+    index("replies_message_id_idx").on(table.messageId),
   ],
 );
 

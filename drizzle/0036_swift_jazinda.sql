@@ -1,0 +1,1 @@
+CREATE INDEX "replies_message_id_idx" ON "replies" USING btree ("message_id");

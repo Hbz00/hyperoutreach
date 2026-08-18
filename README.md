@@ -456,13 +456,39 @@ convention keeps it — and it re-ranks only contacts with no outbound message a
 all, so an address a generated message is already pinned to is never moved under
 it.
 
+The verdict is **written down when it is reached, not recomputed on every read**.
+A live ratio falls: two deaths in four attempts demotes a convention, and four
+later attempts that reported nothing would put it back under the threshold and
+restore it — silence confirming a convention, which delivery evidence here is
+never allowed to do. The demotion is latched per mail domain and convention, with
+the counts that produced it, and the latch can only add.
+
 `/outbound` reports the yield beside the cost: how many prospects are alive on rung
 one, how many were reached on a later rung, how many have no further address to
 try, how many were stopped by a bound, and — per convention — how many people were
-attempted, how many were proven dead, and how many produced **no signal at all**.
-That last column is deliberately not called "delivered": it is the number that
-tests whether the domains being targeted report failures back in practice, which is
-the assumption the whole feature rests on.
+attempted, how many were proven dead, at which companies each convention is
+demoted, and how many sends produced **no signal at all**.
+
+That last number is deliberately not called "delivered", and it excludes anything
+that answered. A reply, an out-of-office or an autoresponder proves the mailbox
+exists and is counted on its own; everything left is silence. Counted as "attempts
+minus explicit failures" it was the arithmetic complement of the failure rate and
+tested nothing — where the point of the measure is to test whether the domains
+being targeted report failures back in practice, which is the assumption the whole
+feature rests on.
+
+The review queue lists every prospect **parked with nothing to move them**: an
+enrollment waiting on a decision with no message written and no work queued to
+write one. A raisable bound puts prospects there deliberately, and any other
+silent failure to queue work lands there too. They are never resumed
+automatically — an advance is a send, and no first send in this product is
+system-originated — so the list links to the prospect, where resolving the
+company again promotes whichever address is still standing.
+
+Accepting an address **by hand** overrides confidence, MX and evidence, and
+deliberately does not override delivery: an address a bounce has already proven
+does not exist, or one the suppression list blocks, is refused with a sentence
+naming what stands in the way. The lift is the existing suppression-removal flow.
 
 Inbound reconciliation reuses the classification and agent-run identity already
 persisted on unmatched or ambiguous replies. Repeated scans and later thread

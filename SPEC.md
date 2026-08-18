@@ -1485,7 +1485,11 @@ Last sync  2 min
 > c'est que le contact peut repartir sur l'adresse suivante que les preuves ont
 > nommée pour lui, sans consommer d'étape et sans qu'aucun envoi ne soit
 > d'origine système. Une échelle épuisée retombe exactement sur l'état terminal
-> décrit ici. Voir « The address ladder » dans `README.md`, qui fait foi.
+> décrit ici. La suppression est désormais écrite quel que soit l'état de la
+> séquence : un refus définitif arrivant après une réponse ou un arrêt manuel
+> n'écrivait rien du tout, et l'adresse restait envoyable dans toutes les
+> campagnes suivantes — ce que la permanence promise ici interdit. Voir « The
+> address ladder » dans `README.md`, qui fait foi.
 
 Les bounces doivent avoir un effet immédiat :
 

@@ -13,6 +13,7 @@ import {
 
 import {
   contacts,
+  conventionDemotions,
   emailCandidates,
   enrollments,
   messages,
@@ -103,7 +104,19 @@ export type ConventionOutcome = {
    * assumption that non-existent recipients are reported back in practice.
    */
   peopleNoSignal: number;
+  /** Demoted at one domain at least — which, on a single-domain read, is this one. */
   demoted: boolean;
+  /**
+   * The domains where it is demoted, and how many have attempted it at all.
+   *
+   * A demotion is always a verdict about one company. Reading across the
+   * installation and reporting a single flag made the answer to "is `flast`
+   * demoted?" depend on the ratio of every domain pooled together, which is a
+   * number no decision is ever taken on. These two say what was actually
+   * measured.
+   */
+  demotedDomains: string[];
+  attemptedDomains: number;
 };
 
 /**
@@ -131,9 +144,13 @@ export async function readConventionOutcomes(
     failureSharePercent: number;
   },
 ): Promise<ConventionOutcome[]> {
+  // Grouped per domain even when every domain is asked for, because a demotion
+  // is only ever decided per domain. Rolling the totals up afterwards is a
+  // presentation step; deciding on a pooled ratio would be a different rule.
   const rows = await db
     .select({
       pattern: emailCandidates.pattern,
+      domain: emailCandidates.domain,
       peopleAttempted: sql<number>`count(distinct case
         when ${emailCandidates.firstAttemptedAt} is not null
           or ${emailCandidates.deadAt} is not null
@@ -149,26 +166,126 @@ export async function readConventionOutcomes(
         input.domain ? eq(emailCandidates.domain, input.domain) : undefined,
       ),
     )
-    .groupBy(emailCandidates.pattern);
-  return rows
-    .flatMap((row) =>
-      row.pattern === null ? [] : [{ ...row, pattern: row.pattern }],
-    )
-    .map((row) => ({
-      ...row,
-      peopleNoSignal: Math.max(0, row.peopleAttempted - row.peopleProvenDead),
-      demoted: isConventionDemoted({
+    .groupBy(emailCandidates.pattern, emailCandidates.domain);
+  const latched = await readLatchedDemotions(db, { domain: input.domain });
+  const byPattern = new Map<string, ConventionOutcome>();
+  const record = (pattern: string): ConventionOutcome => {
+    const existing = byPattern.get(pattern);
+    if (existing) return existing;
+    const created: ConventionOutcome = {
+      pattern,
+      peopleAttempted: 0,
+      peopleProvenDead: 0,
+      peopleNoSignal: 0,
+      demoted: false,
+      demotedDomains: [],
+      attemptedDomains: 0,
+    };
+    byPattern.set(pattern, created);
+    return created;
+  };
+  for (const row of rows) {
+    if (row.pattern === null) continue;
+    const outcome = record(row.pattern);
+    outcome.peopleAttempted += row.peopleAttempted;
+    outcome.peopleProvenDead += row.peopleProvenDead;
+    outcome.peopleNoSignal += Math.max(
+      0,
+      row.peopleAttempted - row.peopleProvenDead,
+    );
+    if (row.peopleAttempted > 0) outcome.attemptedDomains += 1;
+    const demotedHere =
+      latched.has(`${row.domain}|${row.pattern}`) ||
+      isConventionDemoted({
         peopleProvenDead: row.peopleProvenDead,
         peopleAttempted: row.peopleAttempted,
         minimumPeople: input.minimumPeople,
         failureSharePercent: input.failureSharePercent,
-      }),
+      });
+    if (demotedHere && !outcome.demotedDomains.includes(row.domain)) {
+      outcome.demotedDomains.push(row.domain);
+    }
+  }
+  /**
+   * A latched domain with no candidate rows left still counts as demoted.
+   *
+   * The verdict outlives the evidence: candidate rows can be reassigned or
+   * cleaned up, and losing them must not quietly restore a convention delivery
+   * discredited.
+   */
+  for (const key of latched) {
+    const [domain, pattern] = key.split("|");
+    if (!domain || !pattern) continue;
+    const outcome = record(pattern);
+    if (!outcome.demotedDomains.includes(domain)) {
+      outcome.demotedDomains.push(domain);
+    }
+  }
+  return [...byPattern.values()]
+    .map((outcome) => ({
+      ...outcome,
+      demoted: outcome.demotedDomains.length > 0,
+      demotedDomains: [...outcome.demotedDomains].sort(),
     }))
     .sort(
       (left, right) =>
         right.peopleAttempted - left.peopleAttempted ||
         left.pattern.localeCompare(right.pattern),
     );
+}
+
+/**
+ * The demotions already written down, as `domain\0pattern` keys.
+ *
+ * A demotion used to be recomputed from a live ratio on every read, and a live
+ * ratio falls: two deaths in four attempts demotes a convention, and four more
+ * attempts that reported nothing dropped it back under the threshold and
+ * restored it. That is silence confirming a convention, which delivery evidence
+ * in this product is never allowed to do — it can discredit an address and it
+ * can never vouch for one. Written once, the verdict stands.
+ */
+async function readLatchedDemotions(
+  db: LadderQueryable,
+  input: { domain?: string | null },
+): Promise<Set<string>> {
+  const rows = await db
+    .select({
+      domain: conventionDemotions.domain,
+      pattern: conventionDemotions.pattern,
+    })
+    .from(conventionDemotions)
+    .where(
+      input.domain ? eq(conventionDemotions.domain, input.domain) : undefined,
+    );
+  return new Set(rows.map((row) => `${row.domain}|${row.pattern}`));
+}
+
+/**
+ * Writes down the verdicts this domain's record now supports.
+ *
+ * Called from the death path only — the one place a new delivery failure has
+ * just been recorded — so every read stays a read. Conflicts are ignored rather
+ * than updated: the counts stored are the ones that first reached the
+ * threshold, which is what the audit trail is being asked for.
+ */
+async function latchConventionDemotions(
+  tx: Transaction,
+  input: { domain: string; outcomes: ConventionOutcome[]; now: Date },
+): Promise<void> {
+  const newly = input.outcomes.filter((outcome) => outcome.demoted);
+  if (newly.length === 0) return;
+  await tx
+    .insert(conventionDemotions)
+    .values(
+      newly.map((outcome) => ({
+        domain: input.domain,
+        pattern: outcome.pattern,
+        demotedAt: input.now,
+        peopleProvenDead: outcome.peopleProvenDead,
+        peopleAttempted: outcome.peopleAttempted,
+      })),
+    )
+    .onConflictDoNothing();
 }
 
 /** The conventions this domain's own delivery record has discredited. */
@@ -300,6 +417,14 @@ export async function readBlockedRungs(
 export type LadderCircuitState = {
   sendsAttempted: number;
   sendsProvenDead: number;
+  /**
+   * Sends that produced a response other than a delivery failure.
+   *
+   * The only positive delivery evidence this product ever gets. It does not
+   * decide the breaker — that stays keyed on explicit failures — but it must
+   * come out of "no signal", because a reply is the loudest signal there is.
+   */
+  sendsAcknowledged: number;
   sendsNoSignal: number;
   failureSharePercent: number;
   open: boolean;
@@ -326,6 +451,25 @@ export async function readLadderCircuitState(
       sendsAttempted: sql<number>`count(*)::int`,
       sendsProvenDead: sql<number>`count(case
         when ${messages.addressDeadAt} is not null then 1 end)::int`,
+      /**
+       * Anything came back that was not a delivery failure.
+       *
+       * A human reply, an out-of-office, an autoresponder: each one is proof
+       * that the mailbox exists and accepted the message, which is the only
+       * positive delivery evidence this product ever receives.
+       *
+       * "No signal" was every attempt not proven dead, which made it the
+       * arithmetic complement of the failure rate and told the operator nothing
+       * the failure rate had not. It exists to settle one specific disagreement
+       * — whether the domains being written to report undeliverable addresses at
+       * all — and it can only answer that once the sends that *did* produce a
+       * signal are taken out of it.
+       */
+      sendsAcknowledged: sql<number>`count(case when exists (
+        select 1 from replies answered
+        where answered.message_id = messages.id
+          and answered.classification <> 'bounce'
+      ) then 1 end)::int`,
     })
     .from(messages)
     .where(
@@ -349,10 +493,15 @@ export async function readLadderCircuitState(
     );
   const sendsAttempted = row?.sendsAttempted ?? 0;
   const sendsProvenDead = row?.sendsProvenDead ?? 0;
+  const sendsAcknowledged = row?.sendsAcknowledged ?? 0;
   return {
     sendsAttempted,
     sendsProvenDead,
-    sendsNoSignal: Math.max(0, sendsAttempted - sendsProvenDead),
+    sendsAcknowledged,
+    sendsNoSignal: Math.max(
+      0,
+      sendsAttempted - sendsProvenDead - sendsAcknowledged,
+    ),
     failureSharePercent:
       sendsAttempted === 0
         ? 0
@@ -462,10 +611,26 @@ function contactReasonFor(
     // when the person may be holding a message already.
     case "undelivered_send_outstanding":
       return "ladder_earlier_send_unconfirmed";
+    /**
+     * Nothing to say about the address.
+     *
+     * The sequence was ended by a decision or a fact of its own — a reply, an
+     * unsubscribe, a manual stop — and the address ladder has no verdict on the
+     * address to add. It used to fall through to `ladder_limit_reached`, whose
+     * sentence promises the operator a bound they can raise; raising every bound
+     * would have changed nothing here, and the contact would have carried a
+     * reason that was simply untrue.
+     */
+    case "enrollment_ended":
     case "already_recorded":
     case "unknown_message":
       return null;
-    default:
+    // The bounds. Each one is a setting the operator owns, and the sentence they
+    // read says so.
+    case "feature_disabled":
+    case "circuit_open":
+    case "account_daily_cap":
+    case "rung_ceiling":
       return "ladder_limit_reached";
   }
 }
@@ -598,18 +763,46 @@ export async function advanceAddressLadder(
   const deadDomain = message.recipient.slice(
     message.recipient.lastIndexOf("@") + 1,
   );
-  const demotedPatterns = await readDemotedConventions(tx, {
+  const outcomes = await readConventionOutcomes(tx, {
     domain: deadDomain,
     minimumPeople: settings.demotionMinimumPeople,
     failureSharePercent: settings.demotionFailureSharePercent,
   });
+  // The verdict is written down here, in the one transaction that has just added
+  // a failure to the record, so that later attempts reporting nothing can never
+  // dilute it away.
+  await latchConventionDemotions(tx, {
+    domain: deadDomain,
+    outcomes,
+    now: input.now,
+  });
+  const demotedPatterns = new Set(
+    outcomes
+      .filter((outcome) => outcome.demoted)
+      .map((outcome) => outcome.pattern),
+  );
   if (dying?.pattern && demotedPatterns.has(dying.pattern)) {
     await applyConventionDemotion(tx, {
       accountId: message.contactAccountId ?? contact.accountId,
       demotedPatterns,
     });
   }
-  await rewriteLadderRanks(tx, { contactId: contact.id, demotedPatterns });
+  /**
+   * This contact's own ladder is re-ranked only while they still work where the
+   * message was sent.
+   *
+   * The demotion above is a fact about `deadDomain`, and deliberately so. A
+   * contact who has since moved holds candidates at a *different* domain, and
+   * reordering those by the old employer's discredited conventions would apply
+   * one company's delivery record to another's addresses. The advance itself
+   * refuses a moment later for the same reason.
+   */
+  const employmentChanged =
+    message.contactAccountId !== contact.accountId ||
+    message.employmentVersion !== contact.employmentVersion;
+  if (!employmentChanged) {
+    await rewriteLadderRanks(tx, { contactId: contact.id, demotedPatterns });
+  }
 
   const refuse = async (
     reason: LadderStopReason,
@@ -693,12 +886,7 @@ export async function advanceAddressLadder(
     return { kind: "not_advanced", reason, endsEnrollment };
   };
 
-  if (
-    message.contactAccountId !== contact.accountId ||
-    message.employmentVersion !== contact.employmentVersion
-  ) {
-    return refuse("employment_changed");
-  }
+  if (employmentChanged) return refuse("employment_changed");
   /**
    * A sequence somebody *ended* is never resurrected by a late delivery failure.
    *
@@ -776,6 +964,7 @@ export async function advanceAddressLadder(
 
   const rungs = await tx
     .select({
+      id: emailCandidates.id,
       normalizedEmail: emailCandidates.normalizedEmail,
       ladderRank: emailCandidates.ladderRank,
       firstAttemptedAt: emailCandidates.firstAttemptedAt,
@@ -795,6 +984,9 @@ export async function advanceAddressLadder(
     maxRungs: settings.maxRungs,
   });
   if (next.kind === "none") return refuse(next.reason);
+  const nextCandidateId = rungs.find(
+    (rung) => rung.normalizedEmail === next.normalizedEmail,
+  )!.id;
 
   await tx
     .update(emailCandidates)
@@ -867,24 +1059,44 @@ export async function advanceAddressLadder(
   /**
    * The re-addressed message is queued, not sent.
    *
-   * The dedupe key carries the rung, so a second advance on the same step is a
-   * new request rather than colliding with the row enrolment wrote for rung one
-   * — which is a fixed `enrollment:<id>:generate:0` and would otherwise answer
-   * "already queued" forever.
+   * The dedupe key carries the candidate, so a second advance on the same step
+   * is a new request rather than colliding with the row enrolment wrote for rung
+   * one — which is a fixed `enrollment:<id>:generate:0` and would otherwise
+   * answer "already queued" forever.
+   *
+   * The candidate's id and not its rung: a rung number is rewritten every time a
+   * demotion or a fresh resolution reorders the ladder, so two different
+   * addresses on one enrollment could carry the same rung and the second
+   * advance would silently deduplicate into nothing — leaving the enrollment
+   * parked in `manual_review` with no schedule and no command to produce the
+   * message it is waiting for. A candidate id never moves.
    *
    * No recipient in the payload, deliberately: the queue derives it from the
    * accepted candidate, which is the rung just promoted.
    */
-  await tx
+  const [queuedGeneration] = await tx
     .insert(operatorCommands)
     .values({
       command: "generate-message",
       task: "generate-message",
       payload: { enrollmentId: enrollment.id, stepIndex },
       requestedBy: input.actor,
-      dedupeKey: `enrollment:${enrollment.id}:generate:${stepIndex}:rung:${next.ladderRank}`,
+      dedupeKey: `enrollment:${enrollment.id}:generate:${stepIndex}:candidate:${nextCandidateId}`,
     })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ id: operatorCommands.id });
+  /**
+   * A collision on a key built from a candidate id is an invariant breach, not
+   * an operator pressing a button twice: this advance has just promoted that
+   * address for the first time. Failing rolls the whole death back and the
+   * reconciliation retries — noisy, and far better than the silent alternative,
+   * which is a prospect parked forever with nothing queued to release them.
+   */
+  if (!queuedGeneration) {
+    throw new Error(
+      `Address ladder could not queue generation for enrollment ${enrollment.id} step ${stepIndex} candidate ${nextCandidateId}`,
+    );
+  }
   await tx.insert(stateTransitions).values({
     entityType: "enrollment",
     entityId: enrollment.id,
@@ -1067,6 +1279,7 @@ export type AddressLadderMetrics = {
   limited: number;
   sendsAttempted: number;
   sendsProvenDead: number;
+  sendsAcknowledged: number;
   sendsNoSignal: number;
   failureSharePercent: number;
   circuitOpen: boolean;
@@ -1115,6 +1328,7 @@ export async function readAddressLadderMetrics(
     limited: stopped?.limited ?? 0,
     sendsAttempted: circuit.sendsAttempted,
     sendsProvenDead: circuit.sendsProvenDead,
+    sendsAcknowledged: circuit.sendsAcknowledged,
     sendsNoSignal: circuit.sendsNoSignal,
     failureSharePercent: circuit.failureSharePercent,
     circuitOpen: circuit.open,

@@ -162,3 +162,26 @@ const RESOLUTION_REASONS: Record<string, string> = {
 export function describeResolutionReason(value: string): string {
   return RESOLUTION_REASONS[value] ?? value;
 }
+
+/**
+ * Why an address the operator typed in by hand was not accepted.
+ *
+ * Accepting by hand is the operator's strongest move — it overrides confidence,
+ * MX and evidence — so the two refusals that override *it* have to say what
+ * stands in the way and whether they can do anything about it. A suppression
+ * they can lift; a proven-dead address they cannot.
+ */
+const MANUAL_EMAIL_REFUSALS: Record<string, string> = {
+  INVALID_INPUT: "that is not a valid address",
+  CONTACT_NOT_FOUND: "the prospect no longer exists",
+  DOMAIN_MISMATCH: "it is not on this company's domain",
+  EMAIL_CONFLICT: "another prospect already owns that address",
+  ADDRESS_DEAD: "delivery already proved that address does not exist",
+  ADDRESS_SUPPRESSED:
+    "the suppression list blocks that address — lift the entry first",
+  DATABASE_ERROR: "the write failed",
+};
+
+export function describeManualEmailRefusal(code: string): string {
+  return MANUAL_EMAIL_REFUSALS[code] ?? code;
+}

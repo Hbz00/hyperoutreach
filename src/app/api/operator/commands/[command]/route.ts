@@ -34,6 +34,7 @@ import {
 } from "@/modules/campaigns/service";
 import { findAccountContactsNeedingResolution } from "@/modules/email-resolution/account-resolution";
 import { acceptManualEmail } from "@/modules/email-resolution/manual-service";
+import { describeManualEmailRefusal } from "@/modules/presentation/status";
 import { disconnectMicrosoftMailbox } from "@/modules/mailboxes/microsoft-oauth-service";
 import {
   connectSmtpImapMailbox,
@@ -397,7 +398,7 @@ export async function POST(
         return destination(
           request,
           `/prospects/${contact.contact.id}`,
-          `Prospect saved; email was not accepted (${accepted.code})`,
+          `Prospect saved; email was not accepted — ${describeManualEmailRefusal(accepted.code)}`,
         );
       }
     }
@@ -566,7 +567,9 @@ export async function POST(
       uuidSchema.safeParse(contactId).success
         ? `/prospects/${contactId}`
         : "/prospects",
-      result.ok ? "Email accepted" : `Email not accepted (${result.code})`,
+      result.ok
+        ? "Email accepted"
+        : `Email not accepted — ${describeManualEmailRefusal(result.code)}`,
     );
   }
 

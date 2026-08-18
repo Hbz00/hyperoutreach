@@ -16,12 +16,14 @@ import {
   operatorSendingSettings,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { readParkedEnrollments } from "@/modules/workflows/parked-enrollments";
 import { StatusBadge } from "@/modules/presentation/status-badge";
 import {
   readDemotedConventions,
   readLadderSettings,
 } from "@/modules/email-resolution/ladder-service";
 import {
+  describeResolutionReason,
   describeStatus,
   describeStopReason,
 } from "@/modules/presentation/status";
@@ -170,6 +172,7 @@ export default async function ReviewPage({
         inArray(operatorCommands.status, ["queued", "waiting", "running"]),
       ),
     );
+  const parked = await readParkedEnrollments(getDatabase());
   const now = new Date();
   const sendChecks = new Map<string, string>();
   // The label of the "schedule this" control per card, empty when there is
@@ -604,6 +607,49 @@ export default async function ReviewPage({
           </section>
         ) : null}
       </section>
+      {parked.length > 0 ? (
+        <section className="panel">
+          <h2>Parked — nothing will move these on its own</h2>
+          <p className="muted">
+            Waiting on a decision, with no message written and nothing queued to
+            write one. Open the prospect: resolving their address again promotes
+            whichever address is still standing, and the message can then be
+            generated from the same page.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Prospect</th>
+                  <th>Company</th>
+                  <th>Campaign</th>
+                  <th>Step</th>
+                  <th>Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parked.map((row) => (
+                  <tr key={row.enrollmentId}>
+                    <td>
+                      <Link href={`/prospects/${row.contactId}`}>
+                        {row.contactName}
+                      </Link>
+                    </td>
+                    <td>{row.accountName}</td>
+                    <td>{row.campaignName}</td>
+                    <td>{row.currentStep + 1}</td>
+                    <td>
+                      {row.resolutionReason
+                        ? describeResolutionReason(row.resolutionReason)
+                        : "waiting on a decision"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
     </main>
   );
 }

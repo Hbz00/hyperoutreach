@@ -654,29 +654,37 @@ async function markPermanentlyRejected(
       .from(enrollments)
       .where(eq(enrollments.id, current.enrollmentId))
       .limit(1);
-    if (enrollment && !isTerminalEnrollmentState(enrollment.state)) {
-      /**
-       * A definite recipient refusal is proof the address does not exist, so the
-       * suppression is written first and stays permanent — and then the ladder
-       * gets its chance, because "this address is dead" and "this person is done"
-       * are two different facts.
-       */
-      if (rejection.hardBounce) {
-        await insertSuppressionInTransaction(tx, {
-          scope: "email",
-          normalizedValue: current.recipient,
-          reason: "hard_bounce",
+    /**
+     * A definite recipient refusal is proof the address does not exist, so the
+     * suppression is written first and stays permanent — and then the ladder
+     * gets its chance, because "this address is dead" and "this person is done"
+     * are two different facts.
+     *
+     * Both sit outside the enrollment's state check, and that is the point. The
+     * address is dead whatever the sequence went on to do; leaving the
+     * suppression inside meant a refusal arriving after a reply or a manual stop
+     * wrote nothing down at all, and the address stayed sendable across every
+     * future campaign — which contradicts the permanence the suppression list
+     * promises. The ladder makes its own decision about the enrollment and
+     * refuses on a terminal one, so calling it here can only record facts.
+     */
+    if (rejection.hardBounce) {
+      await insertSuppressionInTransaction(tx, {
+        scope: "email",
+        normalizedValue: current.recipient,
+        reason: "hard_bounce",
+        actor: "system:smtp",
+        notes: reason.slice(0, 2_000),
+      });
+    }
+    const ladder = rejection.hardBounce
+      ? await advanceAddressLadder(tx, {
+          messageId,
+          now,
           actor: "system:smtp",
-          notes: reason.slice(0, 2_000),
-        });
-      }
-      const ladder = rejection.hardBounce
-        ? await advanceAddressLadder(tx, {
-            messageId,
-            now,
-            actor: "system:smtp",
-          })
-        : null;
+        })
+      : null;
+    if (enrollment && !isTerminalEnrollmentState(enrollment.state)) {
       // The ladder writes the enrollment itself whenever it decides anything
       // about it — an advance, or a hold on a bound the operator can raise. Only
       // a refusal that genuinely ends the prospect leaves the terminal outcome

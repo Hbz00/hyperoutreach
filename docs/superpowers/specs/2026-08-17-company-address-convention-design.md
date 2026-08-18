@@ -388,6 +388,58 @@ to remove, and it is left in place because the cross-campaign cooldown makes it
 rare and because advancing two enrollments from one bounce doubles the send the
 operator was offered once.
 
+### Decided during review, after the first implementation
+
+**A demotion is written down, not recomputed.** The first implementation derived
+"is this convention demoted?" from a live ratio over every attempt ever made at
+the domain. A live ratio falls: two deaths in four attempts demotes a
+convention, and four later attempts that reported nothing put it back under the
+threshold and restored it. That is silence confirming a convention — the one
+thing "outcome evidence can demote and never confirm" forbids. The verdict is
+now latched per `(mail domain, convention)` the moment the threshold is met,
+with the counts that produced it, and reading a domain's demoted conventions is
+the latch unioned with the live ratio. The alternatives were a thirty-day window
+matching the circuit breaker, and amending this document to accept the dilution;
+both were rejected because the demotion only reorders — the cost of a latch that
+ages badly is one convention sitting at the back of one company's ladder, and
+the cost of dilution is an address delivery discredited being offered first
+again.
+
+**A parked prospect becomes visible, not automatic.** A bound the operator can
+raise parks the enrollment, and nothing was showing them. The review queue now
+lists every enrollment in `manual_review` with no message written and no command
+queued to write one — which also catches any other silent failure to queue work,
+not only the ladder's. Automatic resumption when the bound clears was rejected:
+an advance is a send, and "offered, not automatic" is the invariant the whole
+feature rests on. Raising the cap and re-resolving the prospect is the operator's
+move, from the page the list links to.
+
+**An address proven dead cannot be accepted by hand.** Accepting an address
+manually is the operator's strongest move and deliberately overrides confidence,
+MX and evidence. It does not override a delivery failure or a suppression, both
+of which now refuse with a sentence naming what stands in the way. A manually
+accepted address is also re-ranked like every other, rather than taking the
+schema's default rung and sharing it.
+
+**A dead address is recorded whatever the sequence did.** The suppression and
+the dead-marking used to sit inside the check that skipped enrollments already
+ended, so a definite refusal arriving after a reply or a manual stop wrote
+nothing down and left the address sendable in every future campaign. Both are
+facts about the address; only the decision about the enrollment belongs behind
+that check.
+
+**"No signal" excludes anything that answered.** The measure exists to test
+whether the domains being written to report undeliverable addresses at all. As
+"attempts minus explicit failures" it was the arithmetic complement of the
+failure rate and measured nothing else. Sends that produced a reply, an
+out-of-office or an autoresponder are counted separately, as the only positive
+delivery evidence this product ever receives.
+
+**A demotion is reported against the company it happened at.** The
+installation-wide view pooled every domain's ratio into one verdict, which is a
+number no decision is ever taken on. Conventions are now grouped per domain and
+the view names the companies where each is demoted.
+
 ## How we would know it works
 
 Not "it was built", but:

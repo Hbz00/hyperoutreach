@@ -10,6 +10,12 @@ import {
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import {
+  readDemotedConventions,
+  readLadderSettings,
+  readSuppressedAddresses,
+  rewriteLadderRanks,
+} from "@/modules/email-resolution/ladder-service";
+import {
   normalizeDomain,
   normalizeEmail,
 } from "@/modules/prospects/normalization";
@@ -33,6 +39,8 @@ export type AcceptManualEmailResult =
         | "CONTACT_NOT_FOUND"
         | "DOMAIN_MISMATCH"
         | "EMAIL_CONFLICT"
+        | "ADDRESS_DEAD"
+        | "ADDRESS_SUPPRESSED"
         | "DATABASE_ERROR";
     };
 
@@ -75,12 +83,44 @@ export async function acceptManualEmail(
           }
 
           const [conflict] = await tx
-            .select({ contactId: emailCandidates.contactId })
+            .select({
+              contactId: emailCandidates.contactId,
+              deadAt: emailCandidates.deadAt,
+            })
             .from(emailCandidates)
             .where(eq(emailCandidates.normalizedEmail, normalizedEmail))
             .limit(1);
           if (conflict && conflict.contactId !== owner.contact.id) {
             return { ok: false, code: "EMAIL_CONFLICT" } as const;
+          }
+
+          /**
+           * Delivery has already proven this address does not exist.
+           *
+           * Corroborating an address by hand is the operator's strongest move
+           * and this path deliberately overrides confidence, MX and evidence —
+           * but a hard bounce is not a weak signal to override, it is the one
+           * fact this product can establish about an address. Accepting it again
+           * would draft a message the ladder exists to avoid, and nothing in the
+           * schema forbids `accepted` with `dead_at` set.
+           */
+          if (conflict?.deadAt) {
+            return { ok: false, code: "ADDRESS_DEAD" } as const;
+          }
+          /**
+           * The suppression list blocks it, so the send policy would refuse the
+           * message this acceptance is about to make possible.
+           *
+           * Refused here rather than at send time: the operator can lift a
+           * suppression, and being told which one stands in the way is the
+           * decision they are actually facing.
+           */
+          const suppressed = await readSuppressedAddresses(tx, {
+            addresses: [normalizedEmail],
+            domain,
+          });
+          if (suppressed.has(normalizedEmail)) {
+            return { ok: false, code: "ADDRESS_SUPPRESSED" } as const;
           }
 
           const [already] = await tx
@@ -148,6 +188,27 @@ export async function acceptManualEmail(
                 .returning();
           if (!candidate)
             throw new Error("Manual email insert returned no row");
+
+          /**
+           * The ladder is re-ranked, exactly as every other writer of candidates
+           * does.
+           *
+           * A manually accepted address arrives with confidence 1.000 and no
+           * rank of its own, so without this it took the schema default of one
+           * and shared that rung with whatever the evidence had already put
+           * there — two rung ones on one ladder, and an order the operator reads
+           * as meaningful that is not.
+           */
+          const ladderSettings = await readLadderSettings(tx);
+          const demotedPatterns = await readDemotedConventions(tx, {
+            domain,
+            minimumPeople: ladderSettings.demotionMinimumPeople,
+            failureSharePercent: ladderSettings.demotionFailureSharePercent,
+          });
+          await rewriteLadderRanks(tx, {
+            contactId: owner.contact.id,
+            demotedPatterns,
+          });
 
           await tx
             .update(contacts)

@@ -15,6 +15,7 @@ import {
 import { createOrGetContact } from "@/modules/contacts/service";
 import { MockDnsMxResolver } from "@/modules/email-resolution/dns";
 import { StaticPublicEmailEvidenceProvider } from "@/modules/email-resolution/public-evidence-provider";
+import { acceptManualEmail } from "@/modules/email-resolution/manual-service";
 import { resolveContactEmail } from "@/modules/email-resolution/service";
 import {
   readAddressLadderMetrics,
@@ -24,6 +25,7 @@ import {
 } from "@/modules/email-resolution/ladder-service";
 import { updateOperatorSendingSettings } from "@/modules/settings/service";
 import { MockMailProvider } from "@/modules/mailboxes/mock-mail-provider";
+import type { MailProvider } from "@/modules/mailboxes/mail-provider";
 import { generateOutreachProposal } from "@/modules/messages/generation-service";
 import { generateWithPersonalization } from "@/modules/messages/personalized-generation";
 import { MockPersonalizationAgent } from "@/modules/agents/mock-agents";
@@ -33,6 +35,7 @@ import { ingestInboundMessage } from "@/modules/replies/inbound-service";
 import { DeterministicReplyClassifier } from "@/modules/replies/reply-classifier";
 import { listSuppressions } from "@/modules/suppression/service";
 import { findDueEnrollments } from "@/modules/workflows/follow-up-service";
+import { readParkedEnrollments } from "@/modules/workflows/parked-enrollments";
 
 const { testUrl } = resolveDatabaseUrls(process.env);
 const client = postgres(testUrl, { max: 8 });
@@ -1423,7 +1426,9 @@ describe("address attempt ladder", () => {
     expect(metrics.sendsAttempted).toBeGreaterThanOrEqual(1);
     expect(metrics.sendsProvenDead).toBeGreaterThanOrEqual(1);
     expect(metrics.sendsNoSignal).toBe(
-      metrics.sendsAttempted - metrics.sendsProvenDead,
+      metrics.sendsAttempted -
+        metrics.sendsProvenDead -
+        metrics.sendsAcknowledged,
     );
     const outcomes = await readConventionOutcomes(db, {
       minimumPeople: 2,
@@ -1435,5 +1440,482 @@ describe("address attempt ladder", () => {
         outcome.peopleProvenDead,
       );
     }
+  });
+
+  /**
+   * The defects a second review of this feature found, each pinned by the
+   * scenario that produced it.
+   *
+   * Grouped rather than scattered through the suite above: every one of them was
+   * a path that looked correct in isolation and only went wrong where two rules
+   * met, and keeping the scenarios next to each other is what makes that visible.
+   */
+  describe("address ladder — second-review defects", () => {
+    it("refuses to accept an address delivery has proven does not exist", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      await hardBounce(fixture);
+
+      const revived = await acceptManualEmail(db, {
+        contactId: fixture.contact.id,
+        email: fixture.rungOne,
+        actor: "operator",
+      });
+      expect(revived).toMatchObject({ ok: false, code: "ADDRESS_DEAD" });
+      const rows = await candidates(fixture.contact.id);
+      const dead = rows.find((row) => row.normalizedEmail === fixture.rungOne);
+      expect(dead?.status).toBe("rejected");
+      expect(dead?.deadAt).not.toBeNull();
+    });
+
+    it("refuses to accept an address the suppression list blocks", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      await db.insert(schema.suppressionEntries).values({
+        scope: "email",
+        normalizedValue: fixture.rungTwo,
+        reason: "hard_bounce",
+      });
+
+      const blocked = await acceptManualEmail(db, {
+        contactId: fixture.contact.id,
+        email: fixture.rungTwo,
+        actor: "operator",
+      });
+      expect(blocked).toMatchObject({ ok: false, code: "ADDRESS_SUPPRESSED" });
+    });
+
+    it("gives a hand-accepted address its own rung rather than a second rung one", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      const accepted = await acceptManualEmail(db, {
+        contactId: fixture.contact.id,
+        email: `alice.r${sequence}.direct@${fixture.domain}`,
+        actor: "operator",
+      });
+      expect(accepted).toMatchObject({ ok: true });
+
+      const rows = await candidates(fixture.contact.id);
+      const ranks = rows.map((row) => row.ladderRank);
+      expect(new Set(ranks).size).toBe(ranks.length);
+      // Corroborated by a human outranks anything the samples produced.
+      expect(rows[0]?.status).toBe("accepted");
+      expect(rows[0]?.source).toBe("operator_manual");
+    });
+
+    it("keeps a convention demoted once its record has discredited it", async () => {
+      await setLadderSettings({
+        addressLadderDemotionMinimumPeople: 2,
+        addressLadderDemotionFailureSharePercent: 50,
+        addressLadderMaxAdvancesPerAccountPerDay: 10,
+      });
+      const fixture = await ladderFixture({ send: false, extraContacts: 5 });
+      const [first, second, ...rest] = fixture.colleagues;
+      if (!first || !second) throw new Error("fixture needs colleagues");
+      const rungOneOf = async (contactId: string) => {
+        const rows = await candidates(contactId);
+        const row = rows.find(
+          (candidate) => candidate.pattern === "first.last",
+        );
+        if (!row) throw new Error("no first.last rung");
+        return row;
+      };
+      // Two people proven dead out of two attempted: the rule's own floor.
+      for (const person of [first, second]) {
+        const row = await rungOneOf(person.id);
+        await db
+          .update(schema.emailCandidates)
+          .set({
+            deadAt: new Date("2026-08-18T09:00:00.000Z"),
+            firstAttemptedAt: new Date("2026-08-18T08:00:00.000Z"),
+          })
+          .where(eq(schema.emailCandidates.id, row.id));
+      }
+      const outcomes = await readConventionOutcomes(db, {
+        domain: fixture.domain,
+        minimumPeople: 2,
+        failureSharePercent: 50,
+      });
+      expect(
+        outcomes.find((row) => row.pattern === "first.last"),
+      ).toMatchObject({
+        demoted: true,
+        demotedDomains: [fixture.domain],
+      });
+
+      // A death latches the verdict — this is the only path that writes it.
+      await db
+        .update(schema.emailCandidates)
+        .set({ deadAt: null, deadMessageId: null })
+        .where(eq(schema.emailCandidates.id, (await rungOneOf(second.id)).id));
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:00:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+      });
+      // Four more people written to, none of whom reported anything back. Under a
+      // live ratio this is one dead in five and the convention comes back.
+      for (const person of [second, ...rest]) {
+        const row = await rungOneOf(person.id);
+        await db
+          .update(schema.emailCandidates)
+          .set({ firstAttemptedAt: new Date("2026-08-18T11:00:00.000Z") })
+          .where(eq(schema.emailCandidates.id, row.id));
+      }
+      const later = await readConventionOutcomes(db, {
+        domain: fixture.domain,
+        minimumPeople: 2,
+        failureSharePercent: 50,
+      });
+      const diluted = later.find((row) => row.pattern === "first.last");
+      expect(diluted?.peopleProvenDead).toBe(1);
+      expect(diluted?.peopleAttempted).toBeGreaterThanOrEqual(5);
+      // Silence never restores a convention: that would be delivery evidence
+      // vouching for an address, which this product never allows.
+      expect(diluted?.demoted).toBe(true);
+    });
+
+    it("reports a demotion against the company it happened at, not the whole installation", async () => {
+      await setLadderSettings({});
+      const guilty = await ladderFixture({ send: false, extraContacts: 1 });
+      const innocent = await ladderFixture({ send: false, extraContacts: 1 });
+      for (const person of [guilty.contact, guilty.colleagues[0]!]) {
+        const rows = await candidates(person.id);
+        const row = rows.find(
+          (candidate) => candidate.pattern === "first.last",
+        );
+        if (!row) throw new Error("no first.last rung");
+        await db
+          .update(schema.emailCandidates)
+          .set({
+            deadAt: new Date("2026-08-18T09:00:00.000Z"),
+            firstAttemptedAt: new Date("2026-08-18T08:00:00.000Z"),
+          })
+          .where(eq(schema.emailCandidates.id, row.id));
+      }
+      const everywhere = await readConventionOutcomes(db, {
+        minimumPeople: 2,
+        failureSharePercent: 50,
+      });
+      const pattern = everywhere.find((row) => row.pattern === "first.last");
+      expect(pattern?.demotedDomains).toContain(guilty.domain);
+      expect(pattern?.demotedDomains).not.toContain(innocent.domain);
+      expect(pattern?.attemptedDomains).toBeGreaterThanOrEqual(1);
+    });
+
+    it("counts a send a human answered as reached, never as no signal", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      if (!fixture.message) throw new Error("nothing was sent");
+      const before = await readAddressLadderMetrics(db, {
+        now: new Date("2026-08-18T18:00:00.000Z"),
+      });
+      await ingestInboundMessage(db, classifier, {
+        mailboxId: fixture.mailbox.id,
+        providerMessageId: `reply-ack-${sequence}`,
+        outreachId: fixture.message.outreachId ?? undefined,
+        inReplyTo: `<${fixture.message.outreachId}@mock.hyperoutreach>`,
+        sender: fixture.rungOne,
+        recipient: fixture.mailbox.email,
+        subject: "Re: Step 0 Alice",
+        body: "Merci, je regarde cela cette semaine.",
+        receivedAt: new Date("2026-08-18T12:00:00.000Z"),
+      });
+      const after = await readAddressLadderMetrics(db, {
+        now: new Date("2026-08-18T18:00:00.000Z"),
+      });
+      expect(after.sendsAcknowledged).toBe(before.sendsAcknowledged + 1);
+      expect(after.sendsNoSignal).toBe(before.sendsNoSignal - 1);
+    });
+
+    it("says nothing about the address when the sequence ended for its own reasons", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      await db
+        .update(schema.enrollments)
+        .set({
+          state: "opted_out",
+          stopReason: "unsubscribe",
+          stoppedAt: new Date("2026-08-18T10:20:00.000Z"),
+        })
+        .where(eq(schema.enrollments.id, fixture.enrollmentId));
+      await hardBounce(fixture);
+
+      const [contact] = await db
+        .select()
+        .from(schema.contacts)
+        .where(eq(schema.contacts.id, fixture.contact.id));
+      // A bound the operator could raise would have changed nothing here.
+      expect(contact?.emailResolutionReason).not.toBe("ladder_limit_reached");
+    });
+
+    it("shows a prospect a bound parked, and hides one whose message is on its way", async () => {
+      await setLadderSettings({ addressLadderMaxRungs: 1 });
+      const parkedByBound = await ladderFixture();
+      // The fixture writes its message directly rather than through the queue,
+      // so the request enrolment made is still sitting there. Retiring it is
+      // what the maintenance cycle does the moment it runs.
+      const drainQueue = async () =>
+        db
+          .update(schema.operatorCommands)
+          .set({ status: "succeeded" })
+          .where(eq(schema.operatorCommands.task, "generate-message"));
+      await drainQueue();
+      await hardBounce(parkedByBound);
+
+      await setLadderSettings({ addressLadderMaxRungs: 3 });
+      const advanced = await ladderFixture();
+      await drainQueue();
+      await hardBounce(advanced);
+
+      const parked = await readParkedEnrollments(db);
+      const ids = parked.map((row) => row.enrollmentId);
+      // A bound the operator can raise stopped this one, and nothing else in the
+      // product would ever mention it again.
+      expect(ids).toContain(parkedByBound.enrollmentId);
+      // This one has a generation queued: it is in flight, not parked.
+      expect(ids).not.toContain(advanced.enrollmentId);
+      const row = parked.find(
+        (candidate) => candidate.enrollmentId === parkedByBound.enrollmentId,
+      );
+      expect(row?.contactName).toBe(parkedByBound.contact.fullName);
+      expect(row?.resolutionReason).toBe("ladder_limit_reached");
+    });
+
+    it("keys the queued regeneration on the address, never on its position", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      const before = await candidates(fixture.contact.id);
+      const promoted = before.find(
+        (row) => row.normalizedEmail === fixture.rungTwo,
+      );
+      if (!promoted) throw new Error("fixture has no second rung");
+
+      await hardBounce(fixture);
+
+      const queued = await db
+        .select()
+        .from(schema.operatorCommands)
+        .where(eq(schema.operatorCommands.task, "generate-message"));
+      const forThisAdvance = queued.filter((row) =>
+        row.dedupeKey?.startsWith(
+          `enrollment:${fixture.enrollmentId}:generate:`,
+        ),
+      );
+      // A rung number is rewritten by every demotion and every fresh
+      // resolution, so two different addresses on one enrollment can wear the
+      // same one. A candidate id cannot move.
+      expect(
+        forThisAdvance.some((row) =>
+          row.dedupeKey?.endsWith(`:candidate:${promoted.id}`),
+        ),
+      ).toBe(true);
+    });
+
+    it("refuses to park a prospect it could not queue the regeneration for", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      const before = await candidates(fixture.contact.id);
+      const promoted = before.find(
+        (row) => row.normalizedEmail === fixture.rungTwo,
+      );
+      if (!promoted) throw new Error("fixture has no second rung");
+      // Occupy the exact key this advance will use, which is the shape a
+      // collision takes.
+      await db.insert(schema.operatorCommands).values({
+        command: "generate-message",
+        task: "generate-message",
+        payload: { enrollmentId: fixture.enrollmentId, stepIndex: 0 },
+        requestedBy: "test",
+        dedupeKey: `enrollment:${fixture.enrollmentId}:generate:0:candidate:${promoted.id}`,
+        status: "succeeded",
+      });
+
+      // The failure is loud: the whole death rolls back and the delivery report
+      // is retried, rather than committing a park with nothing to release it.
+      await expect(hardBounce(fixture)).resolves.toMatchObject({
+        ok: false,
+        code: "DATABASE_ERROR",
+      });
+
+      // Nothing half-written. The death is not recorded, the ladder has not
+      // advanced, and the delivery report will be tried again — where the old
+      // behaviour committed the park and dropped the command that releases it,
+      // leaving a prospect nothing would ever move.
+      const [deadMessage] = await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.id, fixture.message!.id));
+      expect(deadMessage?.addressDeadAt).toBeNull();
+      const after = await candidates(fixture.contact.id);
+      expect(
+        after.find((row) => row.status === "accepted")?.normalizedEmail,
+      ).toBe(fixture.rungOne);
+      const queued = await db
+        .select()
+        .from(schema.operatorCommands)
+        .where(eq(schema.operatorCommands.task, "generate-message"));
+      // The enrolment's own rung-one request, plus the row planted to collide.
+      expect(
+        queued.filter((row) =>
+          row.dedupeKey?.startsWith(
+            `enrollment:${fixture.enrollmentId}:generate:`,
+          ),
+        ),
+      ).toHaveLength(2);
+    });
+
+    it("records the address as dead and suppressed even when the sequence has already ended", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      const proposal = await generateOutreachProposal(db, {
+        enrollmentId: fixture.enrollmentId,
+        stepIndex: 0,
+        recipient: fixture.rungOne,
+      });
+      if (!proposal.ok) throw new Error(proposal.message);
+      const review = await reviewMessage(db, {
+        messageId: proposal.message.id,
+        action: { kind: "approve" },
+        actor: "operator",
+      });
+      if (!review.ok) throw new Error(review.message);
+      await db
+        .update(schema.mailboxConnections)
+        .set({ provider: "smtp_imap" })
+        .where(eq(schema.mailboxConnections.id, fixture.mailbox.id));
+      const mock = new MockMailProvider();
+      let rejected = false;
+      const provider: MailProvider = {
+        kind: "smtp_imap",
+        createDraft: (input) => mock.createDraft(input),
+        sendDraft: async () => {
+          rejected = true;
+          throw new Error("550 5.1.1 No such user");
+        },
+        // The person replied while the transport was still deciding, which is
+        // the only order in which this can happen: the send policy refuses a
+        // terminal enrollment outright, so the sequence has to end between the
+        // attempt and the report.
+        reconcile: async (input) => {
+          if (rejected) {
+            await db
+              .update(schema.enrollments)
+              .set({
+                state: "replied",
+                stopReason: "positive_reply",
+                stoppedAt: new Date("2026-08-18T10:15:00.000Z"),
+              })
+              .where(eq(schema.enrollments.id, fixture.enrollmentId));
+          }
+          return rejected
+            ? {
+                status: "rejected",
+                draftId: input.draftId!,
+                responseCode: 550,
+                response: "550 5.1.1 No such user",
+                smtpErrorCode: "EENVELOPE",
+                hardBounce: true,
+              }
+            : mock.reconcile(input);
+        },
+      };
+      await expect(
+        sendApprovedMessage(db, provider, {
+          messageId: proposal.message.id,
+        }),
+      ).resolves.toMatchObject({ ok: false, code: "PERMANENT_REJECTION" });
+
+      // The address is dead whatever the sequence went on to do, and a
+      // suppression that depends on the enrollment's state is not permanent.
+      const suppressed = await listSuppressions(db, { scope: "email" });
+      expect(
+        suppressed.some((entry) => entry.normalizedValue === fixture.rungOne),
+      ).toBe(true);
+      const rows = await candidates(fixture.contact.id);
+      expect(
+        rows.find((row) => row.normalizedEmail === fixture.rungOne)?.deadAt,
+      ).not.toBeNull();
+      // And the reply still owns the enrollment.
+      const row = await enrollmentRow(fixture.enrollmentId);
+      expect(row.state).toBe("replied");
+    });
+
+    it("does not let one company's verdict reorder another company's addresses", async () => {
+      await setLadderSettings({ addressLadderDemotionMinimumPeople: 2 });
+      const fixture = await ladderFixture({ extraContacts: 1 });
+      const colleague = fixture.colleagues[0]!;
+      // Two people proven dead on `first.last` at the old company, which is the
+      // demotion rule's own floor.
+      for (const person of [colleague]) {
+        const rows = await candidates(person.id);
+        const row = rows.find(
+          (candidate) => candidate.pattern === "first.last",
+        );
+        if (!row) throw new Error("no first.last rung");
+        await db
+          .update(schema.emailCandidates)
+          .set({
+            deadAt: new Date("2026-08-18T09:00:00.000Z"),
+            firstAttemptedAt: new Date("2026-08-18T08:00:00.000Z"),
+          })
+          .where(eq(schema.emailCandidates.id, row.id));
+      }
+
+      // The contact has moved, and has been resolved at the new company: they
+      // now hold addresses on both domains.
+      const elsewhere = await createOrGetAccount(db, {
+        name: `Elsewhere ${sequence}`,
+        domain: `elsewhere-${sequence}.example`,
+      });
+      if (!elsewhere.ok) throw new Error(elsewhere.message);
+      const newDomain = elsewhere.account.domain!;
+      await db.insert(schema.emailCandidates).values([
+        {
+          contactId: fixture.contact.id,
+          email: `alice.moved@${newDomain}`,
+          normalizedEmail: `alice.moved@${newDomain}`,
+          domain: newDomain,
+          pattern: "first.last",
+          confidence: "0.970",
+          source: "public_pattern",
+          status: "candidate",
+          ladderRank: 1,
+        },
+        {
+          contactId: fixture.contact.id,
+          email: `a.moved@${newDomain}`,
+          normalizedEmail: `a.moved@${newDomain}`,
+          domain: newDomain,
+          pattern: "f.last",
+          confidence: "0.900",
+          source: "public_pattern",
+          status: "candidate",
+          ladderRank: 2,
+        },
+      ]);
+      await db
+        .update(schema.contacts)
+        .set({
+          accountId: elsewhere.account.id,
+          employmentVersion: fixture.contact.employmentVersion + 1,
+        })
+        .where(eq(schema.contacts.id, fixture.contact.id));
+
+      await hardBounce(fixture);
+
+      const after = await candidates(fixture.contact.id);
+      const best = after.find(
+        (row) => row.normalizedEmail === `alice.moved@${newDomain}`,
+      );
+      const second = after.find(
+        (row) => row.normalizedEmail === `a.moved@${newDomain}`,
+      );
+      // The old employer discredited `first.last` for itself. The new employer
+      // never ran it, and its best-evidenced address stays ahead.
+      expect(best!.ladderRank).toBeLessThan(second!.ladderRank);
+    });
   });
 });
