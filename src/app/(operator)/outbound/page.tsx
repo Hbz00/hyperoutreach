@@ -243,7 +243,7 @@ export default async function OutboundPage({
                   <tr>
                     <th>Company</th>
                     <th>Convention</th>
-                    <th>Evidence</th>
+                    <th>Evidence now</th>
                     <th>State</th>
                     <th>Restore</th>
                   </tr>
@@ -254,10 +254,11 @@ export default async function OutboundPage({
                       <td>{record.domain}</td>
                       <td>{record.pattern}</td>
                       <td>
-                        {record.peopleProvenDead} of {record.peopleAttempted}{" "}
-                        people proven dead
+                        {record.livePeopleProvenDead} of{" "}
+                        {record.livePeopleAttempted} people proven dead
                         <small>
-                          decided {record.demotedAt.toLocaleDateString()}
+                          decided {record.demotedAt.toLocaleDateString()} on{" "}
+                          {record.peopleProvenDead} of {record.peopleAttempted}
                         </small>
                       </td>
                       <td>

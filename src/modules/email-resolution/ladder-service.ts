@@ -5,6 +5,7 @@ import {
   eq,
   gte,
   inArray,
+  lt,
   isNotNull,
   isNull,
   ne,
@@ -164,8 +165,11 @@ export async function readConventionOutcomes(
    * practically impossible to demote again, which is the opposite of what a lift
    * should cost.
    *
-   * `> coalesce(lifted_at, '-infinity')` reproduces `is not null` exactly when
-   * nothing was ever lifted, so the unlifted case is unchanged. Written in full
+   * `>= coalesce(lifted_at, '-infinity')` reproduces `is not null` exactly when
+   * nothing was ever lifted, so the unlifted case is unchanged. Inclusive at the
+   * boundary on purpose: excluding a death stamped at the very instant of a lift
+   * would drop it from the record permanently and silently, which is a far worse
+   * failure than counting one the operator may or may not have known about. Written in full
    * rather than interpolated: this is a select projection, where Drizzle renders
    * a column without its table and two joined tables make that ambiguous.
    */
@@ -174,13 +178,13 @@ export async function readConventionOutcomes(
       pattern: emailCandidates.pattern,
       domain: emailCandidates.domain,
       peopleAttempted: sql<number>`count(distinct case
-        when email_candidates.first_attempted_at > coalesce(
+        when email_candidates.first_attempted_at >= coalesce(
                convention_demotions.lifted_at, '-infinity'::timestamptz)
-          or email_candidates.dead_at > coalesce(
+          or email_candidates.dead_at >= coalesce(
                convention_demotions.lifted_at, '-infinity'::timestamptz)
         then email_candidates.contact_id end)::int`,
       peopleProvenDead: sql<number>`count(distinct case
-        when email_candidates.dead_at > coalesce(
+        when email_candidates.dead_at >= coalesce(
                convention_demotions.lifted_at, '-infinity'::timestamptz)
         then email_candidates.contact_id end)::int`,
     })
@@ -356,6 +360,15 @@ async function latchConventionDemotions(
    * earlier evidence was misread, never the evidence they excused. Only a lifted
    * row is rewritten: a standing verdict keeps the counts that first produced it,
    * which is what the audit trail is being asked for.
+   *
+   * `lifted_at < now` is what makes that true under concurrency. This runs inside
+   * the bounce transaction, which holds no advisory lock, so an operator's lift
+   * can commit between the moment the verdict above was computed and the moment
+   * it is written. Without the condition, a bounce that had already decided
+   * "demoted" from the pre-lift evidence would find the row lifted, match, and
+   * overwrite the lift — returning `ok` to the operator while silently erasing
+   * their reasons and reinstating the very verdict they overruled. A lift dated
+   * after the failure being recorded cannot be answered by that failure.
    */
   for (const outcome of newly) {
     await tx
@@ -373,6 +386,7 @@ async function latchConventionDemotions(
           eq(conventionDemotions.domain, input.domain),
           eq(conventionDemotions.pattern, outcome.pattern),
           isNotNull(conventionDemotions.liftedAt),
+          lt(conventionDemotions.liftedAt, input.now),
         ),
       );
   }
@@ -383,8 +397,12 @@ export type ConventionDemotionRecord = {
   domain: string;
   pattern: string;
   demotedAt: Date;
+  /** The evidence the verdict was reached on, frozen at that moment. */
   peopleProvenDead: number;
   peopleAttempted: number;
+  /** The evidence as it stands now, counted from the last lift. */
+  livePeopleProvenDead: number;
+  livePeopleAttempted: number;
   liftedAt: Date | null;
   liftedBy: string | null;
   liftReason: string | null;
@@ -400,8 +418,47 @@ export type ConventionDemotionRecord = {
 export async function readConventionDemotionRecords(
   db: LadderQueryable,
 ): Promise<ConventionDemotionRecord[]> {
+  /**
+   * The stored counts and the current ones, side by side.
+   *
+   * The stored pair is written when the verdict is reached and never again, so
+   * on a standing demotion it freezes while the record keeps growing. Shown
+   * alone it understates the case against the convention — and it is shown to an
+   * operator deciding whether to overrule that case, which is the one direction
+   * a stale number must not be wrong in. The live pair carries the same
+   * watermark the verdict itself uses, so the two answer the same question at
+   * two different moments rather than two questions.
+   */
+  const attemptedSince = sql<number>`(
+    select count(distinct sample.contact_id)::int
+    from email_candidates sample
+    where sample.domain = convention_demotions.domain
+      and sample.pattern = convention_demotions.pattern
+      and (sample.first_attempted_at >= coalesce(
+             convention_demotions.lifted_at, '-infinity'::timestamptz)
+        or sample.dead_at >= coalesce(
+             convention_demotions.lifted_at, '-infinity'::timestamptz)))`;
+  const deadSince = sql<number>`(
+    select count(distinct sample.contact_id)::int
+    from email_candidates sample
+    where sample.domain = convention_demotions.domain
+      and sample.pattern = convention_demotions.pattern
+      and sample.dead_at >= coalesce(
+            convention_demotions.lifted_at, '-infinity'::timestamptz))`;
   return db
-    .select()
+    .select({
+      id: conventionDemotions.id,
+      domain: conventionDemotions.domain,
+      pattern: conventionDemotions.pattern,
+      demotedAt: conventionDemotions.demotedAt,
+      peopleProvenDead: conventionDemotions.peopleProvenDead,
+      peopleAttempted: conventionDemotions.peopleAttempted,
+      livePeopleProvenDead: deadSince,
+      livePeopleAttempted: attemptedSince,
+      liftedAt: conventionDemotions.liftedAt,
+      liftedBy: conventionDemotions.liftedBy,
+      liftReason: conventionDemotions.liftReason,
+    })
     .from(conventionDemotions)
     .orderBy(asc(conventionDemotions.domain), asc(conventionDemotions.pattern));
 }

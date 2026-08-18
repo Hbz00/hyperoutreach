@@ -119,6 +119,23 @@ export async function acceptManualEmail(
             )
             .limit(1);
           if (already) {
+            /**
+             * An address accepted before it was suppressed is still blocked.
+             *
+             * This path writes nothing, so it is the only place that can answer
+             * for it — the write below, which carries the same condition, is
+             * never reached. Returning "already accepted" would tell the
+             * operator the thing they asked for is in place while every send to
+             * it is refused, which is exactly the silent refusal this whole
+             * check exists to move earlier.
+             */
+            const blocked = await readSuppressedAddresses(tx, {
+              addresses: [normalizedEmail],
+              domain,
+            });
+            if (blocked.has(normalizedEmail)) {
+              return { ok: false, code: "ADDRESS_SUPPRESSED" } as const;
+            }
             return {
               ok: true,
               disposition: "already_accepted",

@@ -284,24 +284,34 @@ async function ladderFixture(
 
 async function hardBounce(
   fixture: Awaited<ReturnType<typeof ladderFixture>>,
-  overrides: { bouncedRecipient?: string; receivedAt?: Date } = {},
+  overrides: {
+    bouncedRecipient?: string;
+    receivedAt?: Date;
+    /** The clock the ladder records this death against. */
+    now?: Date;
+  } = {},
 ) {
   if (!fixture.message) throw new Error("nothing was sent to bounce");
   sequence += 1;
-  return ingestInboundMessage(db, classifier, {
-    mailboxId: fixture.mailbox.id,
-    providerMessageId: `dsn-ladder-${sequence}`,
-    outreachId: fixture.message.outreachId ?? undefined,
-    conversationId: fixture.message.conversationId ?? undefined,
-    inReplyTo: fixture.message.internetMessageId ?? undefined,
-    sender: "postmaster@example.net",
-    recipient: fixture.mailbox.email,
-    bouncedRecipient: overrides.bouncedRecipient ?? fixture.rungOne,
-    subject: "Delivery status notification",
-    body: "Recipient address rejected: user unknown",
-    bounceKind: "hard" as const,
-    receivedAt: overrides.receivedAt ?? bouncedAt,
-  });
+  return ingestInboundMessage(
+    db,
+    classifier,
+    {
+      mailboxId: fixture.mailbox.id,
+      providerMessageId: `dsn-ladder-${sequence}`,
+      outreachId: fixture.message.outreachId ?? undefined,
+      conversationId: fixture.message.conversationId ?? undefined,
+      inReplyTo: fixture.message.internetMessageId ?? undefined,
+      sender: "postmaster@example.net",
+      recipient: fixture.mailbox.email,
+      bouncedRecipient: overrides.bouncedRecipient ?? fixture.rungOne,
+      subject: "Delivery status notification",
+      body: "Recipient address rejected: user unknown",
+      bounceKind: "hard" as const,
+      receivedAt: overrides.receivedAt ?? bouncedAt,
+    },
+    overrides.now ? { now: overrides.now } : {},
+  );
 }
 
 async function awaitingReview(enrollmentId: string) {
@@ -2037,6 +2047,129 @@ describe("address attempt ladder", () => {
       // the operator's judgement the thing that convicts them.
       expect(afterTwo[0]?.peopleProvenDead).toBe(2);
       expect(afterTwo[0]?.peopleAttempted).toBe(2);
+    });
+
+    it("never lets a bounce erase a restore it could not have seen", async () => {
+      await setLadderSettings({
+        addressLadderDemotionMinimumPeople: 2,
+        addressLadderDemotionFailureSharePercent: 50,
+      });
+      const fixture = await ladderFixture({ extraContacts: 2 });
+      // A restore, and enough failures since it to justify demoting again.
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T08:00:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+        liftedAt: new Date("2026-08-18T10:00:00.000Z"),
+        liftedBy: "operator",
+        liftReason: "Both had left the company",
+      });
+      for (const [index, person] of fixture.colleagues.entries()) {
+        const rows = await candidates(person.id);
+        const row = rows.find((c) => c.pattern === "first.last")!;
+        const at = new Date(
+          index === 0 ? "2026-08-18T10:15:00.000Z" : "2026-08-18T10:20:00.000Z",
+        );
+        await db
+          .update(schema.emailCandidates)
+          .set({ deadAt: at, firstAttemptedAt: at })
+          .where(eq(schema.emailCandidates.id, row.id));
+      }
+
+      // A delivery report that predates the restore. Its verdict was reached
+      // without knowing about it — which is the shape of the race, because the
+      // bounce path holds no lock the operator's restore can wait on.
+      await hardBounce(fixture, {
+        receivedAt: new Date("2026-08-18T09:50:00.000Z"),
+        now: new Date("2026-08-18T09:50:00.000Z"),
+      });
+
+      const [record] = (await readConventionDemotionRecords(db)).filter(
+        (row) => row.domain === fixture.domain,
+      );
+      // The restore survives with the operator's reasons intact. Overwriting it
+      // would have reinstated the verdict they overruled and erased why, with
+      // their screen still saying "restored".
+      expect(record?.liftedAt).not.toBeNull();
+      expect(record?.liftedBy).toBe("operator");
+      expect(record?.liftReason).toBe("Both had left the company");
+    });
+
+    it("shows the evidence a demoted convention stands on now, not only what decided it", async () => {
+      await setLadderSettings({
+        addressLadderDemotionMinimumPeople: 2,
+        addressLadderDemotionFailureSharePercent: 50,
+      });
+      const fixture = await ladderFixture({ send: false, extraContacts: 3 });
+      const kill = async (contactId: string, at: Date) => {
+        const rows = await candidates(contactId);
+        const row = rows.find((c) => c.pattern === "first.last")!;
+        await db
+          .update(schema.emailCandidates)
+          .set({ deadAt: at, firstAttemptedAt: at })
+          .where(eq(schema.emailCandidates.id, row.id));
+      };
+      await kill(
+        fixture.colleagues[0]!.id,
+        new Date("2026-08-18T09:00:00.000Z"),
+      );
+      await kill(
+        fixture.colleagues[1]!.id,
+        new Date("2026-08-18T09:01:00.000Z"),
+      );
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:01:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+      });
+      // The record keeps growing while the verdict stands. The stored counts
+      // are never rewritten for a standing verdict — that is what the audit
+      // trail is for — so the screen must not read them as the current case.
+      await kill(
+        fixture.colleagues[2]!.id,
+        new Date("2026-08-18T10:00:00.000Z"),
+      );
+
+      const [record] = (await readConventionDemotionRecords(db)).filter(
+        (row) => row.domain === fixture.domain,
+      );
+      expect(record?.peopleProvenDead).toBe(2);
+      expect(record?.livePeopleProvenDead).toBe(3);
+      // Understating the case is the one direction this must not be wrong in:
+      // it is shown to an operator deciding whether to overrule that case.
+      expect(record!.livePeopleProvenDead).toBeGreaterThan(
+        record!.peopleProvenDead,
+      );
+    });
+
+    it("still names the suppression when the blocked address is already accepted", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      const accepted = await acceptManualEmail(db, {
+        contactId: fixture.contact.id,
+        email: fixture.rungTwo,
+        actor: "operator",
+      });
+      expect(accepted).toMatchObject({ ok: true });
+      // A colleague's failed guess suppresses the address afterwards.
+      await db.insert(schema.suppressionEntries).values({
+        scope: "email",
+        normalizedValue: fixture.rungTwo,
+        reason: "hard_bounce",
+      });
+
+      const again = await acceptManualEmail(db, {
+        contactId: fixture.contact.id,
+        email: fixture.rungTwo,
+        actor: "operator",
+      });
+      // "Already accepted" would say the thing they asked for is in place while
+      // every send to it is refused.
+      expect(again).toMatchObject({ ok: false, code: "ADDRESS_SUPPRESSED" });
     });
 
     it("keys the queued regeneration on the death that caused it", async () => {
