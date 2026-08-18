@@ -5,7 +5,8 @@
 > passent désormais par l’app ChatGPT desktop de l’opérateur ; l’adaptateur API a
 > été supprimé et l’adaptateur Codex débranché. Les contrats d’agents, les schémas,
 > les preuves et le reste de l’architecture décrits ici restent valables ; `README.md`
-> fait foi pour le chemin IA courant.
+> fait foi pour le chemin IA courant. Le produit a evolue depuis et ce document peut 
+> ne plus être 100% d'actualité. Le code source est la seule source de verité.
 
 ## 1. Conclusion d’architecture
 
@@ -1477,6 +1478,14 @@ Last sync  2 min
 ---
 
 # 27. Bounces et suppression
+
+> Note du 2026-08-18 : un hard bounce établit désormais **deux faits distincts**
+> que ce document confondait — l'adresse est morte, la personne ne l'est pas. La
+> suppression décrite ci-dessous reste inchangée et définitive ; ce qui change,
+> c'est que le contact peut repartir sur l'adresse suivante que les preuves ont
+> nommée pour lui, sans consommer d'étape et sans qu'aucun envoi ne soit
+> d'origine système. Une échelle épuisée retombe exactement sur l'état terminal
+> décrit ici. Voir « The address ladder » dans `README.md`, qui fait foi.
 
 Les bounces doivent avoir un effet immédiat :
 

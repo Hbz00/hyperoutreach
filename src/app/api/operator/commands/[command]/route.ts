@@ -32,6 +32,7 @@ import {
   publishCampaignVersion,
   reviseCampaignVersion,
 } from "@/modules/campaigns/service";
+import { findAccountContactsNeedingResolution } from "@/modules/email-resolution/account-resolution";
 import { acceptManualEmail } from "@/modules/email-resolution/manual-service";
 import { disconnectMicrosoftMailbox } from "@/modules/mailboxes/microsoft-oauth-service";
 import {
@@ -487,6 +488,70 @@ export async function POST(
         forcePublicSearch: boolean(formData, "forcePublicSearch"),
       },
     });
+  }
+
+  /**
+   * The company, not the person, is the unit of resolution.
+   *
+   * One button asks the model the company's convention once and applies it to
+   * every contact who still needs an address — which is what the search was
+   * always about. The per-contact action survives for the exception; this is the
+   * normal path.
+   *
+   * A forced re-search rides on the first queued contact and on no other. The
+   * flag on all of them would spend a live web search per person, which is the
+   * cost this whole direction exists to remove.
+   */
+  if (command === "resolve-account-emails") {
+    const accountId = value(formData, "accountId");
+    if (!uuidSchema.safeParse(accountId).success) {
+      return destination(request, "/prospects", "Invalid account");
+    }
+    const returnTo = value(formData, "returnTo") ?? "/prospects";
+    const force = boolean(formData, "forcePublicSearch");
+    const eligible = await findAccountContactsNeedingResolution(db, {
+      accountId: accountId!,
+      includeResolved: force,
+    });
+    if (eligible.length === 0) {
+      return destination(
+        request,
+        returnTo,
+        "Every contact at this company already has an address, or has already been written to",
+      );
+    }
+    const requestToken = value(formData, "requestToken") ?? randomUUID();
+    const threshold = Number(value(formData, "confidenceThreshold") ?? "0.85");
+    let queued = 0;
+    try {
+      for (const [index, row] of eligible.entries()) {
+        await enqueueOperatorCommand(db, {
+          command: "resolve-email",
+          payload: {
+            contactId: row.contactId,
+            confidenceThreshold: Number.isFinite(threshold) ? threshold : 0.85,
+            forcePublicSearch: force && index === 0,
+          },
+          requestedBy: session.email,
+          dedupeKey: `ui:account-email-resolution:${accountId}:${requestToken}:${row.contactId}`,
+        });
+        queued += 1;
+      }
+    } catch {
+      return destination(
+        request,
+        returnTo,
+        queued === 0
+          ? "Address resolution not queued"
+          : `Address resolution queued for ${queued} of ${eligible.length} contacts`,
+      );
+    }
+    askForMaintenanceNow();
+    return destination(
+      request,
+      returnTo,
+      `Address resolution queued for ${queued} contact${queued > 1 ? "s" : ""} — one company search covers all of them`,
+    );
   }
 
   if (command === "accept-manual-email") {
@@ -968,6 +1033,32 @@ export async function POST(
         "contactMinimumDelayMinutes",
       ),
       crossCampaignCooldownDays: integer(formData, "crossCampaignCooldownDays"),
+      // An unchecked checkbox is not submitted at all, so `boolean()` returning
+      // false for an absent field is what makes this switch turn *off* as well
+      // as on. Every numeric field below reads as `undefined` when blank, which
+      // the update schema treats as "leave it alone".
+      addressLadderEnabled: boolean(formData, "addressLadderEnabled"),
+      addressLadderMaxRungs: integer(formData, "addressLadderMaxRungs"),
+      addressLadderMaxAdvancesPerAccountPerDay: integer(
+        formData,
+        "addressLadderMaxAdvancesPerAccountPerDay",
+      ),
+      addressLadderFailureRatePercent: integer(
+        formData,
+        "addressLadderFailureRatePercent",
+      ),
+      addressLadderFailureRateMinimumSends: integer(
+        formData,
+        "addressLadderFailureRateMinimumSends",
+      ),
+      addressLadderDemotionMinimumPeople: integer(
+        formData,
+        "addressLadderDemotionMinimumPeople",
+      ),
+      addressLadderDemotionFailureSharePercent: integer(
+        formData,
+        "addressLadderDemotionFailureSharePercent",
+      ),
       actor: session.email,
     });
     return destination(

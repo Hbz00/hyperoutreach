@@ -7,6 +7,7 @@ import {
   gte,
   inArray,
   isNotNull,
+  isNull,
   ne,
   or,
   sql,
@@ -36,6 +37,7 @@ import type {
   SentMail,
 } from "@/modules/mailboxes/mail-provider";
 import { isTerminalEnrollmentState } from "@/modules/campaigns/enrollment-state";
+import { advanceAddressLadder } from "@/modules/email-resolution/ladder-service";
 import { DEFAULT_INBOUND_WORKFLOW_NAME } from "@/modules/mailboxes/inbound-reconciliation";
 import { GRAPH_DELTA_HEALTH_WORKFLOW_NAME } from "@/modules/mailboxes/microsoft-graph-inbound-naming";
 import { markMailboxAuthenticationFailed } from "@/modules/mailboxes/lifecycle-service";
@@ -421,10 +423,26 @@ async function finalizeSent(
         ),
       )
       .limit(1);
-    const preserveEnrollment = isTerminalEnrollmentState(enrollment.state);
+    /**
+     * A message whose address was proven not to exist never progresses the
+     * sequence, however cleanly the provider confirms it left.
+     *
+     * Both facts are true and neither cancels the other: the provider did accept
+     * it, and the recipient does not exist. Recording it as `sent` is right — it
+     * was — but the enrollment must not move, because a reconciliation arriving
+     * after the bounce would otherwise step past a step nothing was delivered
+     * at, schedule a follow-up to a dead thread, and silently undo the reset an
+     * advance had just made. `manual_review` is not terminal, so the ordinary
+     * guard below does not catch this on its own.
+     */
+    const addressProvenDead = updated.addressDeadAt !== null;
+    const preserveEnrollment =
+      isTerminalEnrollmentState(enrollment.state) || addressProvenDead;
     const enrollmentUpdate = preserveEnrollment
       ? {
-          lastMessageAt: now,
+          // Follow-up timing counts from the most recent attempt that was not
+          // proven dead, so a dead one must not become the last message either.
+          ...(addressProvenDead ? {} : { lastMessageAt: now }),
           workflowClaimId: null,
           workflowClaimedAt: null,
         }
@@ -625,36 +643,24 @@ async function markPermanentlyRejected(
       reason: "provider_permanent_rejection",
       metadata: { responseCode: rejection.responseCode },
     });
+    // Locked before it is read, because the ladder below rewrites it and this
+    // path — unlike the inbound one — can be reached from a reconciliation that
+    // holds no action lock at all.
+    await tx.execute(
+      sql`select id from enrollments where id = ${current.enrollmentId} for update`,
+    );
     const [enrollment] = await tx
       .select()
       .from(enrollments)
       .where(eq(enrollments.id, current.enrollmentId))
       .limit(1);
     if (enrollment && !isTerminalEnrollmentState(enrollment.state)) {
-      const nextState = rejection.hardBounce ? "bounced" : "manual_review";
-      await tx
-        .update(enrollments)
-        .set({
-          state: nextState,
-          nextActionAt: null,
-          nextActionToken: null,
-          workflowClaimId: null,
-          workflowClaimedAt: null,
-          ...(rejection.hardBounce
-            ? { stopReason: "hard_bounce" as const, stoppedAt: now }
-            : {}),
-        })
-        .where(eq(enrollments.id, enrollment.id));
-      await tx.insert(stateTransitions).values({
-        entityType: "enrollment",
-        entityId: enrollment.id,
-        fromState: enrollment.state,
-        toState: nextState,
-        reason: rejection.hardBounce
-          ? "hard_bounce"
-          : "provider_permanent_rejection",
-        metadata: { messageId, responseCode: rejection.responseCode },
-      });
+      /**
+       * A definite recipient refusal is proof the address does not exist, so the
+       * suppression is written first and stays permanent — and then the ladder
+       * gets its chance, because "this address is dead" and "this person is done"
+       * are two different facts.
+       */
       if (rejection.hardBounce) {
         await insertSuppressionInTransaction(tx, {
           scope: "email",
@@ -662,6 +668,52 @@ async function markPermanentlyRejected(
           reason: "hard_bounce",
           actor: "system:smtp",
           notes: reason.slice(0, 2_000),
+        });
+      }
+      const ladder = rejection.hardBounce
+        ? await advanceAddressLadder(tx, {
+            messageId,
+            now,
+            actor: "system:smtp",
+          })
+        : null;
+      // The ladder writes the enrollment itself whenever it decides anything
+      // about it — an advance, or a hold on a bound the operator can raise. Only
+      // a refusal that genuinely ends the prospect leaves the terminal outcome
+      // to be written here.
+      if (
+        !ladder ||
+        (ladder.kind === "not_advanced" && ladder.endsEnrollment)
+      ) {
+        const nextState = rejection.hardBounce ? "bounced" : "manual_review";
+        await tx
+          .update(enrollments)
+          .set({
+            state: nextState,
+            nextActionAt: null,
+            nextActionToken: null,
+            workflowClaimId: null,
+            workflowClaimedAt: null,
+            ...(rejection.hardBounce
+              ? { stopReason: "hard_bounce" as const, stoppedAt: now }
+              : {}),
+          })
+          .where(eq(enrollments.id, enrollment.id));
+        await tx.insert(stateTransitions).values({
+          entityType: "enrollment",
+          entityId: enrollment.id,
+          fromState: enrollment.state,
+          toState: nextState,
+          reason: rejection.hardBounce
+            ? "hard_bounce"
+            : "provider_permanent_rejection",
+          metadata: {
+            messageId,
+            responseCode: rejection.responseCode,
+            ...(ladder?.kind === "not_advanced"
+              ? { ladderStopReason: ladder.reason }
+              : {}),
+          },
         });
       }
     }
@@ -870,6 +922,11 @@ async function evaluateStoredSendPolicy(
         eq(messages.stepIndex, context.message.stepIndex!),
         eq(messages.direction, "outbound"),
         eq(messages.status, "sent"),
+        // A step sent to an address that was afterwards proven not to exist was
+        // not delivered, so it does not make this step already sent. Every other
+        // sent message still does, including one whose delivery is only
+        // uncertain.
+        isNull(messages.addressDeadAt),
         ne(messages.id, context.message.id),
       ),
     )
@@ -1918,6 +1975,35 @@ export async function sendApprovedMessage(
               .set({ attemptCount: 1, sendAttemptedAt: finalNow })
               .where(eq(messages.id, messageId))
               .returning();
+            /**
+             * The rung this send spends, stamped where the attempt becomes
+             * durable rather than where it succeeds.
+             *
+             * It is the denominator of every rate the delivery-outcome loop
+             * computes — "sends attempted", never "sends delivered", which is a
+             * fact this product cannot establish — and it is what the per-contact
+             * rung ceiling counts.
+             *
+             * Scoped to this enrollment's contact as well as to the address.
+             * `normalized_email` is globally unique, so the address alone finds at
+             * most one row — but not necessarily *this* person's, and stamping a
+             * colleague's rung would corrupt both their ceiling and the demotion
+             * denominator. The `isNull` guard keeps it the *first* attempt rather
+             * than the latest.
+             */
+            await tx
+              .update(emailCandidates)
+              .set({ firstAttemptedAt: finalNow })
+              .where(
+                and(
+                  eq(emailCandidates.contactId, actionContext.contactId),
+                  eq(
+                    emailCandidates.normalizedEmail,
+                    context.message.recipient,
+                  ),
+                  isNull(emailCandidates.firstAttemptedAt),
+                ),
+              );
             await tx.insert(workflowEvents).values({
               entityType: "message",
               entityId: messageId,

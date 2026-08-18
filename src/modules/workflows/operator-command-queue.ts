@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
-import { operatorCommands } from "@/lib/db/schema";
+import { agentRuns, operatorCommands } from "@/lib/db/schema";
 import { sanitizeMaintenanceError } from "@/modules/workflows/maintenance-error";
 import type { AppDatabase } from "@/lib/db/types";
 import {
@@ -172,6 +172,11 @@ export async function drainOperatorCommands(
     }
     executed += 1;
 
+    // Counted before the work and again after it, because whether this command
+    // reached the AI surface is a fact to observe rather than a task name to
+    // guess at. See the `break` below for why that distinction matters.
+    const turnsBefore = await countAgentRuns(db);
+
     let outcome:
       | { status: "threw"; message: string }
       | { status: "returned"; value: unknown };
@@ -204,17 +209,44 @@ export async function drainOperatorCommands(
     });
     if (finished) drained.push(finished);
 
-    // One AI turn per pass. The bound exists because that turn holds the
-    // operator's single ChatGPT window and can last ten minutes — it is not a
-    // reason to make a deterministic generation wait a minute for its turn.
-    // Whether this command took a turn is answered by `prepareCommand`, not by
-    // the task name: `generate-message` is deterministic interpolation until a
-    // step declares an agent-written field, and reading the name alone let a
-    // burst of enrolments on a personalized campaign spend the window once per
-    // command in a single pass.
-    if (prepared.usesAi) break;
+    /**
+     * One AI turn per pass. The bound exists because that turn holds the
+     * operator's single ChatGPT window and can last ten minutes — which is not a
+     * reason to make a deterministic generation wait a minute for its turn.
+     *
+     * Observed, not predicted. Every path to that window writes an `agent_runs`
+     * row before it calls the provider, so a row that appeared while this command
+     * ran is the only honest answer to "did it spend the turn" — and it is the
+     * right answer for the three cases a per-task guess got wrong: a resolution
+     * that reused a recorded company search, account research that reused a fresh
+     * snapshot, and a deterministic generation. Guessing by task name is what made
+     * ten colleagues at one company take ten minutes for an answer established
+     * once.
+     *
+     * A count delta rather than "rows newer than the claim": `created_at` is the
+     * database clock and the claim is the process clock, and a database a second
+     * behind would hide a turn — the one failure direction this bound cannot
+     * afford. It is also immune to a caller pinning `now` to a past instant,
+     * which the tests do.
+     *
+     * The coupling this creates is worth stating: the bound now depends on every
+     * AI path calling `startAgentRun` before its provider call. A path that did
+     * not would be invisible here — and would also be invisible in the audit
+     * trail, which is the louder of the two failures.
+     *
+     * Read after finalisation and outside the try, so a command that threw after
+     * spending a turn still stops the pass.
+     */
+    if ((await countAgentRuns(db)) > turnsBefore) break;
   }
   return drained;
+}
+
+async function countAgentRuns(db: AppDatabase): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(agentRuns);
+  return row?.count ?? 0;
 }
 
 async function claimNextCommand(

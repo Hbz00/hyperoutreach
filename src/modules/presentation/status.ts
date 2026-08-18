@@ -150,6 +150,13 @@ const RESOLUTION_REASONS: Record<string, string> = {
   employment_changed: "the contact changed employer",
   stale_employment: "the employment data is stale",
   resolution_in_progress: "resolution is still running",
+  ladder_exhausted:
+    "every evidenced address for this person has been tried and proven dead",
+  ladder_limit_reached:
+    "an address remains, but a ladder bound stopped the attempt",
+  ladder_earlier_send_unconfirmed:
+    "an earlier message to this person was never reported undelivered, so no further address is tried",
+  address_suppressed: "every evidenced address for this person is suppressed",
 };
 
 export function describeResolutionReason(value: string): string {

@@ -336,6 +336,139 @@ describe("committed PostgreSQL migration", () => {
     );
   });
 
+  /**
+   * The step slot belongs to the *live* message, not to every message that ever
+   * carried the step. A ladder advance has to be able to write a successor for a
+   * step whose address was proven not to exist, and nothing else may write one.
+   */
+  it("frees an enrollment step only once its address is proven dead", async () => {
+    const [{ id: accountId }] = await client<[{ id: string }]>`
+      insert into accounts (name, normalized_name, domain)
+      values ('Ladder Corp', 'ladder corp', 'ladder.example')
+      returning id
+    `;
+    const [{ id: contactId }] = await client<[{ id: string }]>`
+      insert into contacts (
+        account_id, first_name, last_name, full_name, normalized_full_name
+      ) values (${accountId}, 'Rune', 'Vale', 'Rune Vale', 'rune vale')
+      returning id
+    `;
+    const [{ id: campaignId }] = await client<[{ id: string }]>`
+      insert into campaigns (name, type, target_description)
+      values ('Ladder Campaign', 'commercial_outreach', 'Operations leaders')
+      returning id
+    `;
+    const [{ id: versionId }] = await client<[{ id: string }]>`
+      insert into campaign_versions (campaign_id, version, configuration)
+      values (${campaignId}, 1, '{}') returning id
+    `;
+    await client`
+      insert into sequence_steps (
+        campaign_version_id, step_index, delay_minutes, subject_template,
+        body_template
+      ) values (${versionId}, 0, 0, 'Hello', 'Hello {{first_name}}')
+    `;
+    const [{ id: enrollmentId }] = await client<[{ id: string }]>`
+      insert into enrollments (campaign_id, campaign_version_id, contact_id)
+      values (${campaignId}, ${versionId}, ${contactId}) returning id
+    `;
+    await client`
+      insert into messages (
+        enrollment_id, step_index, direction, outreach_id, subject, body,
+        recipient, status, contact_account_id, employment_version
+      ) values (
+        ${enrollmentId}, 0, 'outbound', 'out_rung_one', 'Hello', 'Body',
+        'r.vale@ladder.example', 'sent', ${accountId}, 1
+      )
+    `;
+
+    await expectDatabaseError(
+      () => client`
+        insert into messages (
+          enrollment_id, step_index, direction, outreach_id, subject, body,
+          recipient, status, contact_account_id, employment_version
+        ) values (
+          ${enrollmentId}, 0, 'outbound', 'out_rung_two', 'Hello', 'Body',
+          'rune.vale@ladder.example', 'proposed', ${accountId}, 1
+        )
+      `,
+      "23505",
+    );
+
+    await client`
+      update messages set address_dead_at = now()
+      where outreach_id = 'out_rung_one'
+    `;
+    await client`
+      insert into messages (
+        enrollment_id, step_index, direction, outreach_id, subject, body,
+        recipient, status, contact_account_id, employment_version
+      ) values (
+        ${enrollmentId}, 0, 'outbound', 'out_rung_two', 'Hello', 'Body',
+        'rune.vale@ladder.example', 'proposed', ${accountId}, 1
+      )
+    `;
+    const live = await client<{ outreach_id: string }[]>`
+      select outreach_id from messages
+      where enrollment_id = ${enrollmentId} and address_dead_at is null
+    `;
+    expect(live.map((row) => row.outreach_id)).toEqual(["out_rung_two"]);
+
+    // And a second live successor is refused exactly as the first duplicate was.
+    await expectDatabaseError(
+      () => client`
+        insert into messages (
+          enrollment_id, step_index, direction, outreach_id, subject, body,
+          recipient, status, contact_account_id, employment_version
+        ) values (
+          ${enrollmentId}, 0, 'outbound', 'out_rung_three', 'Hello', 'Body',
+          'vale.rune@ladder.example', 'proposed', ${accountId}, 1
+        )
+      `,
+      "23505",
+    );
+  });
+
+  /**
+   * A candidate may only claim it was proven dead alongside the message that
+   * proved it, and a rung number is always a rung number.
+   */
+  it("constrains the ladder columns on an email candidate", async () => {
+    const [{ id: accountId }] = await client<[{ id: string }]>`
+      insert into accounts (name, normalized_name, domain)
+      values ('Rung Corp', 'rung corp', 'rung.example')
+      returning id
+    `;
+    const [{ id: contactId }] = await client<[{ id: string }]>`
+      insert into contacts (
+        account_id, first_name, last_name, full_name, normalized_full_name
+      ) values (${accountId}, 'Iris', 'Kang', 'Iris Kang', 'iris kang')
+      returning id
+    `;
+    await expectDatabaseError(
+      () => client`
+        insert into email_candidates (
+          contact_id, email, normalized_email, domain, confidence, source,
+          ladder_rank
+        ) values (
+          ${contactId}, 'iris.kang@rung.example', 'iris.kang@rung.example',
+          'rung.example', 0.9, 'public_pattern', 0
+        )
+      `,
+      "23514",
+    );
+    const [{ id: enrollmentless }] = await client<[{ id: string }]>`
+      insert into email_candidates (
+        contact_id, email, normalized_email, domain, confidence, source,
+        ladder_rank
+      ) values (
+        ${contactId}, 'iris.kang@rung.example', 'iris.kang@rung.example',
+        'rung.example', 0.9, 'public_pattern', 1
+      ) returning id
+    `;
+    expect(enrollmentless).toBeTruthy();
+  });
+
   it("rejects duplicate inbound provider messages", async () => {
     const [{ id: mailboxId }] = await client<[{ id: string }]>`
       insert into mailbox_connections (provider, email, normalized_email)

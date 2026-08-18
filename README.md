@@ -335,11 +335,18 @@ company search** on the contact page overrides all of it and spends a live web
 search. Each candidate records which search it rests on and whether that search
 was fresh or reused, shown beside its address convention.
 
-Two conventions that tie above the threshold are refused rather than resolved.
-One pattern yields one address per contact, so two addresses evidenced equally
-well mean the company runs more than one convention and the evidence does not
-say which this person uses; the contact keeps both candidates and a
-`candidate_conflict` reason instead of having one picked alphabetically. DNS and conventional enrichment retain their short provider deadline.
+**Resolving addresses is an action on a company.** `/prospects` offers it on each
+company row with the number of contacts it would act on, and the contact page
+offers the same button; the per-contact action survives beside it for the
+exception — somebody who just changed employer, a manual addition — rather than
+being the normal path. One click queues one resolution per contact, and only the
+first carries a forced re-search, so a ten-person company can never spend ten live
+searches. Two contacts are never included: one already resolved (unless the search
+is forced), and one whose accepted address has already been written to, because
+moving the address of somebody who may be holding a message would make that
+message unsendable and could end with two addresses used for one human.
+
+DNS and conventional enrichment retain their short provider deadline.
 AI public-evidence research has its own deadline, `AI_RESEARCH_TIMEOUT_MS`
 (600 seconds by default), because it is web research like any other research
 call. All remain abortable and deadline-bound. A claim fenced by
@@ -347,8 +354,115 @@ contact/account/domain/employment version keeps
 late old-employer results from persisting. PostgreSQL permits at most one accepted
 address per contact, and later resolutions replace it transactionally. Contacts
 durably retain a typed outcome reason (including missing domain,
-insufficient evidence, missing MX, provider failure, or candidate conflict) for UI
-and operational inspection. SMTP recipient probing is not used.
+insufficient evidence, missing MX, provider failure, an exhausted ladder, a ladder
+bound, or every remaining address being suppressed) for UI and operational
+inspection. SMTP recipient probing is not used.
+
+## The address ladder
+
+A contact holds an **ordered ladder** of the addresses the evidence named for
+them, not a single verdict. Rung one is the best-evidenced convention; later rungs
+are the others, ordered by evidence and then by how common the form is — never
+alphabetically, which is what the previous tiebreak amounted to. A contact whose
+company showed one convention has a one-rung ladder, and that is a complete state,
+not a degraded one.
+
+Two conventions evidenced exactly as well as each other used to be refused
+outright, because picking one was a coin toss whose losing side was a bounce, a
+permanent suppression and a prospect spent for nothing. Under a ladder the loser
+of a tie is simply rung two, so the pair resolves — and the review card says the
+order was arbitrary, because approving the message is now the only human check on
+it.
+
+**A proven-dead address advances the ladder instead of ending the person.** A hard
+bounce — an explicit delivery-status report, or a definite SMTP recipient refusal
+— establishes two separate facts, and the product used to conflate them: the
+address is dead, the person is not. The suppression written for the dead address
+stays permanent and keyed on the address alone; what changes is that the next
+evidenced address is accepted, the enrollment returns to the step that bounced
+without consuming it, and the re-addressed message is queued for review. It is
+**offered, never automatic**: a re-addressed first message is still a first
+message, and no first send in this product may be system-originated. Follow-up
+timing counts from the most recent attempt that was not proven dead — never from
+"the one that landed", which is a fact this product cannot establish.
+
+Only a hard failure advances anything. Soft failures, greylisting and quota
+refusals stay on the existing retry path. A report naming a different recipient
+than the one addressed advances nothing. Silence is never a signal in either
+direction: it is not read as delivery and not read as failure.
+
+Five rules bound what may advance:
+
+- Every _attempted_ message on the enrollment must be proven dead. One that was
+  attempted and is not — including one whose delivery is merely uncertain — blocks
+  the advance permanently, because the prospect may be holding it. This makes the
+  ladder almost entirely a step-zero feature, which is the right shape: a hard
+  bounce at step two on an address that carried step zero says the person left,
+  not that the convention was wrong.
+- A sequence somebody _ended_ is never resurrected. The one terminal state that
+  may advance is a sequence that completed by running out of steps, which is where
+  a one-step campaign lives.
+- The contact's employment must not have changed since the dead message.
+- A suppressed address is never offered as a rung, and says so. A suppression is
+  permanent and keyed on the address alone, so a colleague's failed guess can own
+  the address this person's convention produces; un-blocking it is the existing
+  suppression-removal flow, which already demands a justification and an explicit
+  override for a hard-bounce entry.
+- The bounds in `/settings`: how many addresses one contact may cost (three by
+  default, counted as addresses attempted), how many advances one company may
+  produce in a day (two), and a circuit breaker on the share of attempted sends
+  producing an explicit delivery failure (30% over thirty days, ignored below
+  twenty attempted sends — one failure out of one send is 100% and means nothing).
+  Each is shown beside the number it is judged against. There is deliberately no
+  separate per-mailbox advance ceiling: an advance originates no send, and the
+  sends the operator then approves are already bounded by the per-mailbox daily cap
+  and pacing delay.
+
+An exhausted ladder reaches the same terminal state a bounce reaches today. The
+distinct outcome the operator asked for lives where it belongs — on the contact's
+address, as `ladder_exhausted` — rather than on the sequence, which honestly
+bounced.
+
+**A bound is a pause, not a verdict.** Only facts no setting changes end the
+prospect: nothing left to try, every remaining address suppressed, an earlier
+message that was never reported undelivered, an employer that moved, a sequence
+somebody ended, or the feature switched off. When a _raisable_ bound stops an
+advance — the rung ceiling, the per-company daily cap, an open circuit breaker —
+the enrollment is parked in manual review at the step that bounced, with no
+schedule, and the contact reads `ladder_limit_reached`. Raising the bound and
+resolving the company again promotes the address that is still there, because a
+dead one is never re-accepted and the next rung is simply the best that is left.
+Ending the prospect instead would have made the per-company cap — a pacing device
+— lose the third bounce of the day at one company as permanently as an exhausted
+ladder, with nothing able to bring them back.
+
+The one refusal that is not a bound has its own sentence:
+`ladder_earlier_send_unconfirmed`, for a person who may be holding a message
+already. Nothing the operator changes alters that answer, so it must not read as
+an invitation to try.
+
+**Delivery outcomes demote a convention and can never confirm one.** A convention
+proven dead for at least two distinct people at one company, and for at least half
+the people it was attempted on there, is ordered last for that company's contacts.
+The share is not decoration: a hard bounce cannot tell a wrong address shape from a
+person who has left, so at a company whose contact data is stale a _correct_
+convention fails a few times out of many — and a rule counting failures alone would
+demote true conventions hardest exactly where discovery is weakest. Demotion
+reorders and never rescores: public-sample confidence and the delivery record stay
+two visible quantities, side by side on the contact page and on `/outbound`, because
+merging them is where a retroactive rescoring of addresses already sent would get
+made silently. It also never removes — a contact whose only rung uses the demoted
+convention keeps it — and it re-ranks only contacts with no outbound message at
+all, so an address a generated message is already pinned to is never moved under
+it.
+
+`/outbound` reports the yield beside the cost: how many prospects are alive on rung
+one, how many were reached on a later rung, how many have no further address to
+try, how many were stopped by a bound, and — per convention — how many people were
+attempted, how many were proven dead, and how many produced **no signal at all**.
+That last column is deliberately not called "delivered": it is the number that
+tests whether the domains being targeted report failures back in practice, which is
+the assumption the whole feature rests on.
 
 Inbound reconciliation reuses the classification and agent-run identity already
 persisted on unmatched or ambiguous replies. Repeated scans and later thread
@@ -488,6 +602,18 @@ The command queue is last on purpose: it is the only stage whose duration the
 operator chooses, and the three ahead of it keep the mailbox, the sequence and
 the send queue moving on every tick regardless. It spends at most one AI turn
 per cycle, because that turn holds the operator's single ChatGPT window.
+
+Whether a command spent that turn is **observed, not predicted**: every path to
+the window records an `agent_runs` row before it calls the provider, so the queue
+counts those rows around each command and stops the pass when one appears. It used
+to answer from the task name instead, which was wrong in the three cases that
+matter — a resolution reusing a company search already on record, account research
+reusing a fresh snapshot, and a deterministic generation all ask the model nothing
+— and that guess is what made ten colleagues at one company take ten minutes for an
+answer established once. The count is a delta rather than a timestamp comparison
+because the row's clock is the database's and the command's is the process's; a
+database a second behind would hide a turn, which is the one direction this bound
+cannot afford to fail in.
 
 An inbound failure stops the cycle before any due send. Mailbox health also
 remains a deterministic send-policy gate. A process-local guard makes the next

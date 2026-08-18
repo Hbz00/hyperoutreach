@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import {
@@ -188,6 +188,11 @@ export async function generateOutreachProposal(
             eq(messages.enrollmentId, parsed.data.enrollmentId),
             eq(messages.stepIndex, parsed.data.stepIndex),
             eq(messages.direction, "outbound"),
+            // A message whose address was proven not to exist is not this step's
+            // message any more — the ladder freed the step so it could be
+            // re-addressed. Returning it as "existing" would leave the advance
+            // with nothing to send and no way to say so.
+            isNull(messages.addressDeadAt),
           ),
         )
         .limit(1);
@@ -327,16 +332,32 @@ export async function generateOutreachProposal(
         reason: "deterministic_generation",
       });
       if (enrollmentGuard) await awaitReview(enrollmentGuard.state, message.id);
-      await tx.insert(workflowEvents).values({
-        entityType: "message",
-        entityId: message.id,
-        event: "message.proposed",
-        workflowName: "outreach_generation",
-        idempotencyKey: `generate:${context.enrollmentId}:${parsed.data.stepIndex}`,
-        status: "succeeded",
-        completedAt: new Date(),
-        payload: { outreachId },
-      });
+      await tx
+        .insert(workflowEvents)
+        .values({
+          entityType: "message",
+          entityId: message.id,
+          event: "message.proposed",
+          workflowName: "outreach_generation",
+          /**
+           * Keyed on the message this row is about, not on its step.
+           *
+           * `generate:<enrollment>:<step>` was unique only while a step could
+           * carry one message forever. A ladder advance writes a second message
+           * at the same step — a different address for the same first contact —
+           * and that insert conflicted, rolling the whole generation back as a
+           * `DATABASE_ERROR`: the audit row for the first attempt was preventing
+           * the second attempt from existing.
+           */
+          idempotencyKey: `generate:${message.id}`,
+          status: "succeeded",
+          completedAt: new Date(),
+          payload: { outreachId, stepIndex: parsed.data.stepIndex },
+        })
+        // A fresh message id cannot collide, so this can only ever absorb a
+        // retry of the same insert — and an audit row is not worth failing a
+        // generation the operator is waiting for.
+        .onConflictDoNothing();
       return { ok: true, disposition: "created", message } as const;
     });
   } catch {

@@ -42,6 +42,16 @@ import {
   DEFAULT_PUBLIC_EVIDENCE_TTL_MS,
   shouldReusePublicEmailEvidence,
 } from "@/modules/email-resolution/evidence-freshness";
+import {
+  conventionEvidenceOrder,
+  rankLadderRungs,
+} from "@/modules/email-resolution/ladder";
+import {
+  readDemotedConventions,
+  readLadderSettings,
+  readSuppressedAddresses,
+  rewriteLadderRanks,
+} from "@/modules/email-resolution/ladder-service";
 
 /**
  * The confidence an address must reach before it is accepted and sent to.
@@ -77,7 +87,10 @@ export type EmailResolutionReason =
   | "candidate_conflict"
   | "employment_changed"
   | "stale_employment"
-  | "resolution_in_progress";
+  | "resolution_in_progress"
+  | "ladder_exhausted"
+  | "ladder_limit_reached"
+  | "address_suppressed";
 type CandidateValue = {
   email: string;
   normalizedEmail: string;
@@ -544,6 +557,29 @@ export async function resolveContactEmail(
 
   const candidates = new Map<string, CandidateValue>();
   const patterns = inferEmailPatterns(publicSamples, domain);
+  /**
+   * What this company's own delivery record has already said about these
+   * conventions.
+   *
+   * Public samples are indirect evidence — somebody's address appeared in a
+   * document. A convention proven dead for several of this company's people is
+   * direct evidence about the same question, and without carrying it back here
+   * the next colleague would go on attempting a form just observed to fail.
+   */
+  const ladderSettings = await readLadderSettings(db);
+  const demotedPatterns = await readDemotedConventions(db, {
+    domain,
+    minimumPeople: ladderSettings.demotionMinimumPeople,
+    failureSharePercent: ladderSettings.demotionFailureSharePercent,
+  });
+  /** The rungs this contact already holds, and what delivery did to them. */
+  const existingCandidates = await db
+    .select({
+      normalizedEmail: emailCandidates.normalizedEmail,
+      deadAt: emailCandidates.deadAt,
+    })
+    .from(emailCandidates)
+    .where(eq(emailCandidates.contactId, owner.contact.id));
   for (const pattern of patterns) {
     const email = generateCandidateAddress({
       firstName: owner.contact.firstName,
@@ -643,34 +679,70 @@ export async function resolveContactEmail(
   }
 
   providerFailed ||= publicEvidenceFailed && candidates.size === 0;
-  const rankedCandidates = [...candidates.values()].sort(
-    (left, right) =>
-      right.confidence - left.confidence ||
-      left.normalizedEmail.localeCompare(right.normalizedEmail),
-  );
   /**
-   * Two addresses evidenced exactly as well as each other.
+   * The order the evidence produced, with this company's discredited
+   * conventions moved to the back.
    *
-   * One pattern yields one address for a given contact, so distinct addresses
-   * sharing the top confidence mean the company was observed running more than
-   * one convention and nothing in the evidence says which one this person uses.
-   * The sort above would still return one of them — ordered by `localeCompare`,
-   * which is to say alphabetically — and accepting that is a coin toss whose
-   * losing side is a bounce, a permanent suppression and a prospect spent for
-   * nothing. Real companies do this: one carrier in a ten-domain probe showed
-   * eight addresses in `first.last` and three in `flast`.
+   * Two addresses evidenced exactly as well as each other used to be refused
+   * outright: one pattern yields one address per contact, so a tie meant the
+   * company runs more than one convention and nothing said which this person
+   * uses — and picking was a coin toss whose losing side was a bounce, a
+   * permanent suppression and a prospect spent for nothing. Real companies do
+   * this; one carrier in a ten-domain probe showed eight addresses in
+   * `first.last` and three in `flast`.
    *
-   * A strictly better-evidenced convention still wins: refusing whenever a
-   * second convention exists at all would retire companies whose dominant form
-   * is perfectly clear. Only the tie is undecidable, and only the tie refuses.
+   * Under a ladder the coin toss is gone: the loser of a tie is rung two, reached
+   * only if rung one is proven dead, and no send leaves without an operator
+   * approving it. What replaces the refusal is a deterministic order — how common
+   * the convention is, never which address happens to sort first alphabetically,
+   * which is what the previous `localeCompare` tiebreak was deciding.
    */
-  const contested =
-    rankedCandidates.length > 1 &&
-    rankedCandidates[0]!.confidence >= parsed.data.confidenceThreshold &&
-    rankedCandidates[1]!.confidence === rankedCandidates[0]!.confidence;
+  const rankedRungs = rankLadderRungs(
+    [...candidates.values()].map((candidate) => ({
+      normalizedEmail: candidate.normalizedEmail,
+      pattern: candidate.pattern,
+      confidence: candidate.confidence,
+      evidenceOrder: conventionEvidenceOrder(candidate.pattern),
+    })),
+    demotedPatterns,
+  );
+  const rankedCandidates = rankedRungs.flatMap((rung) => {
+    const candidate = candidates.get(rung.normalizedEmail);
+    return candidate ? [{ ...candidate, ladderRank: rung.ladderRank }] : [];
+  });
+  /**
+   * A suppression is permanent and keyed on the address alone, so a colleague's
+   * failed guess can own the address this person's best convention produces.
+   * Accepting it anyway put a message in the review queue that the send policy
+   * would refuse for a reason nobody had been told about.
+   */
+  const suppressedAddresses = await readSuppressedAddresses(db, {
+    addresses: rankedCandidates.map((candidate) => candidate.normalizedEmail),
+    domain,
+  });
+  const deadAddresses = new Set(
+    existingCandidates
+      .filter((candidate) => candidate.deadAt !== null)
+      .map((candidate) => candidate.normalizedEmail),
+  );
+  const acceptable = rankedCandidates.filter(
+    (candidate) => candidate.confidence >= parsed.data.confidenceThreshold,
+  );
+  // An address proven not to exist is never re-accepted, however well the
+  // convention that produced it is evidenced. Delivery said the last word.
+  const notDead = acceptable.filter(
+    (candidate) => !deadAddresses.has(candidate.normalizedEmail),
+  );
+  const bestUsable = notDead.find(
+    (candidate) => !suppressedAddresses.has(candidate.normalizedEmail),
+  );
+  /** Everything that cleared the bar has already been tried and died. */
+  const deadBlocked = acceptable.length > 0 && notDead.length === 0;
+  /** Something cleared the bar and only a suppression is keeping it out. */
+  const suppressionBlocked = notDead.length > 0 && bestUsable === undefined;
   const status: ResolutionStatus = providerFailed
     ? "provider_error"
-    : bestConfidence >= parsed.data.confidenceThreshold && !contested
+    : bestUsable
       ? "resolved"
       : "manual_review";
   let persistedStatus = status;
@@ -678,15 +750,17 @@ export async function resolveContactEmail(
     ? "provider_transient_error"
     : !mx.hasMx
       ? "mx_missing"
-      : contested
-        ? "candidate_conflict"
-        : status === "resolved"
-          ? null
-          : providerAttempted && acceptedProviderCandidates === 0
-            ? "enrichment_no_result"
-            : patterns.length === 0
-              ? "insufficient_public_evidence"
-              : "low_confidence";
+      : deadBlocked
+        ? "ladder_exhausted"
+        : suppressionBlocked
+          ? "address_suppressed"
+          : status === "resolved"
+            ? null
+            : providerAttempted && acceptedProviderCandidates === 0
+              ? "enrichment_no_result"
+              : patterns.length === 0
+                ? "insufficient_public_evidence"
+                : "low_confidence";
   try {
     const persisted = await db.transaction(async (tx) => {
       await tx.execute(
@@ -732,7 +806,7 @@ export async function resolveContactEmail(
         }
         return false;
       }
-      for (const candidate of candidates.values()) {
+      for (const candidate of rankedCandidates) {
         await tx
           .insert(emailCandidates)
           .values({
@@ -747,6 +821,7 @@ export async function resolveContactEmail(
             mxValid: candidate.mxValid,
             evidence: candidate.evidence,
             verifiedAt: now,
+            ladderRank: candidate.ladderRank,
           })
           .onConflictDoNothing();
         await tx
@@ -754,10 +829,15 @@ export async function resolveContactEmail(
           .set({
             confidence: candidate.confidence.toFixed(3),
             source: candidate.source,
-            status: "candidate",
+            // `status` is deliberately absent. Acceptance is decided below and
+            // demotes whatever was accepted before, so resetting it here was
+            // always redundant — and it would revive a candidate the ladder
+            // rejected for being proven dead, which no amount of fresh evidence
+            // about its convention makes true again.
             mxValid: candidate.mxValid,
             evidence: candidate.evidence,
             verifiedAt: now,
+            ladderRank: candidate.ladderRank,
           })
           .where(
             and(
@@ -766,18 +846,91 @@ export async function resolveContactEmail(
             ),
           );
       }
-      if (status === "resolved") {
-        const ownedCandidates = await tx
-          .select({ normalizedEmail: emailCandidates.normalizedEmail })
-          .from(emailCandidates)
-          .where(eq(emailCandidates.contactId, owner.contact.id));
-        const ownedEmails = new Set(
-          ownedCandidates.map((candidate) => candidate.normalizedEmail),
+      /**
+       * An address that has already been written to and has not been proven dead
+       * keeps its acceptance, whatever this pass found.
+       *
+       * The prospect may be holding the message sent to it. Moving acceptance
+       * would make that message unsendable — the send policy checks the
+       * recipient is still the accepted candidate — and could end with two
+       * addresses used for one human, which the whole send policy exists to
+       * prevent.
+       */
+      /**
+       * The state that decides acceptance is re-read here, inside the
+       * transaction that holds this contact's row, and not taken from the
+       * snapshot the status above was computed from.
+       *
+       * Nothing fences the ladder against a resolution in flight: a hard bounce
+       * or a definite SMTP refusal commits its own transaction, and the staleness
+       * checks this claim performs — account, employment version, domain — are
+       * all still true after an address dies. So a resolution that started a
+       * second earlier would otherwise write `accepted` back onto a row delivery
+       * has just proven does not exist. The pre-transaction reads stay: they
+       * decide the *reported* reason, which does not have to be atomic. This
+       * decides what is written, which does.
+       */
+      const ownedRows = await tx
+        .select({
+          normalizedEmail: emailCandidates.normalizedEmail,
+          status: emailCandidates.status,
+          firstAttemptedAt: emailCandidates.firstAttemptedAt,
+          deadAt: emailCandidates.deadAt,
+        })
+        .from(emailCandidates)
+        .where(eq(emailCandidates.contactId, owner.contact.id));
+      const suppressedNow = await readSuppressedAddresses(tx, {
+        addresses: ownedRows.map((row) => row.normalizedEmail),
+        domain,
+      });
+      const ownedRow = (email: string) =>
+        ownedRows.find((candidate) => candidate.normalizedEmail === email);
+      /** Dead or suppressed: either one makes an address unacceptable now. */
+      const blockedNow = (email: string): boolean =>
+        Boolean(ownedRow(email)?.deadAt) || suppressedNow.has(email);
+      /**
+       * An address that is no longer usable does not stay accepted.
+       *
+       * `prepareCommand` reads the accepted candidate directly to address a
+       * queued message, without consulting the contact's resolution status. An
+       * `accepted` row left behind by a resolution that has since concluded "no
+       * usable address" therefore spends an agent turn drafting a message the
+       * send policy then refuses — the silent refusal at send time this whole
+       * area exists to remove.
+       */
+      for (const row of ownedRows) {
+        if (row.status !== "accepted" || !blockedNow(row.normalizedEmail)) {
+          continue;
+        }
+        await tx
+          .update(emailCandidates)
+          .set({ status: "rejected" })
+          .where(
+            and(
+              eq(emailCandidates.contactId, owner.contact.id),
+              eq(emailCandidates.normalizedEmail, row.normalizedEmail),
+            ),
+          );
+      }
+      const pinned = ownedRows.find(
+        (row) =>
+          row.status === "accepted" &&
+          row.firstAttemptedAt !== null &&
+          !blockedNow(row.normalizedEmail),
+      );
+      if (pinned) {
+        persistedStatus = "resolved";
+        persistedReason = null;
+      } else {
+        // The global `normalized_email` uniqueness means a generated address can
+        // already belong to another contact, in which case this contact does not
+        // own the row and cannot accept it. That, and not a tie, is what
+        // `candidate_conflict` now means.
+        const ownedAcceptable = acceptable.filter((candidate) =>
+          ownedRow(candidate.normalizedEmail),
         );
-        const accepted = rankedCandidates.find(
-          (candidate) =>
-            candidate.confidence >= parsed.data.confidenceThreshold &&
-            ownedEmails.has(candidate.normalizedEmail),
+        const accepted = ownedAcceptable.find(
+          (candidate) => !blockedNow(candidate.normalizedEmail),
         );
         if (accepted) {
           await tx
@@ -798,11 +951,29 @@ export async function resolveContactEmail(
                 eq(emailCandidates.normalizedEmail, accepted.normalizedEmail),
               ),
             );
-        } else {
+          persistedStatus = "resolved";
+          persistedReason = null;
+        } else if (status === "resolved") {
+          // The snapshot said yes and the transaction says no, so the address
+          // the report would have named is gone. Say why rather than reporting a
+          // resolution that did not happen.
           persistedStatus = "manual_review";
-          persistedReason = "candidate_conflict";
+          persistedReason =
+            ownedAcceptable.length === 0
+              ? // Nothing this contact owns cleared the bar: the address the
+                // evidence points at belongs to somebody else.
+                "candidate_conflict"
+              : ownedAcceptable.some((candidate) =>
+                    suppressedNow.has(candidate.normalizedEmail),
+                  )
+                ? "address_suppressed"
+                : "ladder_exhausted";
         }
       }
+      await rewriteLadderRanks(tx, {
+        contactId: owner.contact.id,
+        demotedPatterns,
+      });
       await tx
         .update(contacts)
         .set({

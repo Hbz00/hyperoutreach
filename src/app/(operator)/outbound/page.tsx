@@ -8,6 +8,11 @@ import { StatusBadge } from "@/modules/presentation/status-badge";
 import { scheduledInstantLabel } from "@/modules/messages/scheduled-send";
 import { operatorClock } from "@/modules/settings/working-hours";
 import {
+  readAddressLadderMetrics,
+  readConventionOutcomes,
+  readLadderSettings,
+} from "@/modules/email-resolution/ladder-service";
+import {
   getMaintenanceCodeTimeoutMs,
   getMaintenanceStatusPresentation,
 } from "@/modules/workflows/maintenance-status-presentation";
@@ -54,6 +59,14 @@ export default async function OutboundPage({
       .from(operatorSendingSettings)
       .where(eq(operatorSendingSettings.id, 1))
       .limit(1),
+  ]);
+  const ladderSettings = await readLadderSettings(db);
+  const [ladderMetrics, conventionOutcomes] = await Promise.all([
+    readAddressLadderMetrics(db, { now }),
+    readConventionOutcomes(db, {
+      minimumPeople: ladderSettings.demotionMinimumPeople,
+      failureSharePercent: ladderSettings.demotionFailureSharePercent,
+    }),
   ]);
   const operatorTimezone = sendingSettingsRows[0]?.timezone;
   // Everything on this page is executed by the maintenance pass. If that
@@ -130,6 +143,98 @@ export default async function OutboundPage({
             <code>npm start</code>, which launches it alongside the web server.
           </p>
         ) : null}
+      </section>
+
+      <section className="panel">
+        <h2>Address ladder</h2>
+        <p className="muted">
+          The feature deliberately spends deliverability, so its yield and its
+          cost are read together. A send that produced no delivery failure is
+          counted as no signal, never as delivered: silence does not prove
+          anything in either direction, and whether the domains being targeted
+          report failures at all is what the “no signal” column measures.
+        </p>
+        <dl className="facts">
+          <div>
+            <dt>Alive on rung one</dt>
+            <dd>{ladderMetrics.onFirstRung}</dd>
+          </div>
+          <div>
+            <dt>Reached on a later rung</dt>
+            <dd>{ladderMetrics.advanced}</dd>
+          </div>
+          <div>
+            <dt>No further address to try</dt>
+            <dd>{ladderMetrics.exhausted}</dd>
+          </div>
+          <div>
+            <dt>Stopped before another address</dt>
+            <dd>{ladderMetrics.limited}</dd>
+          </div>
+          <div>
+            <dt>Sends attempted (30 days)</dt>
+            <dd>{ladderMetrics.sendsAttempted}</dd>
+          </div>
+          <div>
+            <dt>Explicit delivery failures</dt>
+            <dd>
+              {ladderMetrics.sendsProvenDead}
+              <small>{ladderMetrics.failureSharePercent}% of attempts</small>
+            </dd>
+          </div>
+          <div>
+            <dt>No signal at all</dt>
+            <dd>{ladderMetrics.sendsNoSignal}</dd>
+          </div>
+          <div>
+            <dt>Circuit breaker</dt>
+            <dd>
+              {ladderMetrics.circuitOpen ? "Open — not advancing" : "Closed"}
+              <small>
+                trips at {ladderSettings.failureRatePercent}% from{" "}
+                {ladderSettings.failureRateMinimumSends} attempts
+              </small>
+            </dd>
+          </div>
+        </dl>
+        {!ladderSettings.enabled ? (
+          <p className="hint">
+            The ladder is switched off in Settings: a proven-dead address ends
+            the prospect instead of advancing.
+          </p>
+        ) : null}
+        <h3>By convention</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Convention</th>
+                <th>People attempted</th>
+                <th>Proven dead</th>
+                <th>No signal</th>
+                <th>Order</th>
+              </tr>
+            </thead>
+            <tbody>
+              {conventionOutcomes.map((outcome) => (
+                <tr key={outcome.pattern}>
+                  <td>{outcome.pattern}</td>
+                  <td>{outcome.peopleAttempted}</td>
+                  <td>{outcome.peopleProvenDead}</td>
+                  <td>{outcome.peopleNoSignal}</td>
+                  <td>{outcome.demoted ? "Demoted somewhere" : "Normal"}</td>
+                </tr>
+              ))}
+              {conventionOutcomes.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="empty">
+                    No address has been attempted yet.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="panel">

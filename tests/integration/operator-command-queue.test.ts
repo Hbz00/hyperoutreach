@@ -252,7 +252,10 @@ describe("operator command queue", () => {
     );
 
     const newestRow = await readCommand(newest.id);
-    expect(seen).toEqual([String(newestRow.payload.accountId)]);
+    // Runnable work first. The parked rows are re-checked afterwards in the
+    // same pass, which is right: nothing here spends a turn on the operator's
+    // window, so there is no reason to make them wait another minute.
+    expect(seen[0]).toBe(String(newestRow.payload.accountId));
     expect(newestRow.status).toBe("succeeded");
   });
 
@@ -332,11 +335,51 @@ describe("operator command queue", () => {
     expect(seen[1]).toBe(String(secondRow.payload.accountId));
   });
 
-  // The bound exists because an AI turn holds the operator's single ChatGPT
-  // window and can last ten minutes. It is not a reason to make a second
-  // command wait a whole minute for its own pass, so the pass stops at the
-  // first AI turn rather than at the first command.
+  /**
+   * The bound exists because an AI turn holds the operator's single ChatGPT
+   * window and can last ten minutes. It is not a reason to make a second command
+   * wait a whole minute for its own pass, so the pass stops at the first turn
+   * actually spent rather than at the first command that might have spent one.
+   *
+   * The executor here writes the `agent_runs` row a real AI path writes before
+   * it calls the provider, because that row is what the queue now reads. A stub
+   * that only returned `{ok: true}` would be claiming to have used a window it
+   * never touched.
+   */
   it("spends at most one AI turn per pass", async () => {
+    await queueResearch();
+    await queueResearch();
+    let runs = 0;
+
+    const drained = await drainOperatorCommands(
+      db,
+      async () => {
+        runs += 1;
+        await db.insert(schema.agentRuns).values({
+          agent: "account_research",
+          model: "test-model",
+          promptVersion: "test-prompt-v1",
+          schemaVersion: "test-schema-v1",
+          input: {},
+          status: "succeeded",
+        });
+        return { ok: true };
+      },
+      { now: NOW, limit: 20 },
+    );
+
+    expect(runs).toBe(1);
+    expect(drained).toHaveLength(1);
+  });
+
+  /**
+   * The other half, and the reason the rule changed from a prediction to an
+   * observation: a resolution that reuses a company search already on record
+   * asks the model nothing, and stopping the pass for it is what made ten
+   * colleagues at one company take ten minutes.
+   */
+  it("keeps draining commands that never reach the AI surface", async () => {
+    await queueResearch();
     await queueResearch();
     await queueResearch();
     let runs = 0;
@@ -350,8 +393,34 @@ describe("operator command queue", () => {
       { now: NOW, limit: 20 },
     );
 
+    expect(runs).toBe(3);
+    expect(drained).toHaveLength(3);
+  });
+
+  /** A turn spent by a command that then failed still holds the window. */
+  it("stops the pass when a command spends a turn and then throws", async () => {
+    await queueResearch();
+    await queueResearch();
+    let runs = 0;
+
+    await drainOperatorCommands(
+      db,
+      async () => {
+        runs += 1;
+        await db.insert(schema.agentRuns).values({
+          agent: "account_research",
+          model: "test-model",
+          promptVersion: "test-prompt-v1",
+          schemaVersion: "test-schema-v1",
+          input: {},
+          status: "failed",
+        });
+        throw new Error("provider exploded");
+      },
+      { now: NOW, limit: 20 },
+    );
+
     expect(runs).toBe(1);
-    expect(drained).toHaveLength(1);
   });
 
   it("reclaims a command whose executor died mid-run", async () => {

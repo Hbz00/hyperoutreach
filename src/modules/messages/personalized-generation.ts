@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import {
   accounts,
@@ -108,6 +108,13 @@ export async function generateWithPersonalization(
         eq(messages.enrollmentId, input.enrollmentId),
         eq(messages.stepIndex, input.stepIndex),
         eq(messages.direction, "outbound"),
+        // The same rule the generator applies under its row lock, and it has to
+        // be the same one: a ladder advance frees the step precisely by marking
+        // its message dead, and treating that row as "already written" here
+        // skipped the agent turn the new message needs — leaving interpolation
+        // to fail on a field nobody wrote, and the queue to abandon a command a
+        // manual retry could never get past either.
+        isNull(messages.addressDeadAt),
       ),
     )
     .limit(1);

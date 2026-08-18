@@ -67,6 +67,43 @@ export const emailResolutionReason = pgEnum("email_resolution_reason", [
   "employment_changed",
   "stale_employment",
   "resolution_in_progress",
+  /**
+   * Every evidenced address for this person has been tried and proven dead.
+   *
+   * Distinct from `insufficient_public_evidence`, which means nobody ever found
+   * an address to try, and from `ladder_limit_reached`, which means one is still
+   * standing. The operator asked for an outcome that reads as "no further
+   * address to try" rather than as a generic failure, and this is it.
+   */
+  "ladder_exhausted",
+  /**
+   * An untried address remains, but a ladder bound stopped the attempt.
+   *
+   * Every bound this names is one the operator sets and can raise, so the
+   * enrollment is parked rather than ended: raising the bound and resolving the
+   * company again is a working way back, and a reason that reads as actionable
+   * must not sit on a prospect who is actually finished.
+   */
+  "ladder_limit_reached",
+  /**
+   * An earlier message to this person was never reported undelivered, so no
+   * further address is tried.
+   *
+   * Kept apart from `ladder_limit_reached` because nothing the operator changes
+   * alters it: this is the rule that a person who may be holding a message is
+   * never re-addressed, and inviting them to raise a bound would be a wrong
+   * instruction rather than an unhelpful one.
+   */
+  "ladder_earlier_send_unconfirmed",
+  /**
+   * Every evidenced address for this person is suppressed.
+   *
+   * Reachable because a suppression is permanent and keyed on the address alone:
+   * a colleague's failed guess can own the address this person's convention
+   * produces. Naming it is what turns a silent refusal at send time into
+   * something the operator can act on.
+   */
+  "address_suppressed",
 ]);
 export const campaignType = pgEnum("campaign_type", [
   "customer_discovery",
@@ -341,6 +378,42 @@ export const emailCandidates = pgTable(
       .default(sql`'{}'::jsonb`)
       .notNull(),
     verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    /**
+     * This address's position in the contact's ordered ladder, from 1.
+     *
+     * Persisted rather than recomputed from `confidence` on every read, for two
+     * reasons. It is the record of the order the evidence produced at the moment
+     * it was read, which is what an audit trail is for; and a demotion reorders
+     * rungs without touching a single confidence, so confidence alone stops
+     * being able to express the order.
+     */
+    ladderRank: integer("ladder_rank").default(1).notNull(),
+    /**
+     * When a send to this address was first durably attempted.
+     *
+     * The denominator of every rate the delivery-outcome loop computes — never
+     * "delivered", which is a fact this product cannot establish. It is also what
+     * the per-contact rung ceiling counts, because the ceiling bounds addresses
+     * spent, not advances taken.
+     */
+    firstAttemptedAt: timestamp("first_attempted_at", { withTimezone: true }),
+    /**
+     * When this address was proven not to exist.
+     *
+     * Only a hard delivery failure writes it. Silence never does, in either
+     * direction: a send that produced no failure says nothing about whether the
+     * address was right, so it leaves this null forever.
+     */
+    deadAt: timestamp("dead_at", { withTimezone: true }),
+    /** The message whose failure proved it. */
+    deadMessageId: uuid("dead_message_id"),
+    /**
+     * When the ladder advanced to this rung, as opposed to resolution picking it
+     * first. Null on rung one and on a rung reached by re-ranking rather than by
+     * a death, so the per-company daily advance bound counts advances and
+     * nothing else.
+     */
+    advancedAt: timestamp("advanced_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
@@ -350,12 +423,25 @@ export const emailCandidates = pgTable(
     uniqueIndex("email_candidates_one_accepted_per_contact_unique")
       .on(table.contactId)
       .where(sql`${table.status} = 'accepted'`),
+    foreignKey({
+      name: "email_candidates_dead_message_fk",
+      columns: [table.deadMessageId],
+      foreignColumns: [messages.id],
+    }).onDelete("set null"),
     check(
       "email_candidates_confidence_check",
       sql`${table.confidence} >= 0 and ${table.confidence} <= 1`,
     ),
+    check("email_candidates_ladder_rank_check", sql`${table.ladderRank} >= 1`),
+    check(
+      "email_candidates_dead_message_check",
+      sql`${table.deadMessageId} is null or ${table.deadAt} is not null`,
+    ),
     index("email_candidates_contact_id_idx").on(table.contactId),
     index("email_candidates_domain_idx").on(table.domain),
+    // The delivery record of one convention, which is read per company on every
+    // resolution to decide whether that convention has been demoted.
+    index("email_candidates_pattern_dead_idx").on(table.pattern, table.deadAt),
   ],
 );
 
@@ -568,6 +654,70 @@ export const operatorSendingSettings = pgTable(
     crossCampaignCooldownDays: integer("cross_campaign_cooldown_days")
       .default(30)
       .notNull(),
+    /**
+     * Whether a proven-dead address may advance to the next evidenced one.
+     *
+     * On by default, because turning it off costs a reachable prospect and
+     * turning it on costs nothing by itself: every send an advance leads to is
+     * still one the operator approved.
+     */
+    addressLadderEnabled: boolean("address_ladder_enabled")
+      .default(true)
+      .notNull(),
+    /** How many addresses one contact may cost, counted as addresses attempted. */
+    addressLadderMaxRungs: integer("address_ladder_max_rungs")
+      .default(3)
+      .notNull(),
+    /**
+     * How many advances one company may produce in a day.
+     *
+     * The bound nothing else provides — the mailbox cap and pacing delay already
+     * bound the sends — and the one that makes the demotion loop useful: at two a
+     * day, a wrong convention reaches the two-distinct-people demotion threshold
+     * before a third colleague is offered it.
+     */
+    addressLadderMaxAdvancesPerAccountPerDay: integer(
+      "address_ladder_max_advances_per_account_per_day",
+    )
+      .default(2)
+      .notNull(),
+    /**
+     * The share of attempted sends producing an explicit delivery failure at
+     * which the ladder stops advancing at all, and the sample below which that
+     * share is not a measurement. One failure out of one send is 100% and means
+     * nothing.
+     */
+    addressLadderFailureRatePercent: integer(
+      "address_ladder_failure_rate_percent",
+    )
+      .default(30)
+      .notNull(),
+    addressLadderFailureRateMinimumSends: integer(
+      "address_ladder_failure_rate_minimum_sends",
+    )
+      .default(20)
+      .notNull(),
+    /**
+     * What it takes to demote a convention at one company: this many distinct
+     * people proven dead on it, and that many being at least this share of the
+     * attempts it has had there.
+     *
+     * The share is the confound guard. A hard bounce cannot tell a wrong address
+     * shape from a person who has left, so at a company whose contact data is
+     * stale a *correct* convention fails a few times out of many — and a rule
+     * counting failures alone would demote true conventions hardest exactly where
+     * discovery is weakest.
+     */
+    addressLadderDemotionMinimumPeople: integer(
+      "address_ladder_demotion_minimum_people",
+    )
+      .default(2)
+      .notNull(),
+    addressLadderDemotionFailureSharePercent: integer(
+      "address_ladder_demotion_failure_share_percent",
+    )
+      .default(50)
+      .notNull(),
     ...timestamps,
   },
   (table) => [
@@ -579,6 +729,15 @@ export const operatorSendingSettings = pgTable(
     check(
       "operator_sending_settings_limits_check",
       sql`${table.mailboxDailyCap} > 0 and ${table.campaignDailyCap} > 0 and ${table.mailboxMinimumDelaySeconds} >= 0 and ${table.contactMinimumDelayMinutes} >= 0 and ${table.crossCampaignCooldownDays} >= 0`,
+    ),
+    check(
+      "operator_sending_settings_ladder_check",
+      sql`${table.addressLadderMaxRungs} >= 1
+        and ${table.addressLadderMaxAdvancesPerAccountPerDay} >= 0
+        and ${table.addressLadderFailureRatePercent} between 1 and 100
+        and ${table.addressLadderFailureRateMinimumSends} >= 1
+        and ${table.addressLadderDemotionMinimumPeople} >= 2
+        and ${table.addressLadderDemotionFailureSharePercent} between 1 and 100`,
     ),
   ],
 );
@@ -735,6 +894,26 @@ export const messages = pgTable(
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     draftedAt: timestamp("drafted_at", { withTimezone: true }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    /**
+     * When this message's recipient address was proven not to exist.
+     *
+     * Written only by a hard delivery failure — an explicit hard bounce, or a
+     * definite SMTP recipient refusal — and it is the marker that separates the
+     * two facts a bounce used to conflate: the address is dead, the person is
+     * not. Three things read it:
+     *
+     * - the step-uniqueness index below, which counts only live messages, so a
+     *   step whose address was proven dead can be re-addressed exactly once;
+     * - the send policy's `STEP_ALREADY_SENT` check, because a step sent to an
+     *   address that turned out not to exist was not delivered;
+     * - the follow-up path's "which address did the previous step use", which
+     *   must never answer with a suppressed one.
+     *
+     * `status` cannot carry this. A message that was accepted by the provider
+     * and bounced later stays `sent`, which is true and is exactly why it needs
+     * a second column.
+     */
+    addressDeadAt: timestamp("address_dead_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
@@ -764,9 +943,21 @@ export const messages = pgTable(
     uniqueIndex("messages_send_attempt_token_unique")
       .on(table.sendAttemptToken)
       .where(sql`${table.sendAttemptToken} is not null`),
+    /**
+     * One live outbound message per enrollment step.
+     *
+     * The duplicate-send guarantee, narrowed by exactly one fact rather than
+     * relaxed: a message whose address was *proven not to exist* no longer holds
+     * its step, because nothing was delivered to hold it with. Every other
+     * message still does, including one whose delivery is merely uncertain —
+     * that one may have arrived, and the whole point of this index is that such
+     * a step is never written twice.
+     */
     uniqueIndex("messages_enrollment_step_outbound_unique")
       .on(table.enrollmentId, table.stepIndex)
-      .where(sql`${table.direction} = 'outbound'`),
+      .where(
+        sql`${table.direction} = 'outbound' and ${table.addressDeadAt} is null`,
+      ),
     check(
       "messages_outbound_identity_check",
       sql`${table.direction} <> 'outbound' or (${table.stepIndex} is not null and ${table.outreachId} is not null)`,
@@ -787,6 +978,7 @@ export const messages = pgTable(
       table.sentAt,
     ),
     index("messages_send_attempted_at_idx").on(table.sendAttemptedAt),
+    index("messages_address_dead_at_idx").on(table.addressDeadAt),
   ],
 );
 

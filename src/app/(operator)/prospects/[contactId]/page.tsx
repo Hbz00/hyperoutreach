@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -21,6 +21,11 @@ import {
   describeResolutionReason,
   describeStopReason,
 } from "@/modules/presentation/status";
+import {
+  readBlockedRungs,
+  readConventionOutcomes,
+  readLadderSettings,
+} from "@/modules/email-resolution/ladder-service";
 
 function percent(value: string | null): string {
   return value ? `${Math.round(Number(value) * 100)}%` : "—";
@@ -94,7 +99,10 @@ export default async function ProspectDetailPage({
       .select()
       .from(emailCandidates)
       .where(eq(emailCandidates.contactId, contactId))
-      .orderBy(desc(emailCandidates.confidence)),
+      // The ladder's own order, not confidence: a demotion reorders rungs
+      // without touching a single confidence, so confidence alone stopped being
+      // able to express which address is tried next.
+      .orderBy(asc(emailCandidates.ladderRank)),
     db
       .select()
       .from(evidenceSources)
@@ -115,13 +123,27 @@ export default async function ProspectDetailPage({
     db
       .select()
       .from(stateTransitions)
-      .where(eq(stateTransitions.entityId, contactId))
+      .where(
+        inArray(
+          stateTransitions.entityId,
+          sql`(select ${contacts.id} from ${contacts} where ${contacts.id} = ${contactId}
+               union all
+               select ${enrollments.id} from ${enrollments} where ${enrollments.contactId} = ${contactId})`,
+        ),
+      )
       .orderBy(desc(stateTransitions.createdAt))
       .limit(30),
     db
       .select()
       .from(workflowEvents)
-      .where(eq(workflowEvents.entityId, contactId))
+      .where(
+        inArray(
+          workflowEvents.entityId,
+          sql`(select ${contacts.id} from ${contacts} where ${contacts.id} = ${contactId}
+               union all
+               select ${enrollments.id} from ${enrollments} where ${enrollments.contactId} = ${contactId})`,
+        ),
+      )
       .orderBy(desc(workflowEvents.createdAt))
       .limit(30),
     db.select().from(agentRuns).orderBy(desc(agentRuns.createdAt)).limit(25),
@@ -131,6 +153,36 @@ export default async function ProspectDetailPage({
     .from(evidenceSources)
     .where(eq(evidenceSources.accountId, row.account.id))
     .orderBy(desc(evidenceSources.retrievedAt));
+  const ladderSettings = await readLadderSettings(db);
+  const conventions = await readConventionOutcomes(db, {
+    domain: row.account.domain,
+    minimumPeople: ladderSettings.demotionMinimumPeople,
+    failureSharePercent: ladderSettings.demotionFailureSharePercent,
+  });
+  // Which rungs a suppression is blocking. The ladder skips them silently, and
+  // that is right — it would be indistinguishable from "not next yet" if the
+  // operator could not see which ones they are.
+  const blockedRungs = await readBlockedRungs(db, contactId);
+  const demotedPatterns = new Set(
+    conventions.filter((row) => row.demoted).map((row) => row.pattern),
+  );
+  // Tied is a fact about the evidence, not a stored flag: two rungs the company
+  // evidenced exactly as well as each other, whose order between them is
+  // therefore arbitrary. The operator approving the message is the only human in
+  // front of that, so it has to be visible here and on the review card.
+  const tiedConfidences = new Set(
+    candidates
+      .filter((candidate, index) =>
+        candidates.some(
+          (other, otherIndex) =>
+            otherIndex !== index &&
+            other.confidence === candidate.confidence &&
+            demotedPatterns.has(other.pattern ?? "") ===
+              demotedPatterns.has(candidate.pattern ?? ""),
+        ),
+      )
+      .map((candidate) => candidate.confidence),
+  );
   const snapshot = snapshotFacts(row.account.researchSnapshot);
   const allEvidence = [...accountEvidence, ...evidence];
   return (
@@ -214,9 +266,19 @@ export default async function ProspectDetailPage({
               <button className="button-secondary">Research account</button>
             </div>
           </form>
-          <form action="/api/operator/commands/resolve-email" method="post">
+          {/* The normal path: the convention belongs to the company, so one
+              search answers it for every colleague at once. */}
+          <form
+            action="/api/operator/commands/resolve-account-emails"
+            method="post"
+          >
             <input type="hidden" name="csrf" value={session.csrfToken} />
-            <input type="hidden" name="contactId" value={contactId} />
+            <input type="hidden" name="accountId" value={row.account.id} />
+            <input
+              type="hidden"
+              name="returnTo"
+              value={`/prospects/${contactId}`}
+            />
             <input
               type="hidden"
               name="requestToken"
@@ -236,14 +298,35 @@ export default async function ProspectDetailPage({
               </label>
               <label className="check">
                 <input type="checkbox" name="forcePublicSearch" />
-                Force a fresh company search
+                Search this company again
               </label>
               <small className="muted">
                 A company is searched once and the result reused for its other
-                contacts for thirty days. Ticking this spends a live web search
-                on your ChatGPT subscription instead.
+                contacts for thirty days. Ticking this spends one live web
+                search on your ChatGPT subscription, and the answer still covers
+                every colleague.
               </small>
-              <button>Resolve email</button>
+              <button>Resolve addresses at {row.account.name}</button>
+            </div>
+          </form>
+          {/* The exception — a contact who just changed employer, a manual
+              addition — rather than the normal path it used to be. */}
+          <form action="/api/operator/commands/resolve-email" method="post">
+            <input type="hidden" name="csrf" value={session.csrfToken} />
+            <input type="hidden" name="contactId" value={contactId} />
+            <input
+              type="hidden"
+              name="requestToken"
+              value={crypto.randomUUID()}
+            />
+            <div className="stack">
+              <label className="check">
+                <input type="checkbox" name="forcePublicSearch" />
+                Force a fresh company search
+              </label>
+              <button className="button-secondary">
+                Resolve this contact only
+              </button>
             </div>
           </form>
           <form action="/api/operator/commands/discover-contacts" method="post">
@@ -287,10 +370,17 @@ export default async function ProspectDetailPage({
 
       <section className="panel">
         <h2>Email</h2>
+        <p className="muted">
+          The ordered ladder of addresses the evidence named for this person.
+          Rung one is the best-evidenced convention; a later rung is only ever
+          reached when the one above it is proven not to exist. A one-rung
+          ladder is a complete state, not a degraded one.
+        </p>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
+                <th>Rung</th>
                 <th>Address</th>
                 <th>Pattern/source</th>
                 <th>Confidence</th>
@@ -301,7 +391,37 @@ export default async function ProspectDetailPage({
             <tbody>
               {candidates.map((candidate) => (
                 <tr key={candidate.id}>
-                  <td>{candidate.normalizedEmail}</td>
+                  <td>
+                    {candidate.ladderRank}
+                    {candidate.advancedAt ? (
+                      <small>
+                        advanced {candidate.advancedAt.toLocaleDateString()}
+                      </small>
+                    ) : null}
+                  </td>
+                  <td>
+                    {candidate.normalizedEmail}
+                    {blockedRungs.has(candidate.normalizedEmail) &&
+                    !candidate.deadAt ? (
+                      <small>
+                        blocked by a suppression — never offered as a rung
+                      </small>
+                    ) : null}
+                    {candidate.deadAt ? (
+                      // The address, not the person. Saying which is the whole
+                      // point of the distinction this feature rests on.
+                      <small>
+                        proven not to exist{" "}
+                        {candidate.deadAt.toLocaleDateString()}
+                      </small>
+                    ) : candidate.firstAttemptedAt ? (
+                      <small>
+                        written to{" "}
+                        {candidate.firstAttemptedAt.toLocaleDateString()} — no
+                        delivery failure reported
+                      </small>
+                    ) : null}
+                  </td>
                   <td>
                     {candidate.pattern ?? "manual"}
                     <small>{candidate.source}</small>
@@ -313,8 +433,23 @@ export default async function ProspectDetailPage({
                       // "Search the company again" would change anything.
                       <small>{companySearch(candidate.evidence)}</small>
                     ) : null}
+                    {candidate.pattern &&
+                    demotedPatterns.has(candidate.pattern) ? (
+                      <small>
+                        demoted — this company&rsquo;s delivery record
+                        discredits this convention
+                      </small>
+                    ) : null}
                   </td>
-                  <td>{percent(candidate.confidence)}</td>
+                  <td>
+                    {percent(candidate.confidence)}
+                    {tiedConfidences.has(candidate.confidence) ? (
+                      <small>
+                        tied — the order between equally evidenced rungs is
+                        arbitrary
+                      </small>
+                    ) : null}
+                  </td>
                   <td>
                     {candidate.mxValid === null
                       ? "Not checked"
@@ -332,8 +467,50 @@ export default async function ProspectDetailPage({
               ))}
               {candidates.length === 0 ? (
                 <tr>
+                  <td colSpan={6} className="empty">
+                    No candidates yet — run “Resolve addresses” above.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <h3>Company address conventions</h3>
+        <p className="muted">
+          Public samples and delivery outcomes are kept as two quantities. A
+          convention rises only by acquiring more public samples; delivery can
+          only ever push one down the order.
+        </p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Convention</th>
+                <th>People attempted</th>
+                <th>Proven dead</th>
+                <th>No signal</th>
+                <th>Order</th>
+              </tr>
+            </thead>
+            <tbody>
+              {conventions.map((convention) => (
+                <tr key={convention.pattern}>
+                  <td>{convention.pattern}</td>
+                  <td>{convention.peopleAttempted}</td>
+                  <td>{convention.peopleProvenDead}</td>
+                  <td>
+                    {convention.peopleNoSignal}
+                    <small>
+                      no delivery failure reported — not “delivered”
+                    </small>
+                  </td>
+                  <td>{convention.demoted ? "Demoted" : "Normal"}</td>
+                </tr>
+              ))}
+              {conventions.length === 0 ? (
+                <tr>
                   <td colSpan={5} className="empty">
-                    No candidates yet — run “Resolve email” above.
+                    No convention has been attempted at this company yet.
                   </td>
                 </tr>
               ) : null}
@@ -521,6 +698,9 @@ export default async function ProspectDetailPage({
 
       <details className="panel">
         <summary>Operational audit</summary>
+        {/* The contact's own rows and its enrollments': an advance is recorded
+            against the enrollment, so a contact-only filter hid precisely the
+            records that explain one. */}
         <h3>State transitions</h3>
         {transitions.map((item) => (
           <pre key={item.id} className="audit-row">

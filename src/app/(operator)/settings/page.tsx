@@ -20,6 +20,7 @@ import { StatusBadge } from "@/modules/presentation/status-badge";
 import { MaintenanceStatusPanel } from "@/modules/settings/maintenance-status-panel";
 import { resolveProviderPresentation } from "@/modules/settings/provider-presentation";
 import { getOperatorSendingSettings } from "@/modules/settings/service";
+import { readAddressLadderMetrics } from "@/modules/email-resolution/ladder-service";
 import { listSuppressions } from "@/modules/suppression/service";
 import {
   getMaintenanceCodeTimeoutMs,
@@ -89,6 +90,9 @@ export default async function SettingsPage({
       .from(maintenanceState)
       .limit(1),
   ]);
+  // The breaker's threshold is meaningless without the number it is judged
+  // against, so the settings field and its measurement are rendered together.
+  const ladderMetrics = await readAddressLadderMetrics(db, { now: new Date() });
   const maintenanceProjection: MaintenanceStatusProjection =
     maintenanceRows[0] ?? {
       ownerToken: null,
@@ -494,6 +498,117 @@ export default async function SettingsPage({
                   min={0}
                   defaultValue={settings.crossCampaignCooldownDays}
                 />
+              </label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Address ladder</legend>
+            <p className="muted">
+              When an address is proven not to exist, the ladder offers the next
+              convention the evidence named for that person instead of ending
+              them. It never sends: the re-addressed message goes to the review
+              queue like any first message. Each bound below is shown beside the
+              number it is judged against, because a threshold set without one
+              is a number invented in a field.
+            </p>
+            <div className="form-grid">
+              <label className="check">
+                <input
+                  type="checkbox"
+                  name="addressLadderEnabled"
+                  defaultChecked={settings.addressLadderEnabled}
+                />
+                Advance to the next address when one is proven dead
+              </label>
+              <label>
+                Addresses one contact may cost
+                <input
+                  name="addressLadderMaxRungs"
+                  type="number"
+                  min={1}
+                  max={10}
+                  defaultValue={settings.addressLadderMaxRungs}
+                />
+                <small className="muted">
+                  Counted as addresses attempted, not advances taken.
+                </small>
+              </label>
+              <label>
+                Advances per company per day
+                <input
+                  name="addressLadderMaxAdvancesPerAccountPerDay"
+                  type="number"
+                  min={0}
+                  max={100}
+                  defaultValue={
+                    settings.addressLadderMaxAdvancesPerAccountPerDay
+                  }
+                />
+                <small className="muted">
+                  Also what lets a company&rsquo;s delivery record demote a
+                  wrong convention before a third colleague is offered it.
+                </small>
+              </label>
+              <label>
+                Stop advancing above this failure share (%)
+                <input
+                  name="addressLadderFailureRatePercent"
+                  type="number"
+                  min={1}
+                  max={100}
+                  defaultValue={settings.addressLadderFailureRatePercent}
+                />
+                <small className="muted">
+                  Measured now: {ladderMetrics.failureSharePercent}% —{" "}
+                  {ladderMetrics.sendsProvenDead} explicit failures out of{" "}
+                  {ladderMetrics.sendsAttempted} sends attempted in thirty days,
+                  with {ladderMetrics.sendsNoSignal} producing no signal at all.
+                  The breaker is currently{" "}
+                  {ladderMetrics.circuitOpen ? "open" : "closed"}.
+                </small>
+              </label>
+              <label>
+                Ignore that share below this many sends
+                <input
+                  name="addressLadderFailureRateMinimumSends"
+                  type="number"
+                  min={1}
+                  max={10000}
+                  defaultValue={settings.addressLadderFailureRateMinimumSends}
+                />
+                <small className="muted">
+                  One failure out of one send is 100% and means nothing.
+                </small>
+              </label>
+              <label>
+                Demote a convention after this many distinct people
+                <input
+                  name="addressLadderDemotionMinimumPeople"
+                  type="number"
+                  min={2}
+                  max={100}
+                  defaultValue={settings.addressLadderDemotionMinimumPeople}
+                />
+                <small className="muted">
+                  Never fewer than two: one hard bounce cannot be told apart
+                  from one departed employee.
+                </small>
+              </label>
+              <label>
+                …and only if they are this share of its attempts (%)
+                <input
+                  name="addressLadderDemotionFailureSharePercent"
+                  type="number"
+                  min={1}
+                  max={100}
+                  defaultValue={
+                    settings.addressLadderDemotionFailureSharePercent
+                  }
+                />
+                <small className="muted">
+                  Without this, a correct convention would be demoted hardest at
+                  the companies whose contact data is most out of date.
+                </small>
               </label>
             </div>
           </fieldset>

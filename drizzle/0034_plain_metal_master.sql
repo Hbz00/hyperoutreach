@@ -1,0 +1,1 @@
+ALTER TYPE "public"."email_resolution_reason" ADD VALUE 'ladder_earlier_send_unconfirmed' BEFORE 'address_suppressed';

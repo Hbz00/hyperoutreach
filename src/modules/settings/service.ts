@@ -26,6 +26,13 @@ export const CONSERVATIVE_SENDING_DEFAULTS = {
   mailboxMinimumDelaySeconds: 60,
   contactMinimumDelayMinutes: 24 * 60,
   crossCampaignCooldownDays: 30,
+  addressLadderEnabled: true,
+  addressLadderMaxRungs: 3,
+  addressLadderMaxAdvancesPerAccountPerDay: 2,
+  addressLadderFailureRatePercent: 30,
+  addressLadderFailureRateMinimumSends: 20,
+  addressLadderDemotionMinimumPeople: 2,
+  addressLadderDemotionFailureSharePercent: 50,
 } as const;
 
 const updateSchema = z
@@ -45,6 +52,41 @@ const updateSchema = z
     mailboxMinimumDelaySeconds: z.number().int().min(0).max(86_400).optional(),
     contactMinimumDelayMinutes: z.number().int().min(0).max(525_600).optional(),
     crossCampaignCooldownDays: z.number().int().min(0).max(3_650).optional(),
+    addressLadderEnabled: z.boolean().optional(),
+    addressLadderMaxRungs: z.number().int().min(1).max(10).optional(),
+    addressLadderMaxAdvancesPerAccountPerDay: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .optional(),
+    addressLadderFailureRatePercent: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional(),
+    addressLadderFailureRateMinimumSends: z
+      .number()
+      .int()
+      .min(1)
+      .max(10_000)
+      .optional(),
+    // At least two: a single failure never demotes anything, whatever else is
+    // true, because one hard bounce cannot be told apart from one departed
+    // employee. The database enforces the same floor.
+    addressLadderDemotionMinimumPeople: z
+      .number()
+      .int()
+      .min(2)
+      .max(100)
+      .optional(),
+    addressLadderDemotionFailureSharePercent: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional(),
     actor: z.string().trim().min(1).max(200),
   })
   .refine(

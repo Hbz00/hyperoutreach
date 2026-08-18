@@ -2012,7 +2012,15 @@ describe("database-backed research and email resolution", () => {
    * carriers probed showed eight addresses in `first.last` and three in
    * `flast`.
    */
-  it("refuses to pick between two conventions that tie above the threshold", async () => {
+  /**
+   * The tie used to be a dead end, because one of two equally evidenced
+   * addresses had to be picked and picking was a coin toss whose losing side was
+   * a bounce and a spent prospect. Under a ladder the loser is simply rung two,
+   * so the pair resolves — and the order between them follows how common the
+   * convention is rather than which address sorts first, which is what
+   * `localeCompare` was deciding.
+   */
+  it("resolves two tied conventions into a two-rung ladder ordered by the convention prior", async () => {
     const account = await createOrGetAccount(db, {
       name: "Two Conventions",
       domain: "two-conventions.example",
@@ -2073,20 +2081,328 @@ describe("database-backed research and email resolution", () => {
 
     expect(outcome).toMatchObject({
       ok: true,
-      status: "manual_review",
-      reason: "candidate_conflict",
+      status: "resolved",
+      reason: null,
     });
-    // Both addresses are offered for the operator to choose between, and
-    // neither is accepted on their behalf.
+    const rows = await db
+      .select()
+      .from(schema.emailCandidates)
+      .where(eq(schema.emailCandidates.contactId, contact.contact.id))
+      .orderBy(schema.emailCandidates.ladderRank);
+    expect(
+      rows.map((row) => ({
+        email: row.email,
+        rank: row.ladderRank,
+        status: row.status,
+      })),
+    ).toEqual([
+      {
+        email: "tony.pasquier@two-conventions.example",
+        rank: 1,
+        status: "accepted",
+      },
+      {
+        email: "t.pasquier@two-conventions.example",
+        rank: 2,
+        status: "candidate",
+      },
+    ]);
+    // `t.pasquier` sorts first alphabetically and must not have won on that.
+    expect(rows[0]?.pattern).toBe("first.last");
+    expect(rows[1]?.pattern).toBe("f.last");
+    // Tied is a derived fact, not a stored flag: equal confidence *is* the tie,
+    // and confidence never changes once the samples are counted. Storing it
+    // would be a second copy of the same number.
+    expect(new Set(rows.map((row) => row.confidence)).size).toBe(1);
+  });
+
+  it("keeps a strictly better-evidenced convention on rung one without calling it tied", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "One Dominant Convention",
+      domain: "one-dominant.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://one-dominant.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Nora",
+      lastName: "Blanc",
+      jobTitle: "Directrice",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+    const source = "https://one-dominant.example/press.pdf";
+    await resolveContactEmail(db, new MockDnsMxResolver(true), null, {
+      contactId: contact.contact.id,
+      publicSamples: [
+        {
+          firstName: "Marie",
+          lastName: "Durand",
+          email: "marie.durand@one-dominant.example",
+          sourceUrl: source,
+        },
+        {
+          firstName: "Paul",
+          lastName: "Martin",
+          email: "paul.martin@one-dominant.example",
+          sourceUrl: source,
+        },
+        {
+          firstName: "Jean",
+          lastName: "Dupont",
+          email: "j.dupont@one-dominant.example",
+          sourceUrl: source,
+        },
+      ],
+    });
+    const rows = await db
+      .select()
+      .from(schema.emailCandidates)
+      .where(eq(schema.emailCandidates.contactId, contact.contact.id))
+      .orderBy(schema.emailCandidates.ladderRank);
+    expect(rows.map((row) => row.status)).toEqual(["accepted", "candidate"]);
+    // Strictly better evidenced, so nothing about this order is arbitrary.
+    expect(new Set(rows.map((row) => row.confidence)).size).toBe(2);
+    expect(rows.map((row) => row.ladderRank)).toEqual([1, 2]);
+  });
+
+  /**
+   * A suppression is permanent and keyed on the address alone, so a colleague's
+   * failed guess can own the address this person's best convention produces.
+   * Accepting it anyway put a message in the review queue that the send policy
+   * would refuse for a reason nobody had been told about.
+   */
+  it("never accepts a suppressed address and takes the next usable rung instead", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Suppressed Rung",
+      domain: "suppressed-rung.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://suppressed-rung.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Remi",
+      lastName: "Gauthier",
+      jobTitle: "Chef de parc",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+    await db.insert(schema.suppressionEntries).values({
+      scope: "email",
+      normalizedValue: "remi.gauthier@suppressed-rung.example",
+      reason: "hard_bounce",
+    });
+
+    const source = "https://suppressed-rung.example/press.pdf";
+    const outcome = await resolveContactEmail(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      {
+        contactId: contact.contact.id,
+        publicSamples: [
+          {
+            firstName: "Marie",
+            lastName: "Durand",
+            email: "marie.durand@suppressed-rung.example",
+            sourceUrl: source,
+          },
+          {
+            firstName: "Paul",
+            lastName: "Martin",
+            email: "paul.martin@suppressed-rung.example",
+            sourceUrl: source,
+          },
+          {
+            firstName: "Jean",
+            lastName: "Dupont",
+            email: "j.dupont@suppressed-rung.example",
+            sourceUrl: source,
+          },
+          {
+            firstName: "Luc",
+            lastName: "Bernard",
+            email: "l.bernard@suppressed-rung.example",
+            sourceUrl: source,
+          },
+        ],
+      },
+    );
+
+    expect(outcome).toMatchObject({ ok: true, status: "resolved" });
+    const rows = await db
+      .select()
+      .from(schema.emailCandidates)
+      .where(eq(schema.emailCandidates.contactId, contact.contact.id))
+      .orderBy(schema.emailCandidates.ladderRank);
+    // Rung one is still recorded — it is what the evidence said — and rung two
+    // is what was accepted.
+    expect(
+      rows.map((row) => ({ email: row.email, status: row.status })),
+    ).toEqual([
+      {
+        email: "remi.gauthier@suppressed-rung.example",
+        status: "candidate",
+      },
+      { email: "r.gauthier@suppressed-rung.example", status: "accepted" },
+    ]);
+  });
+
+  it("reports a suppressed ladder as such rather than as missing evidence", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "All Suppressed",
+      domain: "all-suppressed.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://all-suppressed.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Elsa",
+      lastName: "Moreau",
+      jobTitle: "Acheteuse",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+    await db.insert(schema.suppressionEntries).values({
+      scope: "email",
+      normalizedValue: "elsa.moreau@all-suppressed.example",
+      reason: "hard_bounce",
+    });
+
+    const source = "https://all-suppressed.example/press.pdf";
+    const outcome = await resolveContactEmail(
+      db,
+      new MockDnsMxResolver(true),
+      null,
+      {
+        contactId: contact.contact.id,
+        publicSamples: [
+          {
+            firstName: "Marie",
+            lastName: "Durand",
+            email: "marie.durand@all-suppressed.example",
+            sourceUrl: source,
+          },
+          {
+            firstName: "Paul",
+            lastName: "Martin",
+            email: "paul.martin@all-suppressed.example",
+            sourceUrl: source,
+          },
+        ],
+      },
+    );
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      status: "manual_review",
+      reason: "address_suppressed",
+    });
+  });
+
+  /**
+   * An address that was already written to may have reached the person. Moving
+   * acceptance off it would make the message that used it unsendable — the send
+   * policy checks the recipient is still the accepted candidate — and could
+   * eventually produce a second address for one human.
+   */
+  it("does not move acceptance off an address that has already been written to", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Already Written",
+      domain: "already-written.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://already-written.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Bruno",
+      lastName: "Leclerc",
+      jobTitle: "Directeur",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+    const source = "https://already-written.example/one.pdf";
+    await resolveContactEmail(db, new MockDnsMxResolver(true), null, {
+      contactId: contact.contact.id,
+      publicSamples: [
+        {
+          firstName: "Jean",
+          lastName: "Dupont",
+          email: "j.dupont@already-written.example",
+          sourceUrl: source,
+        },
+        {
+          firstName: "Luc",
+          lastName: "Bernard",
+          email: "l.bernard@already-written.example",
+          sourceUrl: source,
+        },
+      ],
+    });
+    await db
+      .update(schema.emailCandidates)
+      .set({ firstAttemptedAt: new Date() })
+      .where(eq(schema.emailCandidates.contactId, contact.contact.id));
+
+    // New, better evidence for a different convention arrives.
+    const better = "https://already-written.example/two.pdf";
+    await resolveContactEmail(db, new MockDnsMxResolver(true), null, {
+      contactId: contact.contact.id,
+      publicSamples: [
+        {
+          firstName: "Marie",
+          lastName: "Durand",
+          email: "marie.durand@already-written.example",
+          sourceUrl: better,
+        },
+        {
+          firstName: "Paul",
+          lastName: "Martin",
+          email: "paul.martin@already-written.example",
+          sourceUrl: better,
+        },
+        {
+          firstName: "Remi",
+          lastName: "Petit",
+          email: "remi.petit@already-written.example",
+          sourceUrl: better,
+        },
+      ],
+    });
+
     const rows = await db
       .select()
       .from(schema.emailCandidates)
       .where(eq(schema.emailCandidates.contactId, contact.contact.id));
-    expect(rows.map((row) => row.email).sort()).toEqual([
-      "t.pasquier@two-conventions.example",
-      "tony.pasquier@two-conventions.example",
+    const accepted = rows.filter((row) => row.status === "accepted");
+    expect(accepted.map((row) => row.email)).toEqual([
+      "b.leclerc@already-written.example",
     ]);
-    expect(rows.every((row) => row.status === "candidate")).toBe(true);
+    // The new convention is still recorded as a rung, so nothing is lost.
+    expect(rows.map((row) => row.email).sort()).toEqual([
+      "b.leclerc@already-written.example",
+      "bruno.leclerc@already-written.example",
+    ]);
   });
 
   /**

@@ -1,18 +1,9 @@
 import { and, eq } from "drizzle-orm";
 
-import {
-  contacts,
-  emailCandidates,
-  enrollments,
-  sequenceSteps,
-} from "@/lib/db/schema";
+import { contacts, emailCandidates, enrollments } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import { isTerminalEnrollmentState } from "@/modules/campaigns/enrollment-state";
-import { stepDeclaresPersonalization } from "@/modules/messages/personalization-declaration";
-import {
-  AI_WORKFLOW_TASKS,
-  type WaitingReason,
-} from "@/modules/workflows/operator-command-policy";
+import type { WaitingReason } from "@/modules/workflows/operator-command-policy";
 
 /**
  * What the queue should do with a command it has just claimed, before it
@@ -27,52 +18,9 @@ import {
  * something that is not coming.
  */
 export type PreparedCommand =
-  | { kind: "ready"; payload: Record<string, unknown>; usesAi: boolean }
+  | { kind: "ready"; payload: Record<string, unknown> }
   | { kind: "waiting"; reason: WaitingReason }
   | { kind: "abandon"; reason: string };
-
-/**
- * Whether running this command will take a turn on the operator's single
- * ChatGPT window.
- *
- * For most tasks the answer is the task name. `generate-message` is the one
- * task whose answer is in the data: it is deterministic interpolation until a
- * sequence step declares a field for an agent to write, and then it is a live
- * turn. The queue stops a pass at its first AI turn, so answering "no" here
- * for a step that does declare one would let a burst of enrolments spend the
- * window several times over in a single pass — which is exactly the bound's
- * reason to exist.
- *
- * The declaration is the discriminator rather than whether the agent would
- * actually be reached: a declared step whose account has no research returns
- * `AWAITING_RESEARCH` without calling anybody. Over-counting there costs one
- * deferred command; under-counting costs the window.
- */
-async function commandTakesAiTurn(
-  db: AppDatabase,
-  row: { task: string; payload: Record<string, unknown> },
-): Promise<boolean> {
-  if ((AI_WORKFLOW_TASKS as readonly string[]).includes(row.task)) return true;
-  if (row.task !== "generate-message") return false;
-  const enrollmentId = row.payload.enrollmentId;
-  const stepIndex = row.payload.stepIndex;
-  if (typeof enrollmentId !== "string" || typeof stepIndex !== "number") {
-    return false;
-  }
-  const [step] = await db
-    .select({ declared: sequenceSteps.personalizationSchema })
-    .from(enrollments)
-    .innerJoin(
-      sequenceSteps,
-      and(
-        eq(sequenceSteps.campaignVersionId, enrollments.campaignVersionId),
-        eq(sequenceSteps.stepIndex, stepIndex),
-      ),
-    )
-    .where(eq(enrollments.id, enrollmentId))
-    .limit(1);
-  return stepDeclaresPersonalization(step?.declared);
-}
 
 /**
  * Fills in what a queued command needs but could not know when it was queued,
@@ -95,19 +43,11 @@ export async function prepareCommand(
     // account deleted between queueing and draining. They are deliberately
     // left alone: their subject is not read here, and inventing a second
     // ownership rule for them belongs with the command that needs it.
-    return {
-      kind: "ready",
-      payload: row.payload,
-      usesAi: await commandTakesAiTurn(db, row),
-    };
+    return { kind: "ready", payload: row.payload };
   }
   const enrollmentId = row.payload.enrollmentId;
   if (typeof enrollmentId !== "string") {
-    return {
-      kind: "ready",
-      payload: row.payload,
-      usesAi: await commandTakesAiTurn(db, row),
-    };
+    return { kind: "ready", payload: row.payload };
   }
 
   // Is there still somebody to write to? Asked before the address, because a
@@ -138,11 +78,7 @@ export async function prepareCommand(
   // have no resolved address yet — waits for resolution to answer.
   const carried = row.payload.recipient;
   if (typeof carried === "string" && carried.trim().length > 0) {
-    return {
-      kind: "ready",
-      payload: row.payload,
-      usesAi: await commandTakesAiTurn(db, row),
-    };
+    return { kind: "ready", payload: row.payload };
   }
 
   const [accepted] = await db
@@ -162,6 +98,5 @@ export async function prepareCommand(
   return {
     kind: "ready",
     payload: { ...row.payload, recipient: accepted.email },
-    usesAi: await commandTakesAiTurn(db, row),
   };
 }

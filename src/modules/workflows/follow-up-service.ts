@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import {
@@ -246,6 +246,9 @@ export async function findDueEnrollments(
               where due_message.enrollment_id = ${enrollments.id}
                 and due_message.direction = 'outbound'
                 and due_message.step_index = ${enrollments.currentStep}
+                -- A step whose only message was proven undeliverable has no
+                -- message: the ladder freed it to be written again.
+                and due_message.address_dead_at is null
             )`,
           ),
         ),
@@ -354,6 +357,22 @@ export async function processFollowUpInvocation(
             eq(messages.enrollmentId, enrollments.id),
             eq(messages.direction, "outbound"),
             eq(messages.stepIndex, sql`${enrollments.currentStep} - 1`),
+            /**
+             * Never the address a ladder advance proved does not exist.
+             *
+             * A follow-up addresses the thread it is following, so it takes the
+             * previous step's recipient — and after an advance that step has two
+             * messages, the dead one and the one that replaced it. Picking the
+             * dead one would send to an address this product permanently
+             * suppressed one line of code earlier, so the follow-up would be
+             * refused and the enrollment stopped as `recipient_suppressed`: an
+             * enrollment the ladder had just saved, killed by the rescue.
+             *
+             * The `limit(1)` below made that a coin toss rather than a certainty,
+             * which is worse. The ordering makes the surviving row deterministic
+             * as well as live.
+             */
+            isNull(messages.addressDeadAt),
           ),
         )
         .leftJoin(
@@ -362,6 +381,10 @@ export async function processFollowUpInvocation(
         )
         .leftJoin(operatorSendingSettings, eq(operatorSendingSettings.id, 1))
         .where(eq(enrollments.id, input.enrollmentId))
+        // One row per enrollment once the dead ones are excluded, but ordered
+        // rather than left to chance: `limit(1)` over an unordered join is how
+        // the dead address would have been picked half the time.
+        .orderBy(desc(messages.sentAt))
         .limit(1);
       if (!context) {
         const [enrollmentOnly] = await tx

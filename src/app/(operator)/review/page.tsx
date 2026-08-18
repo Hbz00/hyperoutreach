@@ -18,6 +18,10 @@ import {
 import { requireOperatorSession } from "@/lib/operator-session-server";
 import { StatusBadge } from "@/modules/presentation/status-badge";
 import {
+  readDemotedConventions,
+  readLadderSettings,
+} from "@/modules/email-resolution/ladder-service";
+import {
   describeStatus,
   describeStopReason,
 } from "@/modules/presentation/status";
@@ -29,6 +33,10 @@ import {
 import { readSendPolicyVerdict } from "@/modules/messages/send-service";
 import { operatorClock } from "@/modules/settings/working-hours";
 
+function ladderRowsDomains(rows: Array<{ domain: string }>): string[] {
+  return rows.map((row) => row.domain);
+}
+
 export default async function ReviewPage({
   searchParams,
 }: {
@@ -36,6 +44,7 @@ export default async function ReviewPage({
 }) {
   const session = await requireOperatorSession();
   const { notice } = await searchParams;
+  const ladderSettings = await readLadderSettings(getDatabase());
   const rows = await getDatabase()
     .select({
       message: messages,
@@ -86,6 +95,43 @@ export default async function ReviewPage({
     : [];
   const accountIds = [...new Set(rows.map((row) => row.account.id))];
   const contactIds = [...new Set(rows.map((row) => row.contact.id))];
+  /**
+   * The ladder facts the card has to state, for the contacts on this page.
+   *
+   * The tie refusal was removed because a ladder makes the loser of a tie
+   * reachable rather than lost — but that moved the only human check on an
+   * arbitrarily-ordered address to this card. So it says which rung the message
+   * addresses, whether that rung was reached after a death, whether its order was
+   * arbitrary, and whether the company's own delivery record has since
+   * discredited the convention behind it.
+   */
+  const ladderRows = contactIds.length
+    ? await getDatabase()
+        .select({
+          contactId: emailCandidates.contactId,
+          domain: emailCandidates.domain,
+          normalizedEmail: emailCandidates.normalizedEmail,
+          confidence: emailCandidates.confidence,
+          pattern: emailCandidates.pattern,
+        })
+        .from(emailCandidates)
+        .where(inArray(emailCandidates.contactId, contactIds))
+    : [];
+  // Keyed on the domain a convention belongs to, which is what the ladder itself
+  // keys on: a contact who changed employer keeps their old candidates, and the
+  // account they now sit in never ran those conventions.
+  const domains = [...new Set(ladderRowsDomains(ladderRows))];
+  const demotedByDomain = new Map<string, Set<string>>();
+  for (const domain of domains) {
+    demotedByDomain.set(
+      domain,
+      await readDemotedConventions(getDatabase(), {
+        domain,
+        minimumPeople: ladderSettings.demotionMinimumPeople,
+        failureSharePercent: ladderSettings.demotionFailureSharePercent,
+      }),
+    );
+  }
   const evidence =
     accountIds.length || contactIds.length
       ? await getDatabase()
@@ -211,6 +257,28 @@ export default async function ReviewPage({
             (item) =>
               item.accountId === row.account.id ||
               item.contactId === row.contact.id,
+          );
+          const contactLadder = ladderRows.filter(
+            (candidate) => candidate.contactId === row.contact.id,
+          );
+          const demoted =
+            demotedByDomain.get(row.acceptedEmail?.domain ?? "") ??
+            new Set<string>();
+          const ladderSize = contactLadder.length;
+          const conventionDemoted = Boolean(
+            row.acceptedEmail?.pattern &&
+            demoted.has(row.acceptedEmail.pattern),
+          );
+          // Equal confidence *is* the tie, once demotion is accounted for:
+          // confidence never changes after the samples are counted, so a stored
+          // flag would only be a second copy of this comparison.
+          const ladderTied = contactLadder.some(
+            (candidate) =>
+              row.acceptedEmail !== null &&
+              candidate.normalizedEmail !== row.acceptedEmail.normalizedEmail &&
+              candidate.confidence === row.acceptedEmail.confidence &&
+              demoted.has(candidate.pattern ?? "") ===
+                demoted.has(row.acceptedEmail.pattern ?? ""),
           );
           return (
             <article className="review-card" key={row.message.id}>
@@ -344,6 +412,23 @@ export default async function ReviewPage({
                         {row.acceptedEmail
                           ? `${Math.round(Number(row.acceptedEmail.confidence) * 100)}% (${row.acceptedEmail.source}, ${describeStatus("emailCandidate", row.acceptedEmail.status).label.toLowerCase()})`
                           : "no accepted candidate"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Address ladder</dt>
+                      <dd>
+                        {row.acceptedEmail
+                          ? `rung ${row.acceptedEmail.ladderRank} of ${ladderSize}`
+                          : "no rung recorded"}
+                        {row.acceptedEmail?.advancedAt
+                          ? ` · reached after an earlier address was proven not to exist`
+                          : ""}
+                        {ladderTied
+                          ? " · tied with another equally evidenced convention, so the order between them is arbitrary"
+                          : ""}
+                        {conventionDemoted
+                          ? " · this company's delivery record has since discredited this convention"
+                          : ""}
                       </dd>
                     </div>
                     <div>

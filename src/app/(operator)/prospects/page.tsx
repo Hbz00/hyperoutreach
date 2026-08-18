@@ -60,6 +60,19 @@ export default async function ProspectsPage({
         researchStatus: accounts.researchStatus,
         researchedAt: accounts.researchedAt,
         contactCount: sql<number>`count(${contacts.id})::int`,
+        // Contacts the company-level resolve would act on, counted by the same
+        // rule the action uses so the button and its effect cannot disagree:
+        // still unresolved, and not already written to.
+        needingAddress: sql<number>`count(${contacts.id}) filter (
+          where ${contacts.emailResolutionStatus} <> 'resolved'
+            and not exists (
+              select 1 from email_candidates written
+              where written.contact_id = ${contacts.id}
+                and written.status = 'accepted'
+                and written.first_attempted_at is not null
+                and written.dead_at is null
+            )
+        )::int`,
       })
       .from(accounts)
       .leftJoin(contacts, eq(contacts.accountId, accounts.id))
@@ -250,9 +263,61 @@ export default async function ProspectsPage({
                           : ""}
                     </small>
                   </td>
-                  <td>{account.contactCount}</td>
+                  <td>
+                    {account.contactCount}
+                    <small>
+                      {account.needingAddress > 0
+                        ? `${account.needingAddress} without an address`
+                        : "all addressed"}
+                    </small>
+                  </td>
                   <td>
                     <div className="button-stack compact-form">
+                      {/* The convention belongs to the company, so resolving
+                          addresses does too: one search answers it for every
+                          contact here. The per-contact action stays on the
+                          prospect page, for the exception. */}
+                      <form
+                        action="/api/operator/commands/resolve-account-emails"
+                        method="post"
+                        className="stack"
+                      >
+                        <input
+                          type="hidden"
+                          name="csrf"
+                          value={session.csrfToken}
+                        />
+                        <input
+                          type="hidden"
+                          name="accountId"
+                          value={account.id}
+                        />
+                        <input
+                          type="hidden"
+                          name="requestToken"
+                          value={crypto.randomUUID()}
+                        />
+                        <input
+                          type="hidden"
+                          name="returnTo"
+                          value="/prospects"
+                        />
+                        <label className="check">
+                          <input type="checkbox" name="forcePublicSearch" />
+                          Search this company again
+                        </label>
+                        <small className="muted">
+                          Ticking it also re-resolves contacts that already have
+                          an address, so more than the count below may be queued
+                          — never one already written to.
+                        </small>
+                        <button disabled={account.contactCount === 0}>
+                          Resolve addresses
+                          {account.needingAddress > 0
+                            ? ` (${account.needingAddress})`
+                            : ""}
+                        </button>
+                      </form>
                       <form
                         action="/api/operator/commands/research-account"
                         method="post"

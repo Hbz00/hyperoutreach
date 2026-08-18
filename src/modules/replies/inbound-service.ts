@@ -27,6 +27,10 @@ import { isObservedReplyClassifier } from "@/modules/replies/classification-serv
 import type { AgentResult } from "@/modules/agents/types";
 import type { ReplyClassification } from "@/modules/replies/reply-classifier";
 import { mapReplyOutcome } from "@/modules/replies/reply-policy";
+import {
+  advanceAddressLadder,
+  type LadderAdvanceOutcome,
+} from "@/modules/email-resolution/ladder-service";
 import { normalizeEmail } from "@/modules/prospects/normalization";
 import { insertSuppressionInTransaction } from "@/modules/suppression/service";
 import { isTerminalEnrollmentState } from "@/modules/campaigns/enrollment-state";
@@ -633,6 +637,45 @@ export async function ingestInboundMessage(
           input.bounceKind ?? null,
           holdNonTerminal,
         );
+        /**
+         * A hard bounce proves the address does not exist. It does not prove the
+         * person is done, and the product used to conflate the two.
+         *
+         * Run before the reply row is written, because whether the sequence
+         * actually terminated is one of the facts that row records. The enrollment
+         * is locked here for the same reason the terminal path locks it below: the
+         * ladder rewrites it.
+         */
+        let ladder: LadderAdvanceOutcome | null = null;
+        if (
+          matched.message &&
+          classification.category === "bounce" &&
+          input.bounceKind === "hard"
+        ) {
+          await tx.execute(
+            sql`select id from enrollments where id = ${matched.message.enrollmentId} for update`,
+          );
+          ladder = await advanceAddressLadder(tx, {
+            messageId: matched.message.id,
+            now,
+            actor: "system:inbound",
+          });
+        }
+        // The ladder owns the enrollment whenever it decided anything about it:
+        // an advance, or a hold on a bound the operator can raise. Both leave a
+        // live prospect, so neither may be written over with the terminal
+        // bounce outcome below.
+        const ladderOwnsEnrollment =
+          ladder !== null &&
+          (ladder.kind === "advanced" || !ladder.endsEnrollment);
+        const effectiveOutcome = ladderOwnsEnrollment
+          ? {
+              ...outcome,
+              state: "manual_review" as const,
+              stopReason: null,
+              terminal: false,
+            }
+          : outcome;
         const replyValues = {
           inboundRecordId: inbound.id,
           messageId: matched.message?.id,
@@ -647,7 +690,9 @@ export async function ingestInboundMessage(
           sender,
           subject: input.subject,
           metadata: input.metadata ?? {},
-          terminatesSequence: Boolean(matched.message && outcome.terminal),
+          terminatesSequence: Boolean(
+            matched.message && effectiveOutcome.terminal,
+          ),
           receivedAt: input.receivedAt,
         };
         const [reply] = existingReply
@@ -681,7 +726,40 @@ export async function ingestInboundMessage(
           );
         }
 
-        if (matched.message) {
+        // The ladder has already rewritten this enrollment — non-terminal, back
+        // at the dead step, with the inbound hold cleared — and it wrote its own
+        // transition row. Running the terminal update over the top would undo
+        // the thing that was just decided.
+        /**
+         * The ladder owns the enrollment's state, but this record's hold is
+         * still this path's to release. `inboundHoldCount` counts every inbound
+         * record holding the enrollment, so leaving it alone would hold a
+         * prospect the ladder just freed, and zeroing it inside the ladder would
+         * discard a different record's hold.
+         */
+        if (matched.message && ladderOwnsEnrollment && stagedHoldEnrollmentId) {
+          const [current] = await tx
+            .select({ inboundHoldCount: enrollments.inboundHoldCount })
+            .from(enrollments)
+            .where(eq(enrollments.id, matched.message.enrollmentId))
+            .limit(1);
+          const remaining = Math.max(0, (current?.inboundHoldCount ?? 0) - 1);
+          await tx
+            .update(enrollments)
+            .set({
+              inboundHoldCount: remaining,
+              ...(remaining === 0
+                ? {
+                    inboundHoldAt: null,
+                    inboundHoldPreviousState: null,
+                    inboundHoldPreviousNextActionAt: null,
+                    inboundHoldPreviousNextActionToken: null,
+                  }
+                : {}),
+            })
+            .where(eq(enrollments.id, matched.message.enrollmentId));
+        }
+        if (matched.message && !ladderOwnsEnrollment) {
           await tx.execute(
             sql`select id from enrollments where id = ${matched.message.enrollmentId} for update`,
           );
