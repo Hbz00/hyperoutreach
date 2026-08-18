@@ -716,7 +716,11 @@ describe("address attempt ladder", () => {
       .from(schema.contacts)
       .where(eq(schema.contacts.id, fixture.contact.id))
       .limit(1);
-    expect(contact?.emailResolutionReason).toBe("ladder_limit_reached");
+    // No reason on the address. The prospect is finished, exactly as they were
+    // before the feature existed, and switching it back on revives nobody — so
+    // a sentence inviting the operator to raise a bound would be a wrong
+    // instruction rather than an unhelpful one.
+    expect(contact?.emailResolutionReason).not.toBe("ladder_limit_reached");
     await setLadderSettings({});
   });
 
@@ -1821,6 +1825,37 @@ describe("address attempt ladder", () => {
       const released = await readParkedEnrollments(db);
       expect(released.map((row) => row.enrollmentId)).toContain(
         fixture.enrollmentId,
+      );
+    });
+
+    it("refuses a hand-accepted address the suppression list blocks mid-write", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture({ send: false });
+      // The row exists and is not dead, so only the write's own condition can
+      // refuse it — which is the shape of the race: the suppression is written
+      // by a transaction that takes none of this path's locks.
+      const rows = await candidates(fixture.contact.id);
+      const target = rows.find(
+        (row) => row.normalizedEmail === fixture.rungTwo,
+      );
+      if (!target) throw new Error("fixture has no second rung");
+      await db.insert(schema.suppressionEntries).values({
+        scope: "email",
+        normalizedValue: fixture.rungTwo,
+        reason: "hard_bounce",
+      });
+
+      const refused = await acceptManualEmail(db, {
+        contactId: fixture.contact.id,
+        email: fixture.rungTwo,
+        actor: "operator",
+      });
+      expect(refused).toMatchObject({ ok: false, code: "ADDRESS_SUPPRESSED" });
+      const after = await candidates(fixture.contact.id);
+      // Accepted-and-suppressed reads as resolved on the prospect list while
+      // every send is refused. Nothing may commit it.
+      expect(after.find((row) => row.id === target.id)?.status).not.toBe(
+        "accepted",
       );
     });
 

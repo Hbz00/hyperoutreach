@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne } from "drizzle-orm";
+import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { actionLockKey, withActionLocks } from "@/lib/db/action-lock";
@@ -107,22 +107,6 @@ export async function acceptManualEmail(
           if (conflict?.deadAt) {
             return { ok: false, code: "ADDRESS_DEAD" } as const;
           }
-          /**
-           * The suppression list blocks it, so the send policy would refuse the
-           * message this acceptance is about to make possible.
-           *
-           * Refused here rather than at send time: the operator can lift a
-           * suppression, and being told which one stands in the way is the
-           * decision they are actually facing.
-           */
-          const suppressed = await readSuppressedAddresses(tx, {
-            addresses: [normalizedEmail],
-            domain,
-          });
-          if (suppressed.has(normalizedEmail)) {
-            return { ok: false, code: "ADDRESS_SUPPRESSED" } as const;
-          }
-
           const [already] = await tx
             .select()
             .from(emailCandidates)
@@ -158,14 +142,37 @@ export async function acceptManualEmail(
             .where(eq(emailCandidates.normalizedEmail, normalizedEmail))
             .limit(1);
           /**
-           * `dead_at is null` is part of the write, not only of the check above.
+           * The suppression list blocks it, so the send policy would refuse the
+           * message this acceptance is about to make possible.
            *
-           * The reads that guard this path take no row lock, and the transaction
-           * that proves an address dead takes none either — it runs from a
-           * reconciliation that holds no action lock at all. Without the
-           * condition here, a death landing between the check and the write
-           * left the row `accepted` with `dead_at` set: the exact state the
-           * check exists to prevent, reachable by losing a race.
+           * Refused here rather than at send time: the operator can lift a
+           * suppression, and being told which one stands in the way is the
+           * decision they are actually facing.
+           *
+           * Only for an address with no row yet. When a row exists, the write
+           * below carries the same condition and decides it in one statement —
+           * asking twice would let the answer change in between, which is the
+           * race this is guarding against in the first place.
+           */
+          if (!existing) {
+            const suppressed = await readSuppressedAddresses(tx, {
+              addresses: [normalizedEmail],
+              domain,
+            });
+            if (suppressed.has(normalizedEmail)) {
+              return { ok: false, code: "ADDRESS_SUPPRESSED" } as const;
+            }
+          }
+          /**
+           * Both refusals are part of the write, not only of the checks above.
+           *
+           * The reads that guard this path take no row lock, and neither
+           * transaction that can invalidate them takes one either: a definite
+           * refusal is recorded from a reconciliation that holds no action lock
+           * at all, and it writes the suppression and the death separately.
+           * Re-stating both conditions in the write makes each check and its
+           * write a single statement, so a death or a suppression landing
+           * in between is refused rather than overwritten.
            */
           const [candidate] = existing
             ? await tx
@@ -182,6 +189,12 @@ export async function acceptManualEmail(
                   and(
                     eq(emailCandidates.id, existing.id),
                     isNull(emailCandidates.deadAt),
+                    sql`not exists (
+                      select 1 from suppression_entries blocking
+                      where (blocking.scope = 'email'
+                          and blocking.normalized_value = ${normalizedEmail})
+                        or (blocking.scope = 'domain'
+                          and blocking.normalized_value = ${domain}))`,
                   ),
                 )
                 .returning()
@@ -201,12 +214,24 @@ export async function acceptManualEmail(
                   verifiedAt: new Date(),
                 })
                 .returning();
-          // No row means the address died while this ran — the update's own
-          // condition refused it — so the operator gets the same answer they
-          // would have got a moment earlier.
+          /**
+           * No row means the write's own conditions refused it: the address
+           * died or was suppressed while this ran. Reading back which one
+           * gives the operator the same answer they would have had a moment
+           * earlier, rather than a generic failure.
+           */
           if (!candidate) {
-            if (existing) return { ok: false, code: "ADDRESS_DEAD" } as const;
-            throw new Error("Manual email insert returned no row");
+            if (!existing)
+              throw new Error("Manual email insert returned no row");
+            const [refused] = await tx
+              .select({ deadAt: emailCandidates.deadAt })
+              .from(emailCandidates)
+              .where(eq(emailCandidates.id, existing.id))
+              .limit(1);
+            return {
+              ok: false,
+              code: refused?.deadAt ? "ADDRESS_DEAD" : "ADDRESS_SUPPRESSED",
+            } as const;
           }
 
           /**

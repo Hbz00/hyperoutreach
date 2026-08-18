@@ -685,9 +685,22 @@ function contactReasonFor(
     case "already_recorded":
     case "unknown_message":
       return null;
-    // The bounds. Each one is a setting the operator owns, and the sentence they
-    // read says so.
+    /**
+     * The ladder is switched off, so this bounce ended the prospect exactly as
+     * it did before the feature existed.
+     *
+     * It used to read `ladder_limit_reached` — "an address remains, but a bound
+     * stopped the attempt" — which invites the operator to raise something and
+     * come back. Nothing comes back: turning the feature on again does not
+     * revive an enrollment already ended. Same defect as `enrollment_ended`, and
+     * the same answer. What survives is that the three reasons still carrying
+     * this sentence are exactly the three that park a prospect rather than end
+     * one, so the sentence and the outcome now agree.
+     */
     case "feature_disabled":
+      return null;
+    // The bounds. Each one is a setting the operator owns, each one parks the
+    // prospect rather than ending them, and the sentence they read says so.
     case "circuit_open":
     case "account_daily_cap":
     case "rung_ceiling":
