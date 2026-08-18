@@ -43,6 +43,21 @@ export class DeterministicReplyClassifier implements ReplyClassifier {
 
   async classify(input: ReplyClassifierInput): Promise<ReplyClassification> {
     const text = `${input.subject}\n${input.body}`.toLocaleLowerCase("en-US");
+    /**
+     * Whether a machine sent it.
+     *
+     * The bounce rule below is checked against this as well as against the
+     * words, because this product writes to hauliers: "the delivery failed",
+     * "could not be delivered", "the address was rejected" are things their
+     * staff say about freight, in a real reply, all day. Reading the sender
+     * separates a mail system from a customer talking about a lorry, and no
+     * amount of care with the wording alone would.
+     */
+    const sender = input.sender.toLocaleLowerCase("en-US");
+    const machineSender =
+      /(?:mailer-daemon|postmaster|no-?reply|do-?not-?reply|bounce)/.test(
+        sender,
+      );
     const rules: Array<[RegExp, ReplyCategory, number, string]> = [
       [
         /(?:unsubscribe|remove me|stop emailing|désabonn)/,
@@ -70,12 +85,24 @@ export class DeterministicReplyClassifier implements ReplyClassifier {
        * Reached only when the transport could not parse the report itself: a
        * structured DSN sets `bounceKind` and never consults a classifier.
        */
+      // Unambiguous even from a human: nobody discussing freight writes these.
       [
-        /(?:mailer-daemon|postmaster@|delivery status notification|undelivered mail|undeliverable|delivery (?:has )?failed|delivery delayed|could not be delivered|address not found|recipient (?:address )?rejected|user unknown|recipientnotfound|mailbox (?:is )?full|\b[45]\.\d{1,3}\.\d{1,3}\b)/,
+        /(?:delivery status notification|undelivered mail returned to sender|recipientnotfound|\b[45]\.\d{1,3}\.\d{1,3}\b)/,
         "bounce",
         0.9,
-        "Delivery-failure phrase",
+        "Delivery-status report",
       ],
+      // Ambiguous wording, admitted only from a mail system.
+      ...(machineSender
+        ? ([
+            [
+              /(?:undeliverable|delivery (?:has )?failed|delivery delayed|could not be delivered|address not found|recipient (?:address )?rejected|user unknown|mailbox (?:is )?full)/,
+              "bounce",
+              0.9,
+              "Delivery-failure phrase from a mail system",
+            ],
+          ] as Array<[RegExp, ReplyCategory, number, string]>)
+        : []),
       [
         /(?:automated message|do not reply)/,
         "automated",

@@ -15,7 +15,7 @@
   },
   "fixtureProvenance": {
     "method": "synthetic_contract",
-    "description": "One hundred explicit synthetic captured-output cases for offline evaluator contract and mutation regression testing; not an empirical model benchmark. The three unparsed-bounce reply cases are the exception: their expected category was taken from the production classifier (ChatGPT desktop, GPT-5.6 Sol, Instant), which answered `bounce` at 0.99 confidence on each, so the offline classifier is held to what production actually does.",
+    "description": "One hundred explicit synthetic captured-output cases for offline evaluator contract and mutation regression testing; not an empirical model benchmark. The three unparsed-bounce reply cases are the exception: their expected category was taken from the production classifier (ChatGPT desktop, GPT-5.6 Sol, Instant), which answered `bounce` at 0.99 confidence on each, so the offline classifier is held to what production actually does. A haulier's own reply about a failed freight delivery is held to `question`, because the prospects this product writes to discuss undelivered goods for a living and a bounce classification suppresses an address permanently.",
     "independentlyVerified": false
   },
   "prospects": [
@@ -5168,6 +5168,21 @@
       "expectedSuppression": false,
       "expectedState": "manual_review",
       "expectedStopReason": null
+    },
+    {
+      "id": "carrier-talks-about-a-failed-delivery",
+      "input": {
+        "subject": "RE: votre flotte",
+        "body": "Our delivery failed at the Lyon depot yesterday and two pallets could not be delivered. Could you resend the documents?",
+        "sender": "marie.durand@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "question",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "question"
     }
   ],
   "policies": [

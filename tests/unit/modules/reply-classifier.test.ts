@@ -44,6 +44,43 @@ describe("reply classification boundary", () => {
     expect(result.confidence).toBeLessThanOrEqual(1);
   });
 
+  /**
+   * The prospects this product writes to run lorries.
+   *
+   * "The delivery failed", "could not be delivered", "the address was rejected"
+   * are things their staff say about freight, in a real reply, all day. A rule
+   * that reads only the words turns those into bounces — and a bounce
+   * classification is what suppresses an address permanently. The sender is what
+   * separates a mail system from a customer talking about a lorry.
+   */
+  it.each([
+    [
+      "Our delivery failed at the Lyon depot yesterday, could you resend the documents?",
+      "marie.durand@transport-nord.example",
+      "question",
+    ],
+    [
+      "Two pallets could not be delivered because the address was rejected by the site.",
+      "paul.martin@transport-nord.example",
+      "unknown",
+    ],
+    [
+      "Delivery delayed again on the Marseille run.",
+      "MAILER-DAEMON@transport-nord.example",
+      "bounce",
+    ],
+  ])(
+    "reads the sender before calling freight talk a bounce",
+    async (body, sender, category) => {
+      const result = await new DeterministicReplyClassifier().classify({
+        subject: "Re: votre flotte",
+        body,
+        sender,
+      });
+      expect(result.category).toBe(category);
+    },
+  );
+
   it("rejects an invalid provider classification", () => {
     expect(() =>
       validateReplyClassification({

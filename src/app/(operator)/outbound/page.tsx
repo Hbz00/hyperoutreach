@@ -233,9 +233,11 @@ export default async function OutboundPage({
               discredit a convention that works — and nothing in the delivery
               record will ever say so, because the record is the thing that is
               wrong. Restoring one sets aside the evidence below and starts that
-              company&rsquo;s record again from today: if you are right the
-              convention goes back to the front, and if you are wrong the next
-              failures demote it again.
+              company&rsquo;s record again from today. The ladders the demotion
+              reordered are put back with it — every contact there you have not
+              written to yet. If you are wrong, the next failures demote it
+              again, counted from today rather than from the record you just set
+              aside.
             </p>
             <div className="table-wrap">
               <table>

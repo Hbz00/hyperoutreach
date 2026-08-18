@@ -5,7 +5,6 @@ import {
   eq,
   gte,
   inArray,
-  lt,
   isNotNull,
   isNull,
   ne,
@@ -333,9 +332,53 @@ async function readLatchedDemotions(
  * than updated: the counts stored are the ones that first reached the
  * threshold, which is what the audit trail is being asked for.
  */
-async function latchConventionDemotions(
+/**
+ * The evidence for one convention at one domain, counted from a given moment.
+ *
+ * Separate from `readConventionOutcomes` because the re-latch has to measure it
+ * against a watermark it holds a row lock on, not against whatever the watermark
+ * was when the surrounding verdict was computed.
+ */
+async function countConventionEvidence(
   tx: Transaction,
-  input: { domain: string; outcomes: ConventionOutcome[]; now: Date },
+  input: { domain: string; pattern: string; since: Date | null },
+): Promise<{ peopleAttempted: number; peopleProvenDead: number }> {
+  // Bound as an explicit timestamp literal. A JavaScript `Date` interpolated
+  // into a raw template loses the column's own mapping, and the comparison it
+  // becomes is not the one written here.
+  const since = sql`${(input.since ?? new Date(0)).toISOString()}::timestamptz`;
+  const [row] = await tx
+    .select({
+      peopleAttempted: sql<number>`count(distinct case
+        when ${emailCandidates.firstAttemptedAt} >= ${since}
+          or ${emailCandidates.deadAt} >= ${since}
+        then ${emailCandidates.contactId} end)::int`,
+      peopleProvenDead: sql<number>`count(distinct case
+        when ${emailCandidates.deadAt} >= ${since}
+        then ${emailCandidates.contactId} end)::int`,
+    })
+    .from(emailCandidates)
+    .where(
+      and(
+        eq(emailCandidates.domain, input.domain),
+        eq(emailCandidates.pattern, input.pattern),
+      ),
+    );
+  return {
+    peopleAttempted: row?.peopleAttempted ?? 0,
+    peopleProvenDead: row?.peopleProvenDead ?? 0,
+  };
+}
+
+export async function latchConventionDemotions(
+  tx: Transaction,
+  input: {
+    domain: string;
+    outcomes: ConventionOutcome[];
+    now: Date;
+    minimumPeople: number;
+    failureSharePercent: number;
+  },
 ): Promise<void> {
   const newly = input.outcomes.filter((outcome) => outcome.demoted);
   if (newly.length === 0) return;
@@ -361,34 +404,59 @@ async function latchConventionDemotions(
    * row is rewritten: a standing verdict keeps the counts that first produced it,
    * which is what the audit trail is being asked for.
    *
-   * `lifted_at < now` is what makes that true under concurrency. This runs inside
-   * the bounce transaction, which holds no advisory lock, so an operator's lift
-   * can commit between the moment the verdict above was computed and the moment
-   * it is written. Without the condition, a bounce that had already decided
-   * "demoted" from the pre-lift evidence would find the row lifted, match, and
-   * overwrite the lift — returning `ok` to the operator while silently erasing
-   * their reasons and reinstating the very verdict they overruled. A lift dated
-   * after the failure being recorded cannot be answered by that failure.
+   * The row is locked and the evidence re-counted here, rather than trusting the
+   * verdict computed above.
+   *
+   * This runs inside the bounce transaction, which holds no advisory lock, so an
+   * operator's restore can commit between the moment that verdict was computed
+   * and the moment it is written — and then the pre-restore failures it was
+   * computed from are exactly the ones the operator has just excused. Comparing
+   * timestamps cannot catch that: a restore is stamped before its lock is
+   * acquired, so it can carry a moment earlier than a bounce that nonetheless
+   * commits after it. What settles it is measuring the evidence against the
+   * watermark this transaction holds a lock on, which no concurrent restore can
+   * move under it.
    */
   for (const outcome of newly) {
-    await tx
-      .update(conventionDemotions)
-      .set({
-        demotedAt: input.now,
-        peopleProvenDead: outcome.peopleProvenDead,
-        peopleAttempted: outcome.peopleAttempted,
-        liftedAt: null,
-        liftedBy: null,
-        liftReason: null,
+    const [locked] = await tx
+      .select({
+        id: conventionDemotions.id,
+        liftedAt: conventionDemotions.liftedAt,
       })
+      .from(conventionDemotions)
       .where(
         and(
           eq(conventionDemotions.domain, input.domain),
           eq(conventionDemotions.pattern, outcome.pattern),
-          isNotNull(conventionDemotions.liftedAt),
-          lt(conventionDemotions.liftedAt, input.now),
         ),
-      );
+      )
+      .for("update");
+    if (!locked?.liftedAt) continue;
+    const since = await countConventionEvidence(tx, {
+      domain: input.domain,
+      pattern: outcome.pattern,
+      since: locked.liftedAt,
+    });
+    if (
+      !isConventionDemoted({
+        ...since,
+        minimumPeople: input.minimumPeople,
+        failureSharePercent: input.failureSharePercent,
+      })
+    ) {
+      continue;
+    }
+    await tx
+      .update(conventionDemotions)
+      .set({
+        demotedAt: input.now,
+        peopleProvenDead: since.peopleProvenDead,
+        peopleAttempted: since.peopleAttempted,
+        liftedAt: null,
+        liftedBy: null,
+        liftReason: null,
+      })
+      .where(eq(conventionDemotions.id, locked.id));
   }
 }
 
@@ -464,7 +532,12 @@ export async function readConventionDemotionRecords(
 }
 
 export type LiftConventionDemotionResult =
-  | { ok: true; disposition: "lifted" | "not_demoted" }
+  | {
+      ok: true;
+      disposition: "lifted" | "not_demoted";
+      /** Ladders put back in the order the demotion had changed. */
+      rerankedContacts?: number;
+    }
   | {
       ok: false;
       code: "INVALID_INPUT" | "LIFT_REQUIRES_JUSTIFICATION" | "DATABASE_ERROR";
@@ -505,13 +578,16 @@ export async function liftConventionDemotion(
   if (!parsed.data.justification || !parsed.data.confirmedConventionInUse) {
     return { ok: false, code: "LIFT_REQUIRES_JUSTIFICATION" };
   }
-  const now = options.now ?? new Date();
   try {
     return await withActionLocks(
       db,
       [actionLockKey.domain(parsed.data.domain)],
       (lockedDb) =>
         lockedDb.transaction(async (tx) => {
+          // Stamped inside the lock, not before it. The stamp is the point the
+          // record restarts from, so it must not name a moment that passed
+          // while this call was queued behind another writer.
+          const now = options.now ?? new Date();
           const [lifted] = await tx
             .update(conventionDemotions)
             .set({
@@ -544,7 +620,54 @@ export async function liftConventionDemotion(
               demotedAt: lifted.demotedAt.toISOString(),
             },
           });
-          return { ok: true, disposition: "lifted" } as const;
+          /**
+           * The ladders the demotion reordered are put back.
+           *
+           * A rung number is stored, and the choice of the next address reads
+           * it — so lifting the verdict alone changes nothing for the contacts
+           * the verdict already moved, which is precisely the population it
+           * penalised. The screen said the convention goes back to the front;
+           * without this it went back to the front only for contacts resolved
+           * afterwards.
+           *
+           * The same population the demotion touched: contacts holding an
+           * address at this domain with no outbound message at all. One with a
+           * message written is pinned to that address, and reordering under it
+           * would leave a message the send policy refuses for a reason nobody
+           * was told.
+           */
+          const settings = await readLadderSettings(tx);
+          const demotedPatterns = await readDemotedConventions(tx, {
+            domain: parsed.data.domain,
+            minimumPeople: settings.demotionMinimumPeople,
+            failureSharePercent: settings.demotionFailureSharePercent,
+          });
+          const unwritten = await tx
+            .selectDistinct({ contactId: emailCandidates.contactId })
+            .from(emailCandidates)
+            .where(
+              and(
+                eq(emailCandidates.domain, parsed.data.domain),
+                sql`not exists (
+                  select 1
+                  from messages written
+                  join enrollments owner on owner.id = written.enrollment_id
+                  where owner.contact_id = email_candidates.contact_id
+                    and written.direction = 'outbound')`,
+              ),
+            );
+          for (const row of unwritten) {
+            await rewriteLadderRanks(tx, {
+              contactId: row.contactId,
+              domain: parsed.data.domain,
+              demotedPatterns,
+            });
+          }
+          return {
+            ok: true,
+            disposition: "lifted",
+            rerankedContacts: unwritten.length,
+          } as const;
         }),
     );
   } catch {
@@ -1050,6 +1173,10 @@ export async function advanceAddressLadder(
     )
     .limit(1);
   if (dying) {
+    // Dated once. A second report — a sibling enrollment's message to the same
+    // address, a later step — would otherwise move the death forward in time,
+    // and after a restore that drags an excused failure into the window the
+    // verdict is measured over.
     await tx
       .update(emailCandidates)
       .set({
@@ -1057,7 +1184,9 @@ export async function advanceAddressLadder(
         deadMessageId: message.id,
         status: "rejected",
       })
-      .where(eq(emailCandidates.id, dying.id));
+      .where(
+        and(eq(emailCandidates.id, dying.id), isNull(emailCandidates.deadAt)),
+      );
   }
 
   /**
@@ -1085,6 +1214,8 @@ export async function advanceAddressLadder(
     domain: deadDomain,
     outcomes,
     now: input.now,
+    minimumPeople: settings.demotionMinimumPeople,
+    failureSharePercent: settings.demotionFailureSharePercent,
   });
   const demotedPatterns = new Set(
     outcomes

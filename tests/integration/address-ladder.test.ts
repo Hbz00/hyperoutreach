@@ -18,10 +18,14 @@ import { StaticPublicEmailEvidenceProvider } from "@/modules/email-resolution/pu
 import { acceptManualEmail } from "@/modules/email-resolution/manual-service";
 import { resolveContactEmail } from "@/modules/email-resolution/service";
 import {
+  advanceAddressLadder,
+  latchConventionDemotions,
   liftConventionDemotion,
   readAddressLadderMetrics,
   readConventionDemotionRecords,
   readConventionOutcomes,
+  readDemotedConventions,
+  rewriteLadderRanks,
   readBlockedRungs,
   readLadderSettings,
 } from "@/modules/email-resolution/ladder-service";
@@ -2049,52 +2053,183 @@ describe("address attempt ladder", () => {
       expect(afterTwo[0]?.peopleAttempted).toBe(2);
     });
 
-    it("never lets a bounce erase a restore it could not have seen", async () => {
+    it("dates a death once, however many messages report it", async () => {
+      await setLadderSettings({});
+      const fixture = await ladderFixture();
+      await hardBounce(fixture, { now: new Date("2026-08-18T10:30:00.000Z") });
+      const first = (await candidates(fixture.contact.id)).find(
+        (row) => row.normalizedEmail === fixture.rungOne,
+      );
+      expect(first?.deadAt).not.toBeNull();
+
+      // A second outbound message to the same address — a later step, or a
+      // sibling campaign. The per-message marker stops the ladder advancing
+      // twice; nothing stopped the date moving.
+      const [second] = await db
+        .insert(schema.messages)
+        .values({
+          enrollmentId: fixture.enrollmentId,
+          direction: "outbound",
+          stepIndex: 1,
+          outreachId: `ladder-second-${sequence}`,
+          mailboxId: fixture.mailbox.id,
+          recipient: fixture.rungOne,
+          subject: "Step 1",
+          body: "Body 1",
+          status: "sent",
+          sentAt: new Date("2026-08-18T17:00:00.000Z"),
+          sendAttemptedAt: new Date("2026-08-18T17:00:00.000Z"),
+          contactAccountId: fixture.contact.accountId,
+          employmentVersion: fixture.contact.employmentVersion,
+        })
+        .returning();
+      await db.transaction(async (tx) =>
+        advanceAddressLadder(tx, {
+          messageId: second!.id,
+          now: new Date("2026-08-18T18:00:00.000Z"),
+          actor: "system:test",
+        }),
+      );
+
+      const after = (await candidates(fixture.contact.id)).find(
+        (row) => row.normalizedEmail === fixture.rungOne,
+      );
+      // A death that moves forward drags an excused failure back into the
+      // window a restore is measured over.
+      expect(after?.deadAt?.toISOString()).toBe(first?.deadAt?.toISOString());
+    });
+
+    it("never lets a stale verdict erase a restore", async () => {
       await setLadderSettings({
         addressLadderDemotionMinimumPeople: 2,
         addressLadderDemotionFailureSharePercent: 50,
       });
-      const fixture = await ladderFixture({ extraContacts: 2 });
-      // A restore, and enough failures since it to justify demoting again.
-      await db.insert(schema.conventionDemotions).values({
-        domain: fixture.domain,
-        pattern: "first.last",
-        demotedAt: new Date("2026-08-18T08:00:00.000Z"),
-        peopleProvenDead: 2,
-        peopleAttempted: 2,
-        liftedAt: new Date("2026-08-18T10:00:00.000Z"),
-        liftedBy: "operator",
-        liftReason: "Both had left the company",
-      });
+      const fixture = await ladderFixture({ send: false, extraContacts: 2 });
       for (const [index, person] of fixture.colleagues.entries()) {
         const rows = await candidates(person.id);
         const row = rows.find((c) => c.pattern === "first.last")!;
         const at = new Date(
-          index === 0 ? "2026-08-18T10:15:00.000Z" : "2026-08-18T10:20:00.000Z",
+          index === 0 ? "2026-08-18T09:00:00.000Z" : "2026-08-18T09:05:00.000Z",
         );
         await db
           .update(schema.emailCandidates)
           .set({ deadAt: at, firstAttemptedAt: at })
           .where(eq(schema.emailCandidates.id, row.id));
       }
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:05:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+        liftedAt: new Date("2026-08-18T10:00:00.000Z"),
+        liftedBy: "operator",
+        liftReason: "Both had left the company",
+      });
 
-      // A delivery report that predates the restore. Its verdict was reached
-      // without knowing about it — which is the shape of the race, because the
-      // bounce path holds no lock the operator's restore can wait on.
-      await hardBounce(fixture, {
-        receivedAt: new Date("2026-08-18T09:50:00.000Z"),
-        now: new Date("2026-08-18T09:50:00.000Z"),
+      /**
+       * The verdict a bounce carries in from before the restore committed.
+       *
+       * This is the interleaving itself, not a timestamp arrangement standing in
+       * for it: the bounce path holds no lock the restore can wait on, so it can
+       * arrive here having decided "demoted" from exactly the failures the
+       * operator has just excused. Comparing timestamps could not catch it — a
+       * restore is stamped inside its lock and can still carry a moment earlier
+       * than a bounce that commits after it.
+       */
+      await db.transaction(async (tx) => {
+        await latchConventionDemotions(tx, {
+          domain: fixture.domain,
+          outcomes: [
+            {
+              pattern: "first.last",
+              peopleAttempted: 2,
+              peopleProvenDead: 2,
+              peopleNoSignal: 0,
+              demoted: true,
+              demotedDomains: [fixture.domain],
+              attemptedDomains: 1,
+            },
+          ],
+          now: new Date("2026-08-18T11:00:00.000Z"),
+          minimumPeople: 2,
+          failureSharePercent: 50,
+        });
       });
 
       const [record] = (await readConventionDemotionRecords(db)).filter(
         (row) => row.domain === fixture.domain,
       );
-      // The restore survives with the operator's reasons intact. Overwriting it
-      // would have reinstated the verdict they overruled and erased why, with
-      // their screen still saying "restored".
+      // The restore stands, with the operator's reasons intact. The evidence
+      // measured under the row lock is empty — every failure predates the
+      // restore — so there is nothing here to demote it again.
       expect(record?.liftedAt).not.toBeNull();
       expect(record?.liftedBy).toBe("operator");
       expect(record?.liftReason).toBe("Both had left the company");
+    });
+
+    it("puts back the ladders the demotion had reordered", async () => {
+      await setLadderSettings({
+        addressLadderDemotionMinimumPeople: 2,
+        addressLadderDemotionFailureSharePercent: 50,
+      });
+      const fixture = await ladderFixture({ send: false, extraContacts: 2 });
+      const untouched = fixture.colleagues[1]!;
+      // Two deaths on `first.last`, which demotes it and reorders the ladder of
+      // the colleague nobody has written to — the population the demotion
+      // penalises.
+      for (const person of [fixture.contact, fixture.colleagues[0]!]) {
+        const rows = await candidates(person.id);
+        const row = rows.find((c) => c.pattern === "first.last")!;
+        await db
+          .update(schema.emailCandidates)
+          .set({
+            deadAt: new Date("2026-08-18T09:00:00.000Z"),
+            firstAttemptedAt: new Date("2026-08-18T09:00:00.000Z"),
+          })
+          .where(eq(schema.emailCandidates.id, row.id));
+      }
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:00:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+      });
+      const settings = await readLadderSettings(db);
+      const demoted = await readDemotedConventions(db, {
+        domain: fixture.domain,
+        minimumPeople: settings.demotionMinimumPeople,
+        failureSharePercent: settings.demotionFailureSharePercent,
+      });
+      await db.transaction(async (tx) => {
+        await rewriteLadderRanks(tx, {
+          contactId: untouched.id,
+          domain: fixture.domain,
+          demotedPatterns: demoted,
+        });
+      });
+      const demotedOrder = await candidates(untouched.id);
+      expect(
+        demotedOrder.find((row) => row.pattern === "first.last")?.ladderRank,
+      ).toBeGreaterThan(1);
+
+      const lifted = await liftConventionDemotion(db, {
+        domain: fixture.domain,
+        pattern: "first.last",
+        actor: "operator",
+        justification: "Both had left the company",
+        confirmedConventionInUse: true,
+      });
+      expect(lifted).toMatchObject({ ok: true, disposition: "lifted" });
+
+      const restored = await candidates(untouched.id);
+      // A rung is stored, and the choice of the next address reads it. Lifting
+      // the verdict without putting the order back would have left the screen
+      // promising a restoration that never reached the contacts it penalised.
+      expect(
+        restored.find((row) => row.pattern === "first.last")?.ladderRank,
+      ).toBe(1);
     });
 
     it("shows the evidence a demoted convention stands on now, not only what decided it", async () => {

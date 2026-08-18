@@ -476,10 +476,16 @@ convention that works — and the record will never say so, because the record i
 the thing that is wrong. Restoring one is as demanding as removing a suppression:
 grounds in writing, an explicit statement that the company does use the
 convention, and the actor on the audit row. The verdict is not deleted but
-stamped, and the stamp is the point the record restarts from. Being right
-restores the convention; being wrong costs the next failures rather than nothing,
-because two more deaths since the restore demote it again — on the evidence
-gathered since, never on the evidence excused.
+stamped, and the stamp is the point the record restarts from, and the ladders the
+demotion reordered are put back with it: a rung is stored and the choice of the
+next address reads it, so lifting the verdict alone would change nothing for the
+contacts the verdict had already moved. Being right restores the convention;
+being wrong costs the next failures rather than nothing, because two more deaths
+since the restore demote it again — on the evidence gathered since, never on the
+evidence excused. That decision is taken while holding a lock on the row, and the
+evidence is counted there too: the bounce path takes no lock a restore can wait
+on, so a verdict reached a moment before one commits must never be allowed to
+answer it.
 
 `/outbound` reports the yield beside the cost: how many prospects are alive on rung
 one, how many are alive on a later rung and how many of those a death put there,
