@@ -470,7 +470,8 @@ never allowed to do. The demotion is latched per mail domain and convention, wit
 the counts that produced it, and the latch can only add.
 
 `/outbound` reports the yield beside the cost: how many prospects are alive on rung
-one, how many were reached on a later rung, how many have no further address to
+one, how many are alive on a later rung and how many of those a death put there,
+how many have no further address to
 try, how many were stopped by a bound, and — per convention — how many people were
 attempted, how many were proven dead, and at which companies each convention is
 demoted.
