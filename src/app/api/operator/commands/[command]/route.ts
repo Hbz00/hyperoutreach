@@ -33,6 +33,7 @@ import {
   reviseCampaignVersion,
 } from "@/modules/campaigns/service";
 import { findAccountContactsNeedingResolution } from "@/modules/email-resolution/account-resolution";
+import { liftConventionDemotion } from "@/modules/email-resolution/ladder-service";
 import { acceptManualEmail } from "@/modules/email-resolution/manual-service";
 import { describeManualEmailRefusal } from "@/modules/presentation/status";
 import { disconnectMicrosoftMailbox } from "@/modules/mailboxes/microsoft-oauth-service";
@@ -1177,6 +1178,27 @@ export async function POST(
       request,
       "/settings",
       result.ok ? "Suppression saved" : `Suppression failed (${result.code})`,
+    );
+  }
+
+  if (command === "lift-convention-demotion") {
+    const result = await liftConventionDemotion(db, {
+      domain: value(formData, "domain"),
+      pattern: value(formData, "pattern"),
+      actor: session.email,
+      justification: value(formData, "justification"),
+      confirmedConventionInUse: boolean(formData, "confirmedConventionInUse"),
+    });
+    return destination(
+      request,
+      "/outbound",
+      result.ok
+        ? result.disposition === "lifted"
+          ? "Convention restored — its record starts again from now"
+          : "That convention is not demoted"
+        : result.code === "LIFT_REQUIRES_JUSTIFICATION"
+          ? "Restoring a convention needs the confirmation and a reason"
+          : `Restore failed (${result.code})`,
     );
   }
 

@@ -18,7 +18,9 @@ import { StaticPublicEmailEvidenceProvider } from "@/modules/email-resolution/pu
 import { acceptManualEmail } from "@/modules/email-resolution/manual-service";
 import { resolveContactEmail } from "@/modules/email-resolution/service";
 import {
+  liftConventionDemotion,
   readAddressLadderMetrics,
+  readConventionDemotionRecords,
   readConventionOutcomes,
   readBlockedRungs,
   readLadderSettings,
@@ -1857,6 +1859,184 @@ describe("address attempt ladder", () => {
       expect(after.find((row) => row.id === target.id)?.status).not.toBe(
         "accepted",
       );
+    });
+
+    it("restores a convention an operator says the record misread, and only on their terms", async () => {
+      await setLadderSettings({
+        addressLadderDemotionMinimumPeople: 2,
+        addressLadderDemotionFailureSharePercent: 50,
+      });
+      const fixture = await ladderFixture({ send: false, extraContacts: 3 });
+      const rungOneOf = async (contactId: string) => {
+        const rows = await candidates(contactId);
+        const row = rows.find(
+          (candidate) => candidate.pattern === "first.last",
+        );
+        if (!row) throw new Error("no first.last rung");
+        return row;
+      };
+      const kill = async (contactId: string, at: Date) => {
+        const row = await rungOneOf(contactId);
+        await db
+          .update(schema.emailCandidates)
+          .set({ deadAt: at, firstAttemptedAt: at })
+          .where(eq(schema.emailCandidates.id, row.id));
+      };
+      const demotedNow = async () => {
+        const outcomes = await readConventionOutcomes(db, {
+          domain: fixture.domain,
+          minimumPeople: 2,
+          failureSharePercent: 50,
+        });
+        return outcomes.find((row) => row.pattern === "first.last")?.demoted;
+      };
+
+      // Two people who had in fact left the company. The record cannot tell
+      // that from a wrong convention, and demotes.
+      await kill(
+        fixture.colleagues[0]!.id,
+        new Date("2026-08-18T09:00:00.000Z"),
+      );
+      await kill(
+        fixture.colleagues[1]!.id,
+        new Date("2026-08-18T09:05:00.000Z"),
+      );
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:05:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+      });
+      expect(await demotedNow()).toBe(true);
+
+      // Restoring is as demanding as removing a suppression: grounds in
+      // writing, and an explicit statement of what the operator knows.
+      const bare = await liftConventionDemotion(db, {
+        domain: fixture.domain,
+        pattern: "first.last",
+        actor: "operator",
+      });
+      expect(bare).toMatchObject({
+        ok: false,
+        code: "LIFT_REQUIRES_JUSTIFICATION",
+      });
+      const unconfirmed = await liftConventionDemotion(db, {
+        domain: fixture.domain,
+        pattern: "first.last",
+        actor: "operator",
+        justification: "Both had left; HR confirmed",
+      });
+      expect(unconfirmed).toMatchObject({
+        ok: false,
+        code: "LIFT_REQUIRES_JUSTIFICATION",
+      });
+      expect(await demotedNow()).toBe(true);
+
+      const lifted = await liftConventionDemotion(
+        db,
+        {
+          domain: fixture.domain,
+          pattern: "first.last",
+          actor: "operator",
+          justification: "Both had left; HR confirmed the convention",
+          confirmedConventionInUse: true,
+        },
+        { now: new Date("2026-08-18T10:00:00.000Z") },
+      );
+      expect(lifted).toMatchObject({ ok: true, disposition: "lifted" });
+      // The raw ratio is untouched — two of two are still dead. What changed is
+      // that the record now starts from the moment the operator overruled it.
+      expect(await demotedNow()).toBe(false);
+      const [audit] = await db
+        .select()
+        .from(schema.stateTransitions)
+        .where(eq(schema.stateTransitions.reason, "operator_lifted_demotion"));
+      expect(audit?.actor).toBe("operator");
+
+      // Being wrong costs the next failures, not nothing: two deaths after the
+      // lift discredit it again, on the evidence gathered since.
+      await kill(
+        fixture.colleagues[2]!.id,
+        new Date("2026-08-18T11:00:00.000Z"),
+      );
+      await kill(fixture.contact.id, new Date("2026-08-18T11:05:00.000Z"));
+      expect(await demotedNow()).toBe(true);
+    });
+
+    it("re-latches a restored convention on the evidence gathered since, never on the evidence excused", async () => {
+      await setLadderSettings({
+        addressLadderDemotionMinimumPeople: 2,
+        addressLadderDemotionFailureSharePercent: 50,
+        addressLadderMaxAdvancesPerAccountPerDay: 10,
+      });
+      const fixture = await ladderFixture({ extraContacts: 3 });
+      const kill = async (contactId: string, at: Date) => {
+        const rows = await candidates(contactId);
+        const row = rows.find(
+          (candidate) => candidate.pattern === "first.last",
+        );
+        if (!row) throw new Error("no first.last rung");
+        await db
+          .update(schema.emailCandidates)
+          .set({ deadAt: at, firstAttemptedAt: at })
+          .where(eq(schema.emailCandidates.id, row.id));
+      };
+      const recordNow = async () => {
+        const records = await readConventionDemotionRecords(db);
+        return records.filter((row) => row.domain === fixture.domain);
+      };
+
+      // Two people who had left, and the verdict they produced.
+      await kill(
+        fixture.colleagues[0]!.id,
+        new Date("2026-08-18T09:00:00.000Z"),
+      );
+      await kill(
+        fixture.colleagues[1]!.id,
+        new Date("2026-08-18T09:05:00.000Z"),
+      );
+      await db.insert(schema.conventionDemotions).values({
+        domain: fixture.domain,
+        pattern: "first.last",
+        demotedAt: new Date("2026-08-18T09:05:00.000Z"),
+        peopleProvenDead: 2,
+        peopleAttempted: 2,
+      });
+      await liftConventionDemotion(
+        db,
+        {
+          domain: fixture.domain,
+          pattern: "first.last",
+          actor: "operator",
+          justification: "Reorganisation, not a bad convention",
+          confirmedConventionInUse: true,
+        },
+        { now: new Date("2026-08-18T09:30:00.000Z") },
+      );
+
+      // One real failure since. Below the two-people floor, so the operator's
+      // judgement stands — the excused pair is not quietly added back to it.
+      await kill(
+        fixture.colleagues[2]!.id,
+        new Date("2026-08-18T10:15:00.000Z"),
+      );
+      const [afterOne] = await recordNow();
+      expect(afterOne?.liftedAt).not.toBeNull();
+
+      // A second, through the live bounce path, which is what writes verdicts.
+      await hardBounce(fixture);
+
+      const afterTwo = await recordNow();
+      // One row per company and convention: the current verdict and the fact it
+      // was once overruled live together.
+      expect(afterTwo).toHaveLength(1);
+      expect(afterTwo[0]?.liftedAt).toBeNull();
+      // The counts are the two failures since the lift, never the four the
+      // record now holds — reinstating the excused pair as evidence would make
+      // the operator's judgement the thing that convicts them.
+      expect(afterTwo[0]?.peopleProvenDead).toBe(2);
+      expect(afterTwo[0]?.peopleAttempted).toBe(2);
     });
 
     it("keys the queued regeneration on the death that caused it", async () => {

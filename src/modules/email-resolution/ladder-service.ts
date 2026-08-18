@@ -1,5 +1,6 @@
 import {
   and,
+  asc,
   desc,
   eq,
   gte,
@@ -10,6 +11,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import { z } from "zod";
 
 import {
   contacts,
@@ -24,6 +26,7 @@ import {
   workflowEvents,
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
+import { actionLockKey, withActionLocks } from "@/lib/db/action-lock";
 import { isTerminalEnrollmentState } from "@/modules/campaigns/enrollment-state";
 import {
   chooseNextRung,
@@ -150,19 +153,45 @@ export async function readConventionOutcomes(
   // Grouped per domain even when every domain is asked for, because a demotion
   // is only ever decided per domain. Rolling the totals up afterwards is a
   // presentation step; deciding on a pooled ratio would be a different rule.
+  /**
+   * Counted from the last time an operator overruled this verdict, if they ever
+   * did.
+   *
+   * A lift sets aside the evidence that produced the demotion — that is what the
+   * operator is asserting was misread — and lets the record restart. Both sides
+   * of the ratio move together: keeping the old attempts in the denominator
+   * while dropping the old deaths from the numerator would make the convention
+   * practically impossible to demote again, which is the opposite of what a lift
+   * should cost.
+   *
+   * `> coalesce(lifted_at, '-infinity')` reproduces `is not null` exactly when
+   * nothing was ever lifted, so the unlifted case is unchanged. Written in full
+   * rather than interpolated: this is a select projection, where Drizzle renders
+   * a column without its table and two joined tables make that ambiguous.
+   */
   const rows = await db
     .select({
       pattern: emailCandidates.pattern,
       domain: emailCandidates.domain,
       peopleAttempted: sql<number>`count(distinct case
-        when ${emailCandidates.firstAttemptedAt} is not null
-          or ${emailCandidates.deadAt} is not null
-        then ${emailCandidates.contactId} end)::int`,
+        when email_candidates.first_attempted_at > coalesce(
+               convention_demotions.lifted_at, '-infinity'::timestamptz)
+          or email_candidates.dead_at > coalesce(
+               convention_demotions.lifted_at, '-infinity'::timestamptz)
+        then email_candidates.contact_id end)::int`,
       peopleProvenDead: sql<number>`count(distinct case
-        when ${emailCandidates.deadAt} is not null
-        then ${emailCandidates.contactId} end)::int`,
+        when email_candidates.dead_at > coalesce(
+               convention_demotions.lifted_at, '-infinity'::timestamptz)
+        then email_candidates.contact_id end)::int`,
     })
     .from(emailCandidates)
+    .leftJoin(
+      conventionDemotions,
+      and(
+        eq(conventionDemotions.domain, emailCandidates.domain),
+        eq(conventionDemotions.pattern, emailCandidates.pattern),
+      ),
+    )
     .where(
       and(
         isNotNull(emailCandidates.pattern),
@@ -274,7 +303,12 @@ async function readLatchedDemotions(
     })
     .from(conventionDemotions)
     .where(
-      input.domain ? eq(conventionDemotions.domain, input.domain) : undefined,
+      and(
+        // A lifted row is history, not a verdict. It stays so the watermark
+        // above can read it and so the audit trail keeps the grounds given.
+        isNull(conventionDemotions.liftedAt),
+        input.domain ? eq(conventionDemotions.domain, input.domain) : undefined,
+      ),
     );
   return new Map(
     rows.map((row) => [
@@ -313,6 +347,152 @@ async function latchConventionDemotions(
       })),
     )
     .onConflictDoNothing();
+  /**
+   * A convention an operator restored, and whose record since has discredited it
+   * again, is demoted again.
+   *
+   * The counts here are the ones measured from the lift onwards — the ratio this
+   * verdict was reached on is the evidence gathered after the operator said the
+   * earlier evidence was misread, never the evidence they excused. Only a lifted
+   * row is rewritten: a standing verdict keeps the counts that first produced it,
+   * which is what the audit trail is being asked for.
+   */
+  for (const outcome of newly) {
+    await tx
+      .update(conventionDemotions)
+      .set({
+        demotedAt: input.now,
+        peopleProvenDead: outcome.peopleProvenDead,
+        peopleAttempted: outcome.peopleAttempted,
+        liftedAt: null,
+        liftedBy: null,
+        liftReason: null,
+      })
+      .where(
+        and(
+          eq(conventionDemotions.domain, input.domain),
+          eq(conventionDemotions.pattern, outcome.pattern),
+          isNotNull(conventionDemotions.liftedAt),
+        ),
+      );
+  }
+}
+
+export type ConventionDemotionRecord = {
+  id: string;
+  domain: string;
+  pattern: string;
+  demotedAt: Date;
+  peopleProvenDead: number;
+  peopleAttempted: number;
+  liftedAt: Date | null;
+  liftedBy: string | null;
+  liftReason: string | null;
+};
+
+/**
+ * Every verdict this installation has reached, standing or overruled.
+ *
+ * The lifted ones are shown too. An operator who has restored a convention once
+ * and is looking at it demoted again needs to see that they did — otherwise the
+ * second verdict reads as the first one refusing to go away.
+ */
+export async function readConventionDemotionRecords(
+  db: LadderQueryable,
+): Promise<ConventionDemotionRecord[]> {
+  return db
+    .select()
+    .from(conventionDemotions)
+    .orderBy(asc(conventionDemotions.domain), asc(conventionDemotions.pattern));
+}
+
+export type LiftConventionDemotionResult =
+  | { ok: true; disposition: "lifted" | "not_demoted" }
+  | {
+      ok: false;
+      code: "INVALID_INPUT" | "LIFT_REQUIRES_JUSTIFICATION" | "DATABASE_ERROR";
+    };
+
+const liftSchema = z.object({
+  domain: z.string().trim().min(1).max(255),
+  pattern: z.string().trim().min(1).max(64),
+  actor: z.string().trim().min(1).max(200),
+  justification: z.string().trim().min(1).max(2_000).optional(),
+  /** The operator states outright that this company runs this convention. */
+  confirmedConventionInUse: z.boolean().optional(),
+});
+
+/**
+ * Restores a convention an operator says the delivery record misread.
+ *
+ * The one judgement the loop cannot make for itself. A hard bounce cannot tell
+ * a wrong convention from a person who has left, and the two-people floor
+ * narrows that without closing it — so a company that lost three people in a
+ * quarter can discredit a convention that works, and nothing in the record will
+ * ever say so, because the record is the thing that is wrong.
+ *
+ * Deliberately as demanding as removing a suppression, which is the product's
+ * existing shape for "permanent, unless a human takes responsibility": grounds
+ * in writing, an explicit statement that the company does use this convention,
+ * and the actor on the audit row. The verdict is not deleted — it is stamped,
+ * and the stamp becomes the point the record restarts from, so being wrong
+ * costs the next failures rather than nothing.
+ */
+export async function liftConventionDemotion(
+  db: AppDatabase,
+  rawInput: unknown,
+  options: { now?: Date } = {},
+): Promise<LiftConventionDemotionResult> {
+  const parsed = liftSchema.safeParse(rawInput);
+  if (!parsed.success) return { ok: false, code: "INVALID_INPUT" };
+  if (!parsed.data.justification || !parsed.data.confirmedConventionInUse) {
+    return { ok: false, code: "LIFT_REQUIRES_JUSTIFICATION" };
+  }
+  const now = options.now ?? new Date();
+  try {
+    return await withActionLocks(
+      db,
+      [actionLockKey.domain(parsed.data.domain)],
+      (lockedDb) =>
+        lockedDb.transaction(async (tx) => {
+          const [lifted] = await tx
+            .update(conventionDemotions)
+            .set({
+              liftedAt: now,
+              liftedBy: parsed.data.actor,
+              liftReason: parsed.data.justification!,
+            })
+            .where(
+              and(
+                eq(conventionDemotions.domain, parsed.data.domain),
+                eq(conventionDemotions.pattern, parsed.data.pattern),
+                isNull(conventionDemotions.liftedAt),
+              ),
+            )
+            .returning();
+          if (!lifted) return { ok: true, disposition: "not_demoted" } as const;
+          await tx.insert(stateTransitions).values({
+            entityType: "convention_demotion",
+            entityId: lifted.id,
+            fromState: "demoted",
+            toState: "normal",
+            reason: "operator_lifted_demotion",
+            actor: parsed.data.actor,
+            metadata: {
+              domain: lifted.domain,
+              pattern: lifted.pattern,
+              justification: parsed.data.justification,
+              peopleProvenDead: lifted.peopleProvenDead,
+              peopleAttempted: lifted.peopleAttempted,
+              demotedAt: lifted.demotedAt.toISOString(),
+            },
+          });
+          return { ok: true, disposition: "lifted" } as const;
+        }),
+    );
+  } catch {
+    return { ok: false, code: "DATABASE_ERROR" };
+  }
 }
 
 /** The conventions this domain's own delivery record has discredited. */

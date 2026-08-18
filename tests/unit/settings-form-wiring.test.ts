@@ -21,6 +21,10 @@ const settingsPage = resolve(
   process.cwd(),
   "src/app/(operator)/settings/page.tsx",
 );
+const outboundPage = resolve(
+  process.cwd(),
+  "src/app/(operator)/outbound/page.tsx",
+);
 const commandRoute = resolve(
   process.cwd(),
   "src/app/api/operator/commands/[command]/route.ts",
@@ -82,5 +86,58 @@ describe("sending policy form wiring", () => {
     // off by a reader that treats an absent field as false. `value()` would
     // return undefined and the schema would leave the setting untouched.
     expect(handler).toContain('boolean(formData, "addressLadderEnabled")');
+  });
+});
+
+describe("convention restore form wiring", () => {
+  /**
+   * The same failure, on the one control that overrules the delivery record.
+   *
+   * A mistyped field name here does not error: the route reads `undefined`,
+   * the service refuses for a missing justification, and the operator is told
+   * their reason was missing when they typed one. Worse than a broken button,
+   * because it accuses them of the mistake.
+   */
+  it("submits exactly the fields the lift handler reads", async () => {
+    const source = await readFile(outboundPage, "utf8");
+    const start = source.indexOf(
+      'action="/api/operator/commands/lift-convention-demotion"',
+    );
+    expect(start).toBeGreaterThan(-1);
+    const form = source.slice(start, source.indexOf("</form>", start));
+    const names = [
+      ...new Set([...form.matchAll(/name="([^"]+)"/g)].map((m) => m[1]!)),
+    ].filter((name) => name !== "csrf");
+    expect(names.sort()).toEqual([
+      "confirmedConventionInUse",
+      "domain",
+      "justification",
+      "pattern",
+    ]);
+
+    const route = await readFile(commandRoute, "utf8");
+    const handlerStart = route.indexOf(
+      'if (command === "lift-convention-demotion")',
+    );
+    expect(handlerStart).toBeGreaterThan(-1);
+    const handler = route.slice(
+      handlerStart,
+      route.indexOf("if (command ===", handlerStart + 1),
+    );
+    for (const name of names) expect(handler).toContain(`"${name}"`);
+    // An unchecked box is not submitted, so the confirmation can only be read
+    // by something that treats absence as false.
+    expect(handler).toContain('boolean(formData, "confirmedConventionInUse")');
+  });
+
+  it("keeps the confirmation and the reason both mandatory in the markup", async () => {
+    const source = await readFile(outboundPage, "utf8");
+    const start = source.indexOf(
+      'action="/api/operator/commands/lift-convention-demotion"',
+    );
+    const form = source.slice(start, source.indexOf("</form>", start));
+    // The service refuses without them either way; requiring them in the
+    // markup is what stops the operator submitting and being told no.
+    expect(form.match(/required/g) ?? []).toHaveLength(2);
   });
 });

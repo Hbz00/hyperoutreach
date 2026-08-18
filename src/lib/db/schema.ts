@@ -474,6 +474,24 @@ export const conventionDemotions = pgTable(
     /** The evidence as it stood when the verdict was reached. */
     peopleProvenDead: integer("people_proven_dead").notNull(),
     peopleAttempted: integer("people_attempted").notNull(),
+    /**
+     * When an operator overruled the verdict, and on what grounds.
+     *
+     * A hard bounce cannot tell a wrong convention from a person who has left,
+     * and the two-people floor narrows that confusion without removing it — so
+     * a company that lost three people in a quarter can discredit a convention
+     * that works. Nothing in the delivery record will ever say so, because the
+     * record is the thing that is wrong. Only a human who knows the company can.
+     *
+     * The row is kept rather than deleted, and the moment of the lift becomes a
+     * watermark: the evidence gathered before it is set aside, and the verdict
+     * is recomputed from what happens next. So an operator who is right sees the
+     * convention restored, and an operator who is wrong sees it demoted again by
+     * the next failures rather than by the ones they just excused.
+     */
+    liftedAt: timestamp("lifted_at", { withTimezone: true }),
+    liftedBy: text("lifted_by"),
+    liftReason: text("lift_reason"),
     ...timestamps,
   },
   (table) => [
@@ -482,6 +500,11 @@ export const conventionDemotions = pgTable(
       table.pattern,
     ),
     index("convention_demotions_domain_idx").on(table.domain),
+    check(
+      "convention_demotions_lift_check",
+      sql`(${table.liftedAt} is null) = (${table.liftedBy} is null)
+        and (${table.liftedAt} is null) = (${table.liftReason} is null)`,
+    ),
   ],
 );
 

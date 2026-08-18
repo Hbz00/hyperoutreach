@@ -260,6 +260,13 @@
       "when": 1787048298855,
       "tag": "0036_swift_jazinda",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1787051826683,
+      "tag": "0037_tough_paibok",
+      "breakpoints": true
     }
   ]
 }

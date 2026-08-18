@@ -9,6 +9,7 @@ import { scheduledInstantLabel } from "@/modules/messages/scheduled-send";
 import { operatorClock } from "@/modules/settings/working-hours";
 import {
   readAddressLadderMetrics,
+  readConventionDemotionRecords,
   readConventionOutcomes,
   readLadderSettings,
 } from "@/modules/email-resolution/ladder-service";
@@ -61,13 +62,15 @@ export default async function OutboundPage({
       .limit(1),
   ]);
   const ladderSettings = await readLadderSettings(db);
-  const [ladderMetrics, conventionOutcomes] = await Promise.all([
-    readAddressLadderMetrics(db, { now }),
-    readConventionOutcomes(db, {
-      minimumPeople: ladderSettings.demotionMinimumPeople,
-      failureSharePercent: ladderSettings.demotionFailureSharePercent,
-    }),
-  ]);
+  const [ladderMetrics, conventionOutcomes, demotionRecords] =
+    await Promise.all([
+      readAddressLadderMetrics(db, { now }),
+      readConventionOutcomes(db, {
+        minimumPeople: ladderSettings.demotionMinimumPeople,
+        failureSharePercent: ladderSettings.demotionFailureSharePercent,
+      }),
+      readConventionDemotionRecords(db),
+    ]);
   const operatorTimezone = sendingSettingsRows[0]?.timezone;
   // Everything on this page is executed by the maintenance pass. If that
   // stopped, a queue that is merely slow and a queue that is dead look
@@ -220,6 +223,102 @@ export default async function OutboundPage({
             The ladder is switched off in Settings: a proven-dead address ends
             the prospect instead of advancing.
           </p>
+        ) : null}
+        {demotionRecords.length > 0 ? (
+          <>
+            <h3>Demoted conventions</h3>
+            <p className="muted">
+              A hard bounce cannot tell a wrong convention from a person who has
+              left, so a company that lost several people in a quarter can
+              discredit a convention that works — and nothing in the delivery
+              record will ever say so, because the record is the thing that is
+              wrong. Restoring one sets aside the evidence below and starts that
+              company&rsquo;s record again from today: if you are right the
+              convention goes back to the front, and if you are wrong the next
+              failures demote it again.
+            </p>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Company</th>
+                    <th>Convention</th>
+                    <th>Evidence</th>
+                    <th>State</th>
+                    <th>Restore</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {demotionRecords.map((record) => (
+                    <tr key={record.id}>
+                      <td>{record.domain}</td>
+                      <td>{record.pattern}</td>
+                      <td>
+                        {record.peopleProvenDead} of {record.peopleAttempted}{" "}
+                        people proven dead
+                        <small>
+                          decided {record.demotedAt.toLocaleDateString()}
+                        </small>
+                      </td>
+                      <td>
+                        {record.liftedAt ? (
+                          <>
+                            Restored {record.liftedAt.toLocaleDateString()}
+                            <small>
+                              by {record.liftedBy} — {record.liftReason}
+                            </small>
+                          </>
+                        ) : (
+                          "Demoted"
+                        )}
+                      </td>
+                      <td>
+                        {record.liftedAt ? (
+                          <span className="muted">—</span>
+                        ) : (
+                          <form
+                            action="/api/operator/commands/lift-convention-demotion"
+                            method="post"
+                            className="stack compact-form"
+                          >
+                            <input
+                              type="hidden"
+                              name="csrf"
+                              value={session.csrfToken}
+                            />
+                            <input
+                              type="hidden"
+                              name="domain"
+                              value={record.domain}
+                            />
+                            <input
+                              type="hidden"
+                              name="pattern"
+                              value={record.pattern}
+                            />
+                            <input
+                              name="justification"
+                              required
+                              placeholder="What the record misread"
+                            />
+                            <label className="check">
+                              <input
+                                type="checkbox"
+                                name="confirmedConventionInUse"
+                                required
+                              />
+                              This company does use this convention
+                            </label>
+                            <button type="submit">Restore</button>
+                          </form>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : null}
         <h3>By convention</h3>
         <div className="table-wrap">

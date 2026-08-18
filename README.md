@@ -467,7 +467,19 @@ A live ratio falls: two deaths in four attempts demotes a convention, and four
 later attempts that reported nothing would put it back under the threshold and
 restore it — silence confirming a convention, which delivery evidence here is
 never allowed to do. The demotion is latched per mail domain and convention, with
-the counts that produced it, and the latch can only add.
+the counts that produced it, and nothing the delivery record does can lift it.
+
+**Only an operator can**, and only in writing. A hard bounce cannot tell a wrong
+convention from a person who has left; the two-people floor narrows that and does
+not close it, so a company that lost several people in a quarter can discredit a
+convention that works — and the record will never say so, because the record is
+the thing that is wrong. Restoring one is as demanding as removing a suppression:
+grounds in writing, an explicit statement that the company does use the
+convention, and the actor on the audit row. The verdict is not deleted but
+stamped, and the stamp is the point the record restarts from. Being right
+restores the convention; being wrong costs the next failures rather than nothing,
+because two more deaths since the restore demote it again — on the evidence
+gathered since, never on the evidence excused.
 
 `/outbound` reports the yield beside the cost: how many prospects are alive on rung
 one, how many are alive on a later rung and how many of those a death put there,

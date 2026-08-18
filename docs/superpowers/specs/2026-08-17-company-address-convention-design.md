@@ -445,6 +445,24 @@ address may be wrong, never that it is. The per-convention table asks a weaker
 question — how many people no failure was reported for — and is labelled as such
 rather than borrowing the stronger name.
 
+**A latched demotion is liftable, by a person, in writing.** Latching the verdict
+closed the dilution hole and opened a smaller one: a demotion reached in error —
+two people who had left, not a wrong convention — could never be undone, because
+the evidence that produced it is exactly the evidence that is being disputed. No
+rule can settle that; only somebody who knows the company. The lift therefore
+mirrors the product's existing shape for "permanent unless a human takes
+responsibility", the suppression-removal flow: grounds in writing, an explicit
+statement that the company runs this convention, and the actor recorded. Three
+alternatives were weighed. Deleting the row would lose the audit trail and let
+the live ratio immediately re-demote, so the lift would do nothing. Expiring the
+latch on a timer would let time decide instead of the operator, and a genuinely
+wrong convention would return to rung one on a schedule. Leaving it permanent was
+the safest for evidence and the worst for a real company the operator can see is
+being mishandled. So the row is stamped rather than deleted, and the stamp is a
+watermark: the disputed evidence is set aside, the record restarts from that
+moment, and two failures since demote it again. Being wrong costs the next
+failures rather than nothing.
+
 **A ladder belongs to one company.** A contact who changes employer keeps their
 old candidate rows, so their addresses can span two domains, and a verdict is
 always about one. Both the re-ranking and the choice of the next rung are now
