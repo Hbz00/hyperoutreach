@@ -111,15 +111,27 @@ async function createCampaign(
   );
 }
 
+/**
+ * The campaign whose page the browser is on, read from the address bar.
+ *
+ * `createCampaign` lands on the new campaign and the enrollment screen lives
+ * one path segment below it, so this is how the flow gets there without the
+ * test having to be told an identifier it never sees.
+ */
+function currentCampaignId(page: import("@playwright/test").Page): string {
+  return new URL(page.url()).pathname.split("/").filter(Boolean).pop()!;
+}
+
 async function enrollCurrentProspect(
   page: import("@playwright/test").Page,
   prospectLabel: string,
 ) {
-  const form = page.locator('form[action$="enroll-contact"]');
-  await form.getByLabel("Prospect").selectOption({ label: prospectLabel });
+  await page.goto(`/campaigns/${currentCampaignId(page)}/enroll`);
+  const form = page.locator('form[action$="enroll-contacts"]');
   await form.getByLabel("Mailbox").selectOption({ index: 1 });
-  await form.getByRole("button", { name: "Enroll contact" }).click();
-  await expect(page.getByRole("status")).toContainText("Contact enrolled");
+  await form.getByLabel(`Select ${prospectLabel}`).check();
+  await form.getByRole("button", { name: "Enroll selected" }).click();
+  await expect(page.getByRole("status")).toContainText("1 prospect enrolled");
 }
 
 function messageCard(page: import("@playwright/test").Page, marker: string) {
@@ -147,13 +159,14 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
   const company = `Browser Flow ${unique}`;
   const domain = `browser-${unique}.example`;
   const email = `grace@${domain}`;
-  const prospectOption = `Grace Hopper · ${email}`;
+  const prospectName = "Grace Hopper";
   const campaign = `Discovery ${unique}`;
   const firstSubject = `Evidence conversation ${unique}`;
   const followUpSubject = `Evidence follow-up ${unique}`;
   const finalSubject = `Evidence final follow-up ${unique}`;
   const suppressionCampaign = `Suppression probe ${unique}`;
   const suppressionSubject = `Suppression policy ${unique}`;
+  const gatedCampaign = `Suppression gate ${unique}`;
 
   await test.step("sign in and configure deterministic local sending policy", async () => {
     await page.goto("/login");
@@ -273,7 +286,7 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
       finalSubject,
       finalBody: "Hello {{first_name}}, one last customer-discovery follow-up.",
     });
-    await enrollCurrentProspect(page, prospectOption);
+    await enrollCurrentProspect(page, prospectName);
 
     // No click generates the first message any more: enrolling queues it, and
     // the maintenance pass writes it. What appears is `proposed`, which the
@@ -322,6 +335,27 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await expect(messageCard(page, campaign)).toHaveCount(0);
   });
 
+  await test.step("enroll a second campaign while the prospect is still reachable", async () => {
+    // Deliberately before the unsubscribe. A prospect is enrolled and *then*
+    // opts out — that is the order this happens in production, and it is the
+    // only order that leaves the send policy as the thing that refuses. The
+    // enrollment screen now declines a prospect who is already suppressed, so
+    // enrolling one after the fact is no longer possible; the last line of
+    // defence still has to be proven, and this is what proves it.
+    await createCampaign(page, {
+      name: suppressionCampaign,
+      target:
+        "Verify that a globally suppressed recipient cannot be sent another campaign",
+      firstSubject: suppressionSubject,
+      // The agent writes the opening; the template names the field it asked
+      // for. This is the only campaign in the flow that uses personalization.
+      firstBody:
+        "{{personalized_opening}} Hello {{first_name}}, this message must be blocked.",
+      aiOpening: true,
+    });
+    await enrollCurrentProspect(page, prospectName);
+  });
+
   await test.step("ingest an unsubscribe reply, classify it, and stop the sequence", async () => {
     await page.getByRole("link", { name: "Inbox", exact: true }).click();
     await openSection(page, "inject-reply");
@@ -344,7 +378,12 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     );
 
     await page.getByRole("link", { name: "Prospects", exact: true }).click();
-    await page.getByRole("link", { name: "Grace Hopper" }).click();
+    // One row per enrollment, by design — the people table left-joins them, so
+    // a prospect in two campaigns is two rows and two links. Both point at the
+    // same contact, so either reaches the detail page. The count assertion in
+    // the deduplication step above runs before any enrollment exists and is
+    // the one that still has to say "exactly one".
+    await page.getByRole("link", { name: "Grace Hopper" }).first().click();
     const stopped = page
       .locator("article.timeline-card")
       .filter({ hasText: campaign });
@@ -361,18 +400,6 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     const suppressionRow = page.locator("tbody tr").filter({ hasText: email });
     await expect(suppressionRow).toContainText("unsubscribe");
 
-    await createCampaign(page, {
-      name: suppressionCampaign,
-      target:
-        "Verify that a globally suppressed recipient cannot be sent another campaign",
-      firstSubject: suppressionSubject,
-      // The agent writes the opening; the template names the field it asked
-      // for. This is the only campaign in the flow that uses personalization.
-      firstBody:
-        "{{personalized_opening}} Hello {{first_name}}, this message must be blocked.",
-      aiOpening: true,
-    });
-    await enrollCurrentProspect(page, prospectOption);
     await runMaintenanceCycle(page);
     await page.getByRole("link", { name: "Review queue", exact: true }).click();
     const probeCard = messageCard(page, suppressionCampaign);
@@ -441,5 +468,24 @@ test("operates the complete rendered outreach lifecycle and blocks a suppressed 
     await expect(
       page.locator("tbody tr").filter({ hasText: email }),
     ).toContainText("unsubscribe");
+  });
+
+  await test.step("refuse a suppressed prospect at enrollment, not at send", async () => {
+    // The refusal above is the last line of defence, and it costs an agent
+    // turn and an operator's approval to reach. Enrollment now declines the
+    // same prospect before any of that is spent — and says which rule did it,
+    // so somebody looking for a name that is missing finds the reason.
+    await createCampaign(page, {
+      name: gatedCampaign,
+      target: "Prove that a suppressed prospect is never offered again",
+      firstSubject: `Gated ${unique}`,
+      firstBody: "Hello {{first_name}}, this must never be offered.",
+    });
+    await page.goto(`/campaigns/${currentCampaignId(page)}/enroll`);
+    await expect(
+      page.getByRole("heading", { name: "Enroll prospects" }),
+    ).toBeVisible();
+    await expect(page.getByLabel(`Select ${prospectName}`)).toHaveCount(0);
+    await expect(page.getByText(/address suppressed/)).toBeVisible();
   });
 });

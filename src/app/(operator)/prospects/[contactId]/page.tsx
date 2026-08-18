@@ -17,6 +17,10 @@ import {
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
 import { GENERATABLE_ENROLLMENT_STATES } from "@/modules/campaigns/enrollment-state";
+import {
+  domainEvidenceBlocker,
+  hasDomainEvidence,
+} from "@/modules/email-resolution/domain-evidence";
 import { StatusBadge } from "@/modules/presentation/status-badge";
 import {
   describeResolutionReason,
@@ -169,6 +173,26 @@ export default async function ProspectDetailPage({
     .from(evidenceSources)
     .where(eq(evidenceSources.accountId, row.account.id))
     .orderBy(desc(evidenceSources.retrievedAt));
+  /**
+   * Whether resolution can run at this company at all.
+   *
+   * `resolveContactEmail` refuses outright unless an evidence source ties the
+   * domain to the company, and a company added by hand records no evidence — so
+   * both resolve buttons below were offered, taken, and answered with
+   * `domain_not_evidenced` after the fact. Same rule and same sentence as the
+   * company list, so the operator learns one, not two.
+   *
+   * Read from the account evidence this page already loads, through the rule's
+   * own module — the same function `resolveContactEmail` applies, so this
+   * cannot answer differently from the refusal it exists to predict.
+   * `accept-manual-email` is deliberately untouched: it is the escape hatch
+   * built to work without evidence, and closing it would close the way out
+   * along with the dead end.
+   */
+  const addressBlocker = domainEvidenceBlocker({
+    domain: row.account.domain,
+    hasDomainEvidence: hasDomainEvidence(accountEvidence),
+  });
   const ladderSettings = await readLadderSettings(db);
   const conventions = await readConventionOutcomes(db, {
     domain: row.account.domain,
@@ -334,7 +358,12 @@ export default async function ProspectDetailPage({
                 search on your ChatGPT subscription, and the answer still covers
                 every colleague.
               </small>
-              <button>Resolve addresses at {row.account.name}</button>
+              <button disabled={addressBlocker !== null}>
+                Resolve addresses at {row.account.name}
+              </button>
+              {addressBlocker ? (
+                <small className="muted">{addressBlocker}</small>
+              ) : null}
             </div>
           </form>
           {/* The exception — a contact who just changed employer, a manual
@@ -352,7 +381,14 @@ export default async function ProspectDetailPage({
                 <input type="checkbox" name="forcePublicSearch" />
                 Force a fresh company search
               </label>
-              <button className="button-secondary">
+              {/* The exception path runs the same gate, so it is refused for
+                  the same reason. The sentence is not repeated under it: the
+                  company button a few lines above already carries it, and one
+                  blocker stated twice on one screen reads as two problems. */}
+              <button
+                className="button-secondary"
+                disabled={addressBlocker !== null}
+              >
                 Resolve this contact only
               </button>
             </div>

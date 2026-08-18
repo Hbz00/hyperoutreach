@@ -195,18 +195,19 @@ test("operates the mock outreach lifecycle through authenticated application end
     ).status(),
   ).toBe(303);
   const mailboxId = optionValue(
-    await (await browser.get(`/campaigns/${campaignId}`)).text(),
+    await (await browser.get(`/campaigns/${campaignId}/enroll`)).text(),
     "mailboxId",
   );
   expect(
     (
-      await browser.post("/api/operator/commands/enroll-contact", {
+      await browser.post("/api/operator/commands/enroll-contacts", {
         form: {
           csrf,
           campaignId,
           campaignVersionId: versionId,
           contactId,
           mailboxId,
+          scope: "selected",
         },
         maxRedirects: 0,
       })
@@ -263,6 +264,57 @@ test("operates the mock outreach lifecycle through authenticated application end
     form: { csrf, messageId },
   });
 
+  // Enrolled before the unsubscribe, deliberately. The enrollment screen now
+  // declines a prospect whose address is already suppressed, so the send
+  // policy — the last line of defence, and the one this probe is about — can
+  // only be reached by a prospect who opted out after being enrolled. That is
+  // also the order it happens in production.
+  const suppressionProbe = await browser.post(
+    "/api/operator/commands/create-campaign",
+    {
+      form: {
+        csrf,
+        name: `Suppression Probe ${unique}`,
+        type: "customer_discovery",
+        targetDescription: "Verify global suppression on a later campaign",
+        step0DelayMinutes: "0",
+        step0Subject: "Suppression policy check",
+        step0Body: "Hello {{first_name}}, this must never be delivered.",
+      },
+      maxRedirects: 0,
+    },
+  );
+  const probeCampaignId = pathId(
+    suppressionProbe.headers().location,
+    "/campaigns",
+  );
+  const probeVersionId = hidden(
+    await (await browser.get(`/campaigns/${probeCampaignId}`)).text(),
+    "campaignVersionId",
+  );
+  await browser.post("/api/operator/commands/publish-campaign", {
+    form: {
+      csrf,
+      campaignId: probeCampaignId,
+      campaignVersionId: probeVersionId,
+    },
+  });
+  // The mailbox picker lives on the enrollment screen now, beside the people
+  // it applies to.
+  const probeEnrollPage = await (
+    await browser.get(`/campaigns/${probeCampaignId}/enroll`)
+  ).text();
+  await browser.post("/api/operator/commands/enroll-contacts", {
+    form: {
+      csrf,
+      campaignId: probeCampaignId,
+      campaignVersionId: probeVersionId,
+      contactId,
+      mailboxId: optionValue(probeEnrollPage, "mailboxId"),
+      scope: "selected",
+    },
+  });
+
   await browser.post("/api/operator/commands/inject-reply", {
     form: {
       csrf,
@@ -296,46 +348,6 @@ test("operates the mock outreach lifecycle through authenticated application end
     terminalCards.every((card) => !card.includes("Closing the loop")),
   ).toBe(true);
 
-  const suppressionProbe = await browser.post(
-    "/api/operator/commands/create-campaign",
-    {
-      form: {
-        csrf,
-        name: `Suppression Probe ${unique}`,
-        type: "customer_discovery",
-        targetDescription: "Verify global suppression on a later campaign",
-        step0DelayMinutes: "0",
-        step0Subject: "Suppression policy check",
-        step0Body: "Hello {{first_name}}, this must never be delivered.",
-      },
-      maxRedirects: 0,
-    },
-  );
-  const probeCampaignId = pathId(
-    suppressionProbe.headers().location,
-    "/campaigns",
-  );
-  let probePage = await (
-    await browser.get(`/campaigns/${probeCampaignId}`)
-  ).text();
-  const probeVersionId = hidden(probePage, "campaignVersionId");
-  await browser.post("/api/operator/commands/publish-campaign", {
-    form: {
-      csrf,
-      campaignId: probeCampaignId,
-      campaignVersionId: probeVersionId,
-    },
-  });
-  probePage = await (await browser.get(`/campaigns/${probeCampaignId}`)).text();
-  await browser.post("/api/operator/commands/enroll-contact", {
-    form: {
-      csrf,
-      campaignId: probeCampaignId,
-      campaignVersionId: probeVersionId,
-      contactId,
-      mailboxId: optionValue(probePage, "mailboxId"),
-    },
-  });
   const probeEnrollmentId = enrollmentIdentity(
     await (await browser.get(`/prospects/${contactId}`)).text(),
   );

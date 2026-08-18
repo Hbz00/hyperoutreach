@@ -11,6 +11,7 @@ import {
   evidenceSources,
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
+import { hasDomainEvidence } from "@/modules/email-resolution/domain-evidence";
 import {
   completeAgentRun,
   failAgentRun,
@@ -364,7 +365,7 @@ export async function resolveContactEmail(
     .select({ supports: evidenceSources.supports })
     .from(evidenceSources)
     .where(eq(evidenceSources.accountId, owner.account.id));
-  if (!domainEvidence.some((source) => source.supports.includes("domain"))) {
+  if (!hasDomainEvidence(domainEvidence)) {
     const persisted = await setResolutionState(
       db,
       {

@@ -13,6 +13,10 @@ import {
 import { requireOperatorSession } from "@/lib/operator-session-server";
 import { StatusBadge } from "@/modules/presentation/status-badge";
 import { describeStatus } from "@/modules/presentation/status";
+import {
+  accountHasDomainEvidence,
+  addressResolutionBlocker,
+} from "@/modules/email-resolution/domain-evidence";
 
 export default async function ProspectsPage({
   searchParams,
@@ -59,6 +63,10 @@ export default async function ProspectsPage({
         country: accounts.country,
         researchStatus: accounts.researchStatus,
         researchedAt: accounts.researchedAt,
+        // The tie `resolveContactEmail` demands before it will resolve
+        // anybody here, asked through the rule's own module so the enabled
+        // button and the resolver cannot answer differently.
+        hasDomainEvidence: accountHasDomainEvidence(),
         contactCount: sql<number>`count(${contacts.id})::int`,
         // Contacts the company-level resolve would act on, counted by the same
         // rule the action uses so the button and its effect cannot disagree:
@@ -105,6 +113,16 @@ export default async function ProspectsPage({
       .map((row) => (row.payload as { accountId?: unknown })?.accountId)
       .filter((id): id is string => typeof id === "string"),
   );
+  /**
+   * The blocker computed once per company, beside the query that feeds it,
+   * because the row needs the same answer twice: to disable the button and to
+   * say why.
+   */
+  const accountsWithBlocker = accountRows.map((account) => ({
+    ...account,
+    addressBlocker: addressResolutionBlocker(account),
+  }));
+
   return (
     <main className="page-shell">
       <header className="page-header">
@@ -240,7 +258,7 @@ export default async function ProspectsPage({
               </tr>
             </thead>
             <tbody>
-              {accountRows.map((account) => (
+              {accountsWithBlocker.map((account) => (
                 <tr key={account.id}>
                   <td>
                     {account.name}
@@ -266,58 +284,29 @@ export default async function ProspectsPage({
                   <td>
                     {account.contactCount}
                     <small>
-                      {account.needingAddress > 0
-                        ? `${account.needingAddress} without an address`
-                        : "all addressed"}
+                      {/* A company with nobody in it is not "all addressed" —
+                          it has nobody to address, which is a different thing
+                          and the one that says what to do next. */}
+                      {account.contactCount === 0
+                        ? "no contacts yet"
+                        : account.needingAddress > 0
+                          ? `${account.needingAddress} without an address`
+                          : "all addressed"}
                     </small>
                   </td>
                   <td>
                     <div className="button-stack compact-form">
-                      {/* The convention belongs to the company, so resolving
-                          addresses does too: one search answers it for every
-                          contact here. The per-contact action stays on the
-                          prospect page, for the exception. */}
-                      <form
-                        action="/api/operator/commands/resolve-account-emails"
-                        method="post"
-                        className="stack"
-                      >
-                        <input
-                          type="hidden"
-                          name="csrf"
-                          value={session.csrfToken}
-                        />
-                        <input
-                          type="hidden"
-                          name="accountId"
-                          value={account.id}
-                        />
-                        <input
-                          type="hidden"
-                          name="requestToken"
-                          value={crypto.randomUUID()}
-                        />
-                        <input
-                          type="hidden"
-                          name="returnTo"
-                          value="/prospects"
-                        />
-                        <label className="check">
-                          <input type="checkbox" name="forcePublicSearch" />
-                          Search this company again
-                        </label>
-                        <small className="muted">
-                          Ticking it also re-resolves contacts that already have
-                          an address, so more than the count below may be queued
-                          — never one already written to.
-                        </small>
-                        <button disabled={account.contactCount === 0}>
-                          Resolve addresses
-                          {account.needingAddress > 0
-                            ? ` (${account.needingAddress})`
-                            : ""}
-                        </button>
-                      </form>
+                      {/* Ordered the way the work happens, which is the order
+                          the dashboard's own operating path states: research the
+                          company, discover its people, then resolve their
+                          addresses. Resolving led the block and read backwards —
+                          and on a company nobody had researched yet it opened on
+                          a disabled button while the only useful action sat at
+                          the bottom. Resolving keeps its primary weight, which
+                          is what serves how often it is the one clicked; only
+                          its rank changes. It also puts "search this company
+                          again" beside the button it belongs to, instead of
+                          above three that it does not. */}
                       <form
                         action="/api/operator/commands/research-account"
                         method="post"
@@ -386,6 +375,59 @@ export default async function ProspectsPage({
                           aria-label={`Contact limit for ${account.name}`}
                         />
                         <button>Discover contacts</button>
+                      </form>
+                      {/* The convention belongs to the company, so resolving
+                          addresses does too: one search answers it for every
+                          contact here. The per-contact action stays on the
+                          prospect page, for the exception. */}
+                      <form
+                        action="/api/operator/commands/resolve-account-emails"
+                        method="post"
+                        className="stack"
+                      >
+                        <input
+                          type="hidden"
+                          name="csrf"
+                          value={session.csrfToken}
+                        />
+                        <input
+                          type="hidden"
+                          name="accountId"
+                          value={account.id}
+                        />
+                        <input
+                          type="hidden"
+                          name="requestToken"
+                          value={crypto.randomUUID()}
+                        />
+                        <input
+                          type="hidden"
+                          name="returnTo"
+                          value="/prospects"
+                        />
+                        <label className="check">
+                          <input type="checkbox" name="forcePublicSearch" />
+                          Search this company again
+                        </label>
+                        <small className="muted">
+                          Ticking it also re-resolves contacts that already have
+                          an address, so more than the count below may be queued
+                          — never one already written to.
+                        </small>
+                        <button disabled={account.addressBlocker !== null}>
+                          Resolve addresses
+                          {account.needingAddress > 0
+                            ? ` (${account.needingAddress})`
+                            : ""}
+                        </button>
+                        {/* A disabled button that does not say why is a dead
+                            end. Naming the blocker makes it the instruction the
+                            operator needed instead. */}
+                        {account.addressBlocker ? (
+                          <small className="muted">
+                            {account.addressBlocker}
+                          </small>
+                        ) : null}
                       </form>
                     </div>
                   </td>

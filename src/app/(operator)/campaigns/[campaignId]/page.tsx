@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -7,12 +7,14 @@ import {
   campaigns,
   campaignVersions,
   contacts,
-  emailCandidates,
   enrollments,
-  mailboxConnections,
   sequenceSteps,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import {
+  partitionCandidates,
+  readEnrollmentCandidates,
+} from "@/modules/campaigns/enrollment-selection";
 import { readPersonalizationDeclaration } from "@/modules/messages/personalization-declaration";
 import { StatusBadge } from "@/modules/presentation/status-badge";
 import { describeStopReason } from "@/modules/presentation/status";
@@ -65,30 +67,14 @@ export default async function CampaignDetailPage({
     .from(sequenceSteps)
     .where(eq(sequenceSteps.campaignVersionId, activeVersion.id))
     .orderBy(asc(sequenceSteps.stepIndex));
-  const prospects = await db
-    .select({
-      id: contacts.id,
-      name: contacts.fullName,
-      email: emailCandidates.normalizedEmail,
-    })
-    .from(contacts)
-    .innerJoin(
-      emailCandidates,
-      and(
-        eq(emailCandidates.contactId, contacts.id),
-        eq(emailCandidates.status, "accepted"),
-      ),
-    )
-    .orderBy(asc(contacts.fullName));
-  const mailboxes = await db
-    .select({
-      id: mailboxConnections.id,
-      email: mailboxConnections.email,
-      provider: mailboxConnections.provider,
-      status: mailboxConnections.status,
-    })
-    .from(mailboxConnections)
-    .where(eq(mailboxConnections.status, "available"));
+  // Read through the same function the enrollment screen uses, so the number
+  // this page promises and the list that screen offers cannot disagree.
+  const { eligible } = partitionCandidates(
+    await readEnrollmentCandidates(db, {
+      campaignId: campaign.id,
+      filters: {},
+    }),
+  );
   const enrollmentRows = await db
     .select({
       id: enrollments.id,
@@ -164,58 +150,26 @@ export default async function CampaignDetailPage({
       ) : null}
 
       <section className="panel">
-        <h2>Enroll a prospect</h2>
-        {prospects.length === 0 ? (
-          <p className="hint">
-            No prospect has an accepted email yet. Resolve one on the{" "}
-            <Link href="/prospects">Prospects page</Link> first.
-          </p>
-        ) : null}
-        {!enrollmentVersion.publishedAt ? (
-          <p className="hint">Publish the sequence before enrolling.</p>
-        ) : null}
-        <form
-          action="/api/operator/commands/enroll-contact"
-          method="post"
-          className="form-grid"
-        >
-          <input type="hidden" name="csrf" value={session.csrfToken} />
-          <input type="hidden" name="campaignId" value={campaign.id} />
-          <input
-            type="hidden"
-            name="campaignVersionId"
-            value={enrollmentVersion.id}
-          />
-          <label>
-            Prospect
-            <select name="contactId" required>
-              <option value="">Select prospect</option>
-              {prospects.map((contact) => (
-                <option key={contact.id} value={contact.id}>
-                  {contact.name} · {contact.email}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Mailbox
-            <select name="mailboxId" required>
-              <option value="">Select mailbox</option>
-              {mailboxes.map((mailbox) => (
-                <option key={mailbox.id} value={mailbox.id}>
-                  {mailbox.email} · {mailbox.provider}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="submit" disabled={!enrollmentVersion.publishedAt}>
-            Enroll contact
-          </button>
-        </form>
-        <p className="muted">
-          Enrolling queues the first message; it appears in the review queue
-          once written. Nothing is sent without your approval.
-        </p>
+        <div className="panel-heading">
+          <div>
+            <h2>Enroll prospects</h2>
+            <p className="muted">
+              {eligible.length === 0
+                ? "Nobody is eligible right now. Resolve addresses on the Prospects page, or check who is already enrolled below."
+                : `${eligible.length} prospect${eligible.length > 1 ? "s" : ""} eligible — filter them and enroll a cohort in one pass.`}
+            </p>
+          </div>
+          {enrollmentVersion.publishedAt ? (
+            <Link
+              className="button-link"
+              href={`/campaigns/${campaign.id}/enroll`}
+            >
+              Enroll prospects
+            </Link>
+          ) : (
+            <span className="muted">Publish the sequence first</span>
+          )}
+        </div>
       </section>
 
       <section className="panel table-panel">

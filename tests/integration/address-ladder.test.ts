@@ -385,6 +385,24 @@ async function setLadderSettings(
   await db
     .update(schema.operatorSendingSettings)
     .set({
+      // Every day, all day. Nothing in this file is about when a send is
+      // allowed to leave, but the send policy checks the working window before
+      // it reaches the transport — so a test whose subject is what the
+      // transport reports back is unreachable outside it. Left at the shipped
+      // 09:00-18:00 Monday-to-Friday default, the one call here that does not
+      // pin its own clock refused with `OUTSIDE_WORKING_HOURS` and never got
+      // to the 550 it exists to observe: green in the afternoon, red in the
+      // evening, red all weekend.
+      //
+      // Both dimensions are opened deliberately. The hours alone still lose
+      // Saturday, and the same test would keep failing two days in seven for
+      // a reason nobody would connect to the clock. This is what
+      // `lifecycle`, `outreach-vertical-slice` and `send-reliability` already
+      // do, and it immunises every future call in this file rather than the
+      // one that happens to be exposed today.
+      workingDays: [0, 1, 2, 3, 4, 5, 6],
+      workingStartMinute: 0,
+      workingEndMinute: 1_440,
       addressLadderEnabled: true,
       addressLadderMaxRungs: 3,
       addressLadderMaxAdvancesPerAccountPerDay: 2,

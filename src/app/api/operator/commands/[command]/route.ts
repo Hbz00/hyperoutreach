@@ -27,8 +27,12 @@ import {
   stopEnrollment,
 } from "@/modules/campaigns/lifecycle-service";
 import {
+  describeEnrollmentSelection,
+  enrollSelection,
+  parseEnrollmentFilters,
+} from "@/modules/campaigns/enrollment-selection";
+import {
   createDraftCampaign,
-  enrollContact,
   publishCampaignVersion,
   reviseCampaignVersion,
 } from "@/modules/campaigns/service";
@@ -673,29 +677,66 @@ export async function POST(
     );
   }
 
-  if (command === "enroll-contact") {
+  if (command === "enroll-contacts") {
     const campaignId = value(formData, "campaignId");
-    const result = await enrollContact(db, {
-      campaignId,
-      campaignVersionId: value(formData, "campaignVersionId"),
-      contactId: value(formData, "contactId"),
-      mailboxId: value(formData, "mailboxId") ?? null,
+    const campaignVersionId = value(formData, "campaignVersionId");
+    if (
+      !uuidSchema.safeParse(campaignId).success ||
+      !uuidSchema.safeParse(campaignVersionId).success
+    ) {
+      return destination(request, "/campaigns", "Invalid campaign");
+    }
+    const filters = parseEnrollmentFilters({
+      company: value(formData, "company"),
+      role: value(formData, "role"),
+      minConfidence: value(formData, "minConfidence"),
     });
-    // Enrolling writes the step-zero generation into the queue in its own
-    // transaction, so a fresh enrolment is queued work like any other. An
-    // existing one queued nothing, and has nothing to ask a pass for.
-    if (result.ok && result.disposition === "created") askForMaintenanceNow();
-    return destination(
-      request,
-      uuidSchema.safeParse(campaignId).success
-        ? `/campaigns/${campaignId}`
-        : "/campaigns",
-      result.ok
-        ? result.disposition === "existing"
-          ? "Contact already enrolled"
-          : "Contact enrolled — their first message is queued"
-        : result.message,
-    );
+    // Rebuilt from the validated campaign and the parsed filters rather than
+    // taken from a `returnTo` field: the screen to come back to is a fact this
+    // handler already knows, and knowing it means never having to trust a URL
+    // the form supplied.
+    const query = new URLSearchParams();
+    if (filters.company) query.set("company", filters.company);
+    if (filters.role) query.set("role", filters.role);
+    if (filters.minConfidence !== undefined) {
+      query.set("minConfidence", String(filters.minConfidence));
+    }
+    const back = `/campaigns/${campaignId}/enroll${
+      query.size > 0 ? `?${query}` : ""
+    }`;
+    const mailboxId = value(formData, "mailboxId");
+    if (!uuidSchema.safeParse(mailboxId).success) {
+      // An enrollment with no mailbox is one the send policy cannot route, so
+      // this refuses rather than writing a row that stalls later.
+      return destination(request, back, "Choose a mailbox before enrolling");
+    }
+    // `filtered` is the button that says "all of them", and it derives its own
+    // list — so any checkbox that rode along with it is deliberately dropped.
+    const selecting = value(formData, "scope") !== "filtered";
+    const contactIds = selecting
+      ? formData
+          .getAll("contactId")
+          .filter(
+            (entry): entry is string =>
+              typeof entry === "string" && uuidSchema.safeParse(entry).success,
+          )
+      : undefined;
+    if (contactIds && contactIds.length === 0) {
+      return destination(request, back, "No prospect selected");
+    }
+    const result = await enrollSelection(db, {
+      campaignId: campaignId!,
+      campaignVersionId: campaignVersionId!,
+      mailboxId: mailboxId!,
+      filters,
+      ...(contactIds ? { contactIds } : {}),
+    });
+    if (!result.ok) return destination(request, back, result.message);
+    // Enrolling writes each step-zero generation into the queue in its own
+    // transaction, so a fresh cohort is queued work like any other. A pass is
+    // only worth asking for when something was actually created.
+    if (result.enrolled > 0) askForMaintenanceNow();
+    return destination(request, back, describeEnrollmentSelection(result));
   }
 
   if (command === "stop-enrollment") {
