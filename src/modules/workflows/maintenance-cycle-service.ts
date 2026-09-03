@@ -12,7 +12,7 @@ import {
 import type { WorkflowTaskServices } from "@/modules/workflows/runtime";
 import type { WorkflowPayloads } from "@/modules/workflows/task-contracts";
 
-export type MaintenanceCycleStages = Pick<
+type MaintenanceCycleStageServices = Pick<
   WorkflowTaskServices,
   | "reconcile-inbound-mailboxes"
   | "reconcile-due-follow-ups"
@@ -28,6 +28,81 @@ export type MaintenanceCycleStages = Pick<
     observedAt?: string;
   }) => Promise<unknown>;
 };
+
+/** What the cycle offers a stage so the stage can stop itself. */
+export type MaintenanceStageOptions = { signal: AbortSignal };
+
+/**
+ * The four stages, each additionally allowed to accept the cycle's deadline.
+ *
+ * The second parameter is optional so a stage that ignores it — a test double
+ * standing in for one — still satisfies the type. It is the seam through which
+ * a stage is made to actually stop: racing a promise against a timer bounds the
+ * *cycle*, but the losing work keeps running and keeps holding whatever
+ * advisory lock it took.
+ */
+export type MaintenanceCycleStages = {
+  [Stage in keyof MaintenanceCycleStageServices]: (
+    payload: Parameters<MaintenanceCycleStageServices[Stage]>[0],
+    options?: MaintenanceStageOptions,
+  ) => Promise<unknown>;
+};
+
+/** How long each stage may take before the cycle gives up on it. */
+export type MaintenanceStageBudgetsMs = {
+  inbound: number;
+  followups: number;
+  recovery: number;
+  commands: number;
+};
+
+export class MaintenanceStageTimeoutError extends Error {
+  override readonly name = "MaintenanceStageTimeoutError";
+  constructor(stage: keyof MaintenanceStageBudgetsMs, budgetMs: number) {
+    super(`Maintenance ${stage} stage exceeded ${budgetMs} ms`);
+  }
+}
+
+/**
+ * Runs one stage under its own deadline.
+ *
+ * `config/maintenance.json` has declared `stageMaximumsMs` since the schema was
+ * written and nothing ever read it. A stage could therefore run forever, and
+ * one did: an inbound round held the lease for twenty-eight minutes while the
+ * heartbeat kept renewing it, so the stale-lease takeover never fired and the
+ * whole pipeline — mail, follow-ups, recovery, operator commands — stopped
+ * without a single failed audit row.
+ *
+ * The signal is aborted before the rejection, so a stage that consumes it is
+ * told to stop rather than merely abandoned — and all four consume it. Inbound
+ * cancels the round in flight, because an abandoned IMAP fetch holds its
+ * advisory lock until its own socket timeouts fire and the next cycle's inbound
+ * stage then queues behind that same lock. The other three stop at the boundary
+ * between items: each is a loop over independent work, and abandoning a send or
+ * an AI turn halfway would cost more than finishing the one already started.
+ * What they skip is not lost — every one of those lanes finds its work again by
+ * query on the next tick.
+ */
+async function runStage<T>(
+  stage: keyof MaintenanceStageBudgetsMs,
+  budgetMs: number,
+  run: (options: MaintenanceStageOptions) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new MaintenanceStageTimeoutError(stage, budgetMs));
+    }, budgetMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([run({ signal: controller.signal }), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export type MaintenanceCycleResult =
   | { status: "busy" }
@@ -46,6 +121,7 @@ export type MaintenanceCycleOptions = {
   createOwnerToken?: () => string;
   heartbeatMs?: number;
   leaseStaleMs?: number;
+  stageBudgetsMs?: Partial<MaintenanceStageBudgetsMs>;
 };
 
 export async function runMaintenanceCycle(
@@ -59,6 +135,10 @@ export async function runMaintenanceCycle(
   const heartbeatMs =
     options.heartbeatMs ?? maintenanceConfig.heartbeatIntervalMs;
   const leaseStaleMs = options.leaseStaleMs ?? maintenanceConfig.staleLeaseMs;
+  const budgets: MaintenanceStageBudgetsMs = {
+    ...maintenanceConfig.stageMaximumsMs,
+    ...options.stageBudgetsMs,
+  };
   const claimedAt = clock();
   const staleBefore = new Date(claimedAt.getTime() - leaseStaleMs);
   const [claimed] = await db
@@ -134,16 +214,33 @@ export async function runMaintenanceCycle(
   let currentStage: MaintenanceFailureStage = "inbound";
   try {
     const stagePayload = { observedAt: payload.observedAt };
-    const inbound = await stages["reconcile-inbound-mailboxes"](stagePayload);
+    const inbound = await runStage("inbound", budgets.inbound, (stageOptions) =>
+      stages["reconcile-inbound-mailboxes"](stagePayload, stageOptions),
+    );
     if (!(await renewLease())) return { status: "busy" };
     currentStage = "followup";
-    const followups = await stages["reconcile-due-follow-ups"](stagePayload);
+    const followups = await runStage(
+      "followups",
+      budgets.followups,
+      (stageOptions) =>
+        stages["reconcile-due-follow-ups"](stagePayload, stageOptions),
+    );
     if (!(await renewLease())) return { status: "busy" };
     currentStage = "recovery";
-    const recovery = await stages["recover-stale-work"](stagePayload);
+    const recovery = await runStage(
+      "recovery",
+      budgets.recovery,
+      (stageOptions) =>
+        stages["recover-stale-work"](stagePayload, stageOptions),
+    );
     if (!(await renewLease())) return { status: "busy" };
     currentStage = "commands";
-    const commands = await stages["drain-operator-commands"](stagePayload);
+    const commands = await runStage(
+      "commands",
+      budgets.commands,
+      (stageOptions) =>
+        stages["drain-operator-commands"](stagePayload, stageOptions),
+    );
     currentStage = "finalization";
     const completedAt = clock();
     const [completed] = await db

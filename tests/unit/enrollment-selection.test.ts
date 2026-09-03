@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeEnrollmentSelection,
   parseEnrollmentFilters,
+  countLanguageMismatches,
   partitionCandidates,
   type EnrollmentCandidate,
   type EnrollmentSelectionOutcome,
@@ -18,6 +19,7 @@ function candidate(
     jobTitle: "Head of Computation",
     email: "ada@example.com",
     confidence: 0.9,
+    language: null,
     ineligibility: null,
     ...overrides,
   };
@@ -147,5 +149,56 @@ describe("describeEnrollmentSelection", () => {
     expect(describeEnrollmentSelection(outcome({ ignored: 3 }))).toBe(
       "Nothing enrolled · 3 no longer eligible",
     );
+  });
+});
+
+/**
+ * Who this campaign would write to in the wrong language.
+ *
+ * A count, never an exclusion. The eligible list exists to answer "can this
+ * person be written to at all", and a language mismatch does not make anyone
+ * unsendable — it makes the operator's choice of campaign worth a second look.
+ * Excluding them here would also quietly hide people from a campaign that is
+ * about to be revised into their language.
+ */
+describe("language mismatches in an enrollment cohort", () => {
+  it("counts the prospects written to in another language", () => {
+    expect(
+      countLanguageMismatches(
+        [
+          candidate({ language: "fr" }),
+          candidate({ language: "en" }),
+          candidate({ language: "en" }),
+        ],
+        "fr",
+      ),
+    ).toBe(2);
+  });
+
+  it("says nothing about a prospect whose language nobody established", () => {
+    // Null is "unknown", not "wrong". Counting it would turn every contact
+    // discovered before the field existed into a warning.
+    expect(
+      countLanguageMismatches(
+        [candidate({ language: null }), candidate({ language: null })],
+        "fr",
+      ),
+    ).toBe(0);
+  });
+
+  it("counts nothing when the campaign declares no language", () => {
+    expect(
+      countLanguageMismatches([candidate({ language: "en" })], undefined),
+    ).toBe(0);
+  });
+
+  it("compares tags case-insensitively and ignores the region", () => {
+    // "fr-BE" and "fr" are the same choice of template.
+    expect(
+      countLanguageMismatches(
+        [candidate({ language: "FR-BE" }), candidate({ language: "en-GB" })],
+        "fr",
+      ),
+    ).toBe(1);
   });
 });

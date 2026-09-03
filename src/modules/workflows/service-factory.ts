@@ -221,7 +221,10 @@ export function createWorkflowTaskServices(
       },
     );
   };
-  const reconcileOneInboundMailbox = async (mailboxId: string) => {
+  const reconcileOneInboundMailbox = async (
+    mailboxId: string,
+    signal?: AbortSignal,
+  ) => {
     const [mailbox] = await db
       .select()
       .from(mailboxConnections)
@@ -251,6 +254,7 @@ export function createWorkflowTaskServices(
         const result = await reconcileInboundMailbox(
           { source, mailboxId: current.id },
           {
+            ...(signal ? { signal } : {}),
             loadCursor: async () => current.syncCursor,
             saveCursor: createInboundCursorWriter(db, {
               events: entry.cursorEvents(),
@@ -294,13 +298,19 @@ export function createWorkflowTaskServices(
         await providerForEnrollment(payload.enrollmentId, db, environment),
         payload,
       ),
-    "reconcile-due-follow-ups": async (payload) => {
+    "reconcile-due-follow-ups": async (payload, options) => {
       const due = await findDueEnrollments(db, {
         now: observedDate(payload.observedAt),
         limit: payload.limit,
       });
       const results = [];
       for (const item of due) {
+        // Between follow-ups, never inside one. An invocation in flight holds
+        // a claim and may already be at the provider, and the cycle running
+        // out of budget is not a reason to abandon a message halfway — it is
+        // a reason not to start another. What is skipped is still due, so the
+        // next tick's query returns it unchanged.
+        if (options?.signal?.aborted) break;
         results.push(
           await processFollowUpInvocation(
             db,
@@ -341,7 +351,7 @@ export function createWorkflowTaskServices(
     },
     "reconcile-inbound-mailbox": (payload) =>
       reconcileOneInboundMailbox(payload.mailboxId),
-    "reconcile-inbound-mailboxes": async (payload) => {
+    "reconcile-inbound-mailboxes": async (payload, options) => {
       const availableMailboxes = db
         .select({ id: mailboxConnections.id })
         .from(mailboxConnections)
@@ -370,7 +380,7 @@ export function createWorkflowTaskServices(
           try {
             results[index] = {
               mailboxId: row.id,
-              result: await reconcileOneInboundMailbox(row.id),
+              result: await reconcileOneInboundMailbox(row.id, options?.signal),
             };
           } catch (error) {
             results[index] = {
@@ -415,8 +425,17 @@ export function createWorkflowTaskServices(
         },
       );
     },
-    "recover-stale-work": async (payload) => {
+    "recover-stale-work": async (payload, options) => {
       const now = observedDate(payload.observedAt);
+      // The cycle's deadline, honoured at the boundaries between lanes and
+      // between the items inside them. Every lane below either originates a
+      // delivery or spends an AI turn, so stopping mid-lane would cost more
+      // than finishing it; stopping before the next one costs nothing, because
+      // each lane's own query finds the same work again on the next tick. The
+      // two lookups and the single pending inbound record are left to run:
+      // they are one row apiece, and skipping them would only make the
+      // returned shape lie about which lanes ran.
+      const stopping = () => options?.signal?.aborted === true;
       // This task spans several independent provider classes. Keep each class
       // intentionally tiny so one scheduled run stays within maxDuration and
       // every class makes progress on every tick.
@@ -454,24 +473,28 @@ export function createWorkflowTaskServices(
       // verdict that goes stale between the two costs a refusal and the
       // message returns to the review queue — which is what
       // `dispatchScheduledSends` already says happens.
-      const scheduledSends = await dispatchScheduledSends(
-        db,
-        async (messageId, at) =>
-          readSendPolicyVerdict(
+      const scheduledSends = stopping()
+        ? []
+        : await dispatchScheduledSends(
             db,
-            messageId,
-            (await providerForMessage(messageId, db, environment)).kind,
-            at,
-          ),
-        async (messageId) => {
-          const result = await sendApprovedMessage(
-            db,
-            await providerForMessage(messageId, db, environment),
-            { messageId },
+            async (messageId, at) =>
+              readSendPolicyVerdict(
+                db,
+                messageId,
+                (await providerForMessage(messageId, db, environment)).kind,
+                at,
+              ),
+            async (messageId) => {
+              const result = await sendApprovedMessage(
+                db,
+                await providerForMessage(messageId, db, environment),
+                { messageId },
+              );
+              return result.ok
+                ? { ok: true }
+                : { ok: false, code: result.code };
+            },
           );
-          return result.ok ? { ok: true } : { ok: false, code: result.code };
-        },
-      );
       const candidates = await findStaleRecoveryCandidates(db, {
         now,
         limit: recoveryLimit,
@@ -484,6 +507,7 @@ export function createWorkflowTaskServices(
       const due = await findDueEnrollments(db, { now, limit: recoveryLimit });
       const messagesRecovered = [];
       for (const messageId of candidates.messageIds) {
+        if (stopping()) break;
         messagesRecovered.push(
           await sendApprovedMessage(
             db,
@@ -506,6 +530,7 @@ export function createWorkflowTaskServices(
       }
       const researchRecovered = [];
       for (const accountId of candidates.accountIds) {
+        if (stopping()) break;
         researchRecovered.push(
           await researchAccount(db, agents.accountResearch, {
             accountId,
@@ -515,10 +540,12 @@ export function createWorkflowTaskServices(
       }
       const resolutionsRecovered = [];
       for (const contactId of candidates.contactIds) {
+        if (stopping()) break;
         resolutionsRecovered.push(await runEmailResolution({ contactId }));
       }
       const followUpsRecovered = [];
       for (const item of due) {
+        if (stopping()) break;
         followUpsRecovered.push(
           await processFollowUpInvocation(
             db,
@@ -560,8 +587,14 @@ export function createWorkflowTaskServices(
         // so the tick's `observedAt` is stale by then — back-dating a claim
         // would shorten its lease, and back-dating a backoff would shorten the
         // wait it exists to impose.
-        "drain-operator-commands": () =>
-          drainOperatorCommands(db, runQueuedCommand),
+        //
+        // The cycle's deadline is forwarded too: without it this is the one
+        // stage that cannot be told to stop, and the pass would claim another
+        // command after the cycle had already given its lease back.
+        "drain-operator-commands": (_payload, options) =>
+          drainOperatorCommands(db, runQueuedCommand, {
+            ...(options?.signal ? { signal: options.signal } : {}),
+          }),
       },
       payload,
     );

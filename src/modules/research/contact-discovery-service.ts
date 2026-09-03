@@ -25,6 +25,7 @@ import {
   canonicalLinkedInUrl,
   parseContactInput,
 } from "@/modules/contacts/input";
+import { withoutEmployer } from "@/modules/contacts/job-title";
 import {
   normalizeProvenanceUrl,
   validateContactDiscoveryProvenance,
@@ -119,21 +120,30 @@ export async function discoverContacts(
   }
   const evidenceObservedAt = new Date();
   try {
-    const prepared = result.output.contacts.map((candidate) => ({
-      candidate,
-      input: parseContactInput({
-        accountId: account.id,
-        firstName: candidate.firstName,
-        lastName: candidate.lastName,
-        jobTitle: candidate.jobTitle,
-        linkedinUrl: candidate.linkedinUrl,
-        professionalRelevance: {
-          relevant: true,
-          targetRoles: parsed.data.roles,
-          confidence: candidate.confidence,
-        },
-      }),
-    }));
+    const prepared = result.output.contacts.map((candidate) => {
+      // The model reports what the profile says, and a profile headline embeds
+      // the employer. Stripped here, once, rather than in each of the three
+      // persist branches below — and only here, because the raw string is still
+      // written verbatim to the evidence row and to the employment transition,
+      // so nothing is lost by cleaning the column.
+      const { jobTitle } = withoutEmployer(candidate.jobTitle, account);
+      return {
+        candidate,
+        input: parseContactInput({
+          accountId: account.id,
+          firstName: candidate.firstName,
+          lastName: candidate.lastName,
+          ...(jobTitle === null ? {} : { jobTitle }),
+          ...(candidate.language ? { language: candidate.language } : {}),
+          linkedinUrl: candidate.linkedinUrl,
+          professionalRelevance: {
+            relevant: true,
+            targetRoles: parsed.data.roles,
+            confidence: candidate.confidence,
+          },
+        }),
+      };
+    });
     const linkedinUrls = prepared.flatMap(({ input }) =>
       input.linkedinUrl ? [input.linkedinUrl] : [],
     );
@@ -233,7 +243,26 @@ export async function discoverContacts(
                 .update(contacts)
                 .set({
                   accountId: account.id,
-                  jobTitle: candidate.jobTitle,
+                  // `input.jobTitle` is the stripped value; `candidate` still
+                  // holds the raw headline. Two rules, and the employer decides
+                  // which one applies. Rediscovering the same person at the
+                  // same account must not overwrite a good stored title with
+                  // the null a headline that was only the employer's name
+                  // reduces to. A move to a different account is the opposite
+                  // case: the stored title belongs to the employment being
+                  // left, so keeping it would repin the contact and then go on
+                  // personalizing from a role they no longer hold — the one
+                  // failure this whole branch exists to prevent, committed by
+                  // the fallback. Blank is legible: generation refuses a
+                  // contact with no title in words the operator can act on, and
+                  // the raw headline survives in the employment transition
+                  // below either way.
+                  jobTitle:
+                    input.jobTitle ??
+                    (employmentChanged ? null : stored.jobTitle),
+                  // Same rule for the language: a run that could not read it
+                  // must not erase a run that could.
+                  language: input.language ?? stored.language,
                   professionalRelevance: input.professionalRelevance,
                   linkedinUrl: input.linkedinUrl ?? stored.linkedinUrl,
                   ...(employmentChanged
@@ -274,6 +303,14 @@ export async function discoverContacts(
                     .set({
                       linkedinUrl: input.linkedinUrl,
                       jobTitle: input.jobTitle ?? weak.jobTitle,
+                      // Carried for the same reason as on the branch above, and
+                      // it is this branch that most often has one to carry: the
+                      // row being upgraded predates LinkedIn identity, so it
+                      // usually predates a read language too. Dropped, the
+                      // contact stays unknown-language, and the enrollment
+                      // warning counts unknown as agreement — so a campaign
+                      // writing in the wrong language would go out unremarked.
+                      language: input.language ?? weak.language,
                       professionalRelevance: input.professionalRelevance,
                     })
                     .where(eq(contacts.id, weak.id))

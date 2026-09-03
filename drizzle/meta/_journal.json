@@ -267,6 +267,20 @@
       "when": 1787051826683,
       "tag": "0037_tough_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1787182930526,
+      "tag": "0038_gorgeous_songbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1787234081135,
+      "tag": "0039_absent_vision",
+      "breakpoints": true
     }
   ]
 }

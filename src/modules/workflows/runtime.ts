@@ -8,8 +8,22 @@ import {
 
 export type WorkflowRunContext = { runId: string; attempt: number };
 
+/**
+ * What a task may be handed besides its payload.
+ *
+ * Not part of the payload, deliberately: a payload is serialized and sent over
+ * the wire to a hosted executor, and an `AbortSignal` cannot cross that
+ * boundary. This is the in-process channel, so only a caller holding the
+ * service function directly — the maintenance cycle — can use it, which is
+ * exactly who owns the deadline.
+ */
+export type WorkflowTaskOptions = { signal?: AbortSignal };
+
 export type WorkflowTaskServices = {
-  [T in WorkflowTaskName]: (payload: WorkflowPayloads[T]) => Promise<unknown>;
+  [T in WorkflowTaskName]: (
+    payload: WorkflowPayloads[T],
+    options?: WorkflowTaskOptions,
+  ) => Promise<unknown>;
 };
 
 function hasRetryableFailure(value: unknown): boolean {

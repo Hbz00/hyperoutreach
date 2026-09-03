@@ -77,6 +77,10 @@ async function createCampaign(
   await form.getByLabel("Name", { exact: true }).fill(input.name);
   await form.getByLabel("Precise ICP").fill(input.target);
   await form.getByLabel("Campaign daily cap").fill("100");
+  // Required now. The language of a version's templates is what the
+  // personalization agent is told to write in, so it is a decision the form
+  // makes once rather than a silence the agent has to guess through.
+  await form.getByLabel("Language").fill("en");
   await form.getByLabel("Delay in minutes").nth(0).fill("0");
   await form.getByLabel("Subject").nth(0).fill(input.firstSubject);
   await form.getByLabel("Body").nth(0).fill(input.firstBody);

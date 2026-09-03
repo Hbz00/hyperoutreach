@@ -79,6 +79,8 @@ const contactInputSchema = z
     firstName: z.string().trim().min(1).max(200),
     lastName: z.string().trim().min(1).max(200),
     jobTitle: optionalTrimmedString,
+    /** The prospect's own language, when discovery could read it. */
+    language: optionalTrimmedString,
     linkedinUrl: optionalTrimmedString,
     professionalRelevance: z
       .record(z.string(), z.unknown())

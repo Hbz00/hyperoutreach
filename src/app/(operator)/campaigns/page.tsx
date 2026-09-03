@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getDatabase } from "@/lib/db/client";
 import { campaigns, enrollments } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { CAMPAIGN_STEP_PLACEHOLDERS } from "@/modules/campaigns/step-placeholders";
 import { StatusBadge } from "@/modules/presentation/status-badge";
 
 const CAMPAIGN_TYPES: Record<string, string> = {
@@ -110,10 +111,20 @@ export default async function CampaignsPage({
               <input type="checkbox" name="requireProfessionalRelevance" />
               Require professional relevance
             </label>
+            <label>
+              Language
+              {/* The language you write the steps below in. It is passed to the
+                  agent that writes into them, so its sentence lands in the same
+                  language as the words around it. */}
+              <input name="language" placeholder="fr" required maxLength={35} />
+            </label>
           </div>
           <p className="muted">
             Steps 2 and 3 are optional follow-ups — leave subject and body empty
-            to skip them.
+            to skip them. You can use <code>{"{{first_name}}"}</code>,{" "}
+            <code>{"{{last_name}}"}</code>, <code>{"{{company}}"}</code> and{" "}
+            <code>{"{{job_title}}"}</code>. A prospect with no value for a
+            variable you name cannot be written to, so name only what you need.
           </p>
           {[0, 1, 2].map((index) => (
             <fieldset key={index}>
@@ -130,15 +141,15 @@ export default async function CampaignsPage({
                     defaultValue={index === 0 ? 0 : 4320}
                   />
                 </label>
+                {/* Suggested, not filled in. As values these shipped: a first
+                    email whose sentence broke on any real job title, and two
+                    follow-ups identical to each other. A placeholder teaches the
+                    same syntax and cannot be sent by accident. */}
                 <label>
                   Subject
                   <input
                     name={`step${index}Subject`}
-                    defaultValue={
-                      index === 0
-                        ? "A question for {{company}}"
-                        : "Following up, {{first_name}}"
-                    }
+                    placeholder={CAMPAIGN_STEP_PLACEHOLDERS[index]?.subject}
                     required={index === 0}
                   />
                 </label>
@@ -147,11 +158,7 @@ export default async function CampaignsPage({
                   <textarea
                     name={`step${index}Body`}
                     rows={4}
-                    defaultValue={
-                      index === 0
-                        ? "Hello {{first_name}},\n\nI am speaking with {{job_title}} leaders at companies like {{company}}. Would you be open to a short conversation?"
-                        : "Hello {{first_name}},\n\nI wanted to follow up on my previous note."
-                    }
+                    placeholder={CAMPAIGN_STEP_PLACEHOLDERS[index]?.body}
                     required={index === 0}
                   />
                 </label>

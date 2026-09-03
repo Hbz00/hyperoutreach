@@ -70,8 +70,36 @@ export type EnrollmentCandidate = {
   jobTitle: string | null;
   email: string;
   confidence: number;
+  /** What discovery read off this person's profile, or null if it could not. */
+  language: string | null;
   ineligibility: EnrollmentIneligibility | null;
 };
+
+/** The tag without its region, folded, so `fr-BE` and `fr` are one answer. */
+function languageRoot(tag: string): string {
+  return tag.trim().toLocaleLowerCase("en-US").split(/[-_]/)[0] ?? "";
+}
+
+/**
+ * How many of these prospects this campaign would write to in another language.
+ *
+ * A count, and deliberately not an exclusion. `EnrollmentIneligibility` is for
+ * what can never become sendable; a mismatch is sendable, just probably not
+ * what the operator meant — and the campaign may be about to be revised into
+ * that language. An unknown language counts as nothing rather than as a
+ * mismatch: every contact discovered before the field existed has none, and
+ * turning all of them into a warning would make the warning worthless.
+ */
+export function countLanguageMismatches(
+  candidates: readonly Pick<EnrollmentCandidate, "language">[],
+  campaignLanguage: string | undefined,
+): number {
+  if (!campaignLanguage?.trim()) return 0;
+  const campaign = languageRoot(campaignLanguage);
+  return candidates.filter(
+    (row) => row.language && languageRoot(row.language) !== campaign,
+  ).length;
+}
 
 /**
  * One value from a query parameter that may legally arrive repeated.
@@ -208,6 +236,7 @@ export async function readEnrollmentCandidates(
       jobTitle: contacts.jobTitle,
       email: emailCandidates.normalizedEmail,
       confidence: emailCandidates.confidence,
+      language: contacts.language,
       ineligibility: sql<EnrollmentIneligibility | null>`case
         when ${alreadyEnrolled} then 'already_enrolled'
         when ${suppressed} then 'suppressed'

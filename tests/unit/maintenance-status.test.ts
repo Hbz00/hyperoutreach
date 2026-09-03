@@ -11,6 +11,7 @@ import {
   getMaintenanceStatusPresentation,
   resolveMaintenanceAutomationPresentation,
 } from "@/modules/workflows/maintenance-status-presentation";
+import maintenanceConfig from "../../config/maintenance.json";
 
 const NOW = new Date("2026-08-14T10:00:00.000Z");
 const INTERVAL_MS = 60_000;
@@ -59,6 +60,37 @@ describe("maintenance status", () => {
         cycleStartedAt: new Date("2026-08-14T09:56:00.000Z"),
         heartbeatAt: new Date("2026-08-14T09:59:30.000Z"),
         lastFailedAt: new Date("2026-08-14T09:59:50.000Z"),
+      }).state,
+    ).toBe("running");
+  });
+
+  /**
+   * A heartbeat proves the process is alive, not that the work is moving.
+   *
+   * Observed in production: an inbound stage ran for twenty-eight minutes while
+   * its heartbeat renewed every thirty seconds, so this function answered
+   * `running` the whole time and the operator's screen said the same. Every
+   * stage now has a deadline, which makes a cycle longer than the sum of those
+   * deadlines impossible by construction — so when one is seen, it is stuck,
+   * and saying `running` is the one answer that cannot be true.
+   */
+  it("reports stalled when a fresh-heartbeat cycle outlives every stage budget", () => {
+    expect(
+      resolve({
+        ownerToken: "owner",
+        // Older than the total of the stage budgets plus the margin.
+        cycleStartedAt: new Date(NOW.getTime() - 30 * 60_000),
+        heartbeatAt: new Date(NOW.getTime() - 5_000),
+      }).state,
+    ).toBe("stalled");
+  });
+
+  it("still reports running for a long cycle inside its budget", () => {
+    expect(
+      resolve({
+        ownerToken: "owner",
+        cycleStartedAt: new Date(NOW.getTime() - 60_000),
+        heartbeatAt: new Date(NOW.getTime() - 5_000),
       }).state,
     ).toBe("running");
   });
@@ -175,5 +207,32 @@ describe("maintenance status presentation", () => {
         AI_FAST_TIMEOUT_MS: "invalid unrelated value",
       }),
     ).toBe(360_000);
+  });
+});
+
+/**
+ * The budget table has to agree with the work it wraps, and with itself.
+ *
+ * Two relations no type can hold. The command stage wraps at most one AI turn —
+ * the drain stops after the first — so its deadline has to be strictly longer
+ * than that turn's own: set equal, the two race, and a research call that ran
+ * out its own timeout is recorded as a maintenance failure rather than as the
+ * refusal it is. And the aggregate the local worker waits on has to hold every
+ * stage plus one transport margin, or the HTTP request gives up on a cycle that
+ * was still inside the budget it was given.
+ */
+describe("the maintenance budget table", () => {
+  const stages = maintenanceConfig.stageMaximumsMs;
+
+  it("gives the command stage more room than the AI turn it wraps", () => {
+    expect(stages.commands).toBeGreaterThan(getMaintenanceCodeTimeoutMs({}));
+  });
+
+  it("holds every stage and the transport margin inside the aggregate", () => {
+    const total =
+      stages.inbound + stages.followups + stages.recovery + stages.commands;
+    expect(total + maintenanceConfig.transportMarginMs).toBe(
+      maintenanceConfig.aggregateBudgetMs,
+    );
   });
 });

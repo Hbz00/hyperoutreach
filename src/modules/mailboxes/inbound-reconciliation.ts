@@ -4,6 +4,7 @@ import { mailboxConnections, workflowEvents } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import { actionLockKey, withActionLocks } from "@/lib/db/action-lock";
 import type { InboundMailSource } from "@/modules/mailboxes/inbound-source";
+import { throwIfAborted } from "@/lib/smtp-imap/abort";
 import type { MailProviderKind } from "@/modules/mailboxes/mail-provider";
 
 /**
@@ -26,6 +27,8 @@ export type InboundReconciliationDeps = {
     rebaselined: boolean,
   ) => Promise<void>;
   ingest: (message: unknown) => Promise<InboundIngestOutcome>;
+  /** The stage deadline, when the caller has one to pass down. */
+  signal?: AbortSignal;
 };
 
 /**
@@ -71,18 +74,27 @@ export async function reconcileInboundMailbox(
 ): Promise<{ processed: number; nextCursor: string; rebaselined: boolean }> {
   const cursor = await deps.loadCursor(target.mailboxId);
   let processed = 0;
-  const fetched = await target.source.fetchSince(cursor, async (messages) => {
-    let pageProcessed = 0;
-    for (const message of messages) {
-      const result = await deps.ingest(message);
-      if (!result.ok && result.code !== "IN_PROGRESS") {
-        throw new Error("Inbound delta processing not completed");
+  const fetched = await target.source.fetchSince(
+    cursor,
+    async (messages) => {
+      let pageProcessed = 0;
+      for (const message of messages) {
+        // Checked per message, not per page: a page holds up to fifty of them,
+        // and the stall this guards against is in the ingest itself — a wedged
+        // classifier, a slow write — where the transport has already handed
+        // everything over and no IMAP timeout will ever fire.
+        throwIfAborted(deps.signal);
+        const result = await deps.ingest(message);
+        if (!result.ok && result.code !== "IN_PROGRESS") {
+          throw new Error("Inbound delta processing not completed");
+        }
+        if (isProcessedIngest(result)) pageProcessed += 1;
       }
-      if (isProcessedIngest(result)) pageProcessed += 1;
-    }
-    processed += pageProcessed;
-    return pageProcessed;
-  });
+      processed += pageProcessed;
+      return pageProcessed;
+    },
+    ...(deps.signal ? [{ signal: deps.signal }] : []),
+  );
   await deps.saveCursor(
     target.mailboxId,
     fetched.nextCursor,

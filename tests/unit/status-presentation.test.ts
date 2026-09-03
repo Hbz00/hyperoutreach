@@ -18,6 +18,8 @@ import {
   describeStopReason,
   describeLadderHold,
   type StatusKind,
+  describeBounceKind,
+  describeDeliveryFailures,
 } from "@/modules/presentation/status";
 
 const KIND_ENUMS: Record<StatusKind, readonly string[]> = {
@@ -103,5 +105,53 @@ describe("status presentation", () => {
     ]) {
       expect(describeLadderHold(terminal), terminal).toBeNull();
     }
+  });
+});
+
+/**
+ * Why a prospect is parked when the address ladder is not what parked them.
+ *
+ * `enrollments.soft_bounce_count` was written on every definitive delivery
+ * failure and read by nothing, so the one screen that exists to make a parked
+ * prospect actionable showed an empty reason column. The count is evidence for
+ * the operator — who already holds the escape hatch, accepting another address
+ * by hand — not a trigger for the machine: a mailbox that was full says nothing
+ * about whether the address exists, which is the only question the ladder
+ * answers.
+ */
+describe("describing repeated delivery failures", () => {
+  it("says nothing when delivery never definitively failed", () => {
+    expect(describeDeliveryFailures(0)).toBeNull();
+  });
+
+  it("names a single failure in the singular", () => {
+    expect(describeDeliveryFailures(1)).toBe(
+      "1 delivery gave up on this address",
+    );
+  });
+
+  it("counts repeated failures", () => {
+    expect(describeDeliveryFailures(3)).toBe(
+      "3 deliveries gave up on this address",
+    );
+  });
+});
+
+/**
+ * What the reply screen shows for a delivery report.
+ *
+ * It showed `bounce` and nothing else, so a notice saying "still retrying" and
+ * a definitive failure were the same word on the one screen dedicated to
+ * replies — and only one of them means the message did not arrive.
+ */
+describe("describing what a delivery report said", () => {
+  it("says nothing for a reply that is not a delivery report", () => {
+    expect(describeBounceKind(null)).toBeNull();
+  });
+
+  it("distinguishes the three things a report can say", () => {
+    expect(describeBounceKind("hard")).toBe("address does not exist");
+    expect(describeBounceKind("soft")).toBe("delivery gave up");
+    expect(describeBounceKind("delayed")).toBe("still being retried");
   });
 });

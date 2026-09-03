@@ -48,7 +48,7 @@ const inboundSchema = z.object({
   recipient: z.string().trim().min(1).max(500),
   subject: z.string().max(10_000),
   body: z.string().max(1_000_000),
-  bounceKind: z.enum(["hard", "soft"]).nullable().optional(),
+  bounceKind: z.enum(["hard", "soft", "delayed"]).nullable().optional(),
   bouncedRecipient: z.string().trim().min(1).max(500).optional(),
   receivedAt: z.coerce.date(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -816,6 +816,30 @@ export async function ingestInboundMessage(
                     ...(outcome.state ? { state: outcome.state } : {}),
                     ...(outcome.clearSchedule
                       ? { nextActionAt: null, nextActionToken: null }
+                      : {}),
+                    /**
+                     * Put back what this message's own arrival took away.
+                     *
+                     * Every matched inbound holds its enrollment before it is
+                     * classified — state to `manual_review`, schedule
+                     * snapshotted and cleared — so an outcome meaning "this
+                     * changes nothing" has to say so out loud. Kept separate
+                     * from `restorePrevious` above, which answers a different
+                     * question (a non-terminal reply on a campaign that does
+                     * not hold them) and is gated on a setting that has no
+                     * business deciding what a delivery report means.
+                     *
+                     * Only when this hold is the last one: a second inbound
+                     * still pending owns the schedule until it is classified
+                     * too.
+                     */
+                    ...(outcome.restoreSchedule && remainingHolds === 0
+                      ? {
+                          state: current.inboundHoldPreviousState ?? "waiting",
+                          nextActionAt: current.inboundHoldPreviousNextActionAt,
+                          nextActionToken:
+                            current.inboundHoldPreviousNextActionToken,
+                        }
                       : {}),
                     ...(classification.category === "bounce" &&
                     input.bounceKind === "soft"

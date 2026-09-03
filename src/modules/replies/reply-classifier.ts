@@ -60,13 +60,13 @@ export class DeterministicReplyClassifier implements ReplyClassifier {
       );
     const rules: Array<[RegExp, ReplyCategory, number, string]> = [
       [
-        /(?:unsubscribe|remove me|stop emailing|désabonn)/,
+        /(?:unsubscribe|remove me|stop emailing|d[ée]sabonn|d[ée]sinscri|retirer de (?:votre|la|cette) liste|arr[êe]tez de m'envoyer)/,
         "unsubscribe",
         0.99,
         "Explicit opt-out phrase",
       ],
       [
-        /(?:out of office|automatic reply|absent du bureau)/,
+        /(?:out of office|automatic reply|absent du bureau|r[ée]ponse automatique|message d'absence|je suis absent|je serai absent|de retour le)/,
         "out_of_office",
         0.98,
         "Out-of-office phrase",
@@ -104,7 +104,12 @@ export class DeterministicReplyClassifier implements ReplyClassifier {
       ...(machineSender
         ? ([
             [
-              /(?:undeliverable|delivery (?:has )?failed|delivery delayed|could not be delivered|address not found|recipient (?:address )?rejected|user unknown|mailbox (?:is )?full|\b[45]\.\d{1,3}\.\d{1,3}\b)/,
+              // The French wording admitted here is postal, never logistic:
+              // "remis", "adresse inconnue", "destinataire inconnu". A haulier
+              // writing that two pallets could not be delivered says
+              // "livré", and that word is deliberately absent — a bounce
+              // suppresses an address for good.
+              /(?:undeliverable|delivery (?:has )?failed|delivery delayed|could not be delivered|address not found|recipient (?:address )?rejected|user unknown|mailbox (?:is )?full|n(?:'|’)a pas pu [êe]tre remis|non remis|adresse inconnue|destinataire (?:est )?inconnu|bo[îi]te aux lettres pleine|\b[45]\.\d{1,3}\.\d{1,3}\b)/,
               "bounce",
               0.9,
               "Delivery-failure phrase from a mail system",
@@ -117,20 +122,32 @@ export class DeterministicReplyClassifier implements ReplyClassifier {
         0.95,
         "Automated-message phrase",
       ],
+      /**
+       * Somebody else to write to — and only when the sentence says so.
+       *
+       * The lookbehinds are the whole point. "Contact" is a directive in
+       * English and a noun in French: "après avoir pris contact avec mon
+       * équipe, je ne suis pas intéressé" is a refusal, and this rule read the
+       * word, fired first, and recorded `referral` at 0.90 on it. A referral
+       * and a refusal are both terminal, so nothing downstream ever corrected
+       * the stop reason.
+       */
       [
-        /(?:contact|speak (?:to|with)|reach out to)\s+\p{Letter}+/u,
+        /(?<!pris )(?<!en )(?<!le )(?:contact|speak (?:to|with)|reach out to|voir avec|contactez|adressez-vous [àa])\s+\p{Letter}+/u,
         "referral",
         0.9,
         "Alternative contact phrase",
       ],
       [
-        /(?:no thank|not interested|decline|not a fit)/,
+        /(?:no thank|not interested|decline|not a fit|non merci|pas int[ée]ress|sans int[ée]r[êe]t|pas une priorit[ée]|ne (?:nous )?int[ée]resse pas)/,
         "negative",
         0.9,
         "Negative intent phrase",
       ],
       [
-        /(?:\byes\b|\binterested\b|schedule|book a call|sounds good)/,
+        // After the negative rule, and it has to stay there: "pas intéressé"
+        // contains "intéress".
+        /(?:\byes\b|\binterested\b|schedule|book a call|sounds good|\boui\b|m(?:'|’)int[ée]resse|[çc]a m(?:'|’)int[ée]resse|volontiers|avec plaisir)/,
         "positive",
         0.88,
         "Positive intent phrase",

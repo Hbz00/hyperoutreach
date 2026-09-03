@@ -22,6 +22,14 @@ export type ParkedEnrollment = {
    * exists to make a parked prospect actionable could not say what to do.
    */
   heldBy: string | null;
+  /**
+   * How many times a delivery definitively gave up on this prospect's address.
+   *
+   * The column behind it was written on every such failure and read nowhere, so
+   * a prospect parked by repeated undeliverability appeared here with an empty
+   * reason — indistinguishable from one parked by anything else.
+   */
+  deliveryFailures: number;
 };
 
 /**
@@ -50,6 +58,7 @@ export async function readParkedEnrollments(
       accountName: accounts.name,
       campaignName: campaigns.name,
       resolutionReason: contacts.emailResolutionReason,
+      deliveryFailures: enrollments.softBounceCount,
       // The most recent hold, because a prospect can be parked, released and
       // parked again by a different bound. Written out rather than
       // interpolated: Drizzle qualifies an interpolated column inside a `where`

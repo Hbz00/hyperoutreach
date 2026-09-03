@@ -15,7 +15,7 @@
   },
   "fixtureProvenance": {
     "method": "synthetic_contract",
-    "description": "One hundred explicit synthetic captured-output cases for offline evaluator contract and mutation regression testing; not an empirical model benchmark. The three unparsed-bounce reply cases are the exception: their expected category was taken from the production classifier (ChatGPT desktop, GPT-5.6 Sol, Instant), which answered `bounce` at 0.99 confidence on each, so the offline classifier is held to what production actually does. A haulier's own reply about a failed freight delivery is held to `question`, because the prospects this product writes to discuss undelivered goods for a living and a bounce classification suppresses an address permanently.",
+    "description": "One hundred explicit synthetic captured-output cases for offline evaluator contract and mutation regression testing; not an empirical model benchmark. The three unparsed-bounce reply cases are the exception: their expected category was taken from the production classifier (ChatGPT desktop, GPT-5.6 Sol, Instant), which answered `bounce` at 0.99 confidence on each, so the offline classifier is held to what production actually does. A haulier's own reply about a failed freight delivery is held to `question`, because the prospects this product writes to discuss undelivered goods for a living and a bounce classification suppresses an address permanently. The French reply cases are synthetic: they pin that a French refusal is not filed as a referral and a French opt-out reaches suppression. The delay-notice case is transport-parsed, never reaching a classifier: it pins that \"still retrying\" resumes a sequence instead of parking it.",
     "independentlyVerified": false
   },
   "prospects": [
@@ -5197,6 +5197,127 @@
       "expectedTerminal": false,
       "expectedSuppression": false,
       "expectedState": "manual_review",
+      "expectedStopReason": null
+    },
+    {
+      "id": "fr-negative",
+      "input": {
+        "subject": "RE: votre flotte",
+        "body": "Bonjour, je ne suis pas intéressé.",
+        "sender": "claire.blanc@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "negative",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "negative_reply"
+    },
+    {
+      "id": "fr-refusal-reached-through-a-colleague",
+      "input": {
+        "subject": "RE: votre flotte",
+        "body": "Après avoir pris contact avec mon équipe, je ne suis pas intéressé.",
+        "sender": "loic.gerard@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "negative",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "negative_reply"
+    },
+    {
+      "id": "fr-referral",
+      "input": {
+        "subject": "RE: votre flotte",
+        "body": "Merci de voir avec Marie Dupont qui gère ce sujet.",
+        "sender": "didier.leroy@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "referral",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "referral"
+    },
+    {
+      "id": "fr-unsubscribe",
+      "input": {
+        "subject": "RE: votre flotte",
+        "body": "Merci de me retirer de votre liste de diffusion.",
+        "sender": "frederic.chouteau@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "unsubscribe",
+      "expectedTerminal": true,
+      "expectedSuppression": true,
+      "expectedState": "opted_out",
+      "expectedStopReason": "unsubscribe"
+    },
+    {
+      "id": "fr-out-of-office",
+      "input": {
+        "subject": "Réponse automatique",
+        "body": "Je suis absent jusqu'au 3 septembre.",
+        "sender": "sebastien.bouche@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "out_of_office",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
+    },
+    {
+      "id": "fr-positive",
+      "input": {
+        "subject": "RE: votre flotte",
+        "body": "Oui, cela m'intéresse. Pouvons-nous en discuter ?",
+        "sender": "nora.blanc@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "positive",
+      "expectedTerminal": true,
+      "expectedSuppression": false,
+      "expectedState": "replied",
+      "expectedStopReason": "positive_reply"
+    },
+    {
+      "id": "fr-carrier-talks-about-a-failed-delivery",
+      "input": {
+        "subject": "RE: votre flotte",
+        "body": "Deux palettes n'ont pas pu être livrées hier à cause de l'adresse du site.",
+        "sender": "paul.martin@transport-nord.example"
+      },
+      "bounceKind": null,
+      "holdNonTerminal": true,
+      "expectedCategory": "unknown",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": "manual_review",
+      "expectedStopReason": null
+    },
+    {
+      "id": "delayed-delivery",
+      "input": {
+        "subject": "Delivery delayed",
+        "body": "Your message has not been delivered yet. The server will keep retrying for 48 hours.",
+        "sender": "MAILER-DAEMON@wayne.example"
+      },
+      "observedCategory": "bounce",
+      "bounceKind": "delayed",
+      "holdNonTerminal": true,
+      "expectedCategory": "bounce",
+      "expectedTerminal": false,
+      "expectedSuppression": false,
+      "expectedState": null,
       "expectedStopReason": null
     }
   ],

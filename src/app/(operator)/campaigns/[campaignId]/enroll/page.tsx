@@ -9,7 +9,9 @@ import {
   mailboxConnections,
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
+import { campaignConfigurationSchema } from "@/modules/campaigns/input";
 import {
+  countLanguageMismatches,
   ENROLLMENT_CANDIDATE_DISPLAY_LIMIT,
   MAXIMUM_ENROLLMENTS_PER_REQUEST,
   parseEnrollmentFilters,
@@ -83,6 +85,23 @@ export default async function CampaignEnrollPage({
     eligible.length,
     MAXIMUM_ENROLLMENTS_PER_REQUEST,
   );
+  /**
+   * Prospects this campaign would write to in a language that is not theirs.
+   *
+   * Said, not enforced. They stay selectable because a language mismatch is not
+   * a reason a message cannot go out — it is a reason to check that this is the
+   * campaign the operator meant. Prospects whose language nobody established
+   * are not counted: unknown is not wrong.
+   */
+  const campaignLanguage = publishedVersion
+    ? campaignConfigurationSchema.safeParse(publishedVersion.configuration).data
+        ?.language
+    : undefined;
+  const languageMismatches = countLanguageMismatches(
+    eligible,
+    campaignLanguage,
+  );
+
   const exclusions = (
     Object.entries(EXCLUSION_LABELS) as Array<[EnrollmentIneligibility, string]>
   )
@@ -152,6 +171,15 @@ export default async function CampaignEnrollPage({
             <span className="muted">Not shown: {exclusions.join(" · ")}</span>
           ) : null}
         </div>
+        {languageMismatches > 0 && campaignLanguage ? (
+          <p className="hint">
+            {languageMismatches} of them{" "}
+            {languageMismatches === 1 ? "is" : "are"} written to in another
+            language, and this campaign&apos;s steps are in {campaignLanguage}.
+            They are still selectable — narrow the filter, or enroll them in a
+            campaign written in their language.
+          </p>
+        ) : null}
 
         {!publishedVersion ? (
           <p className="hint">

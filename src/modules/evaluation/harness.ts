@@ -242,7 +242,7 @@ export const evaluationFixtureSchema = z
                 sender: z.string().trim().min(1),
               })
               .strict(),
-            bounceKind: z.enum(["hard", "soft"]).nullable(),
+            bounceKind: z.enum(["hard", "soft", "delayed"]).nullable(),
             holdNonTerminal: z.boolean(),
             observedCategory: z.enum(REPLY_CATEGORIES).optional(),
             expectedCategory: z.enum(REPLY_CATEGORIES),

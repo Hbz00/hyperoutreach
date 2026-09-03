@@ -70,6 +70,20 @@ export const campaignConfigurationSchema = z
     holdNonTerminalReplies: z.boolean().optional(),
     requireProfessionalRelevance: z.boolean().optional(),
     campaignDailyCap: z.number().int().positive().max(10_000).optional(),
+    /**
+     * The language the operator wrote this version's templates in.
+     *
+     * On the version, because that is what has exactly one set of templates. A
+     * prospect's own language is a different question — which campaign to
+     * enrol them in — and no per-prospect value can change what a
+     * single-template campaign sends.
+     *
+     * Shape, not a closed list, matching how the AI model and effort labels are
+     * validated: nothing branches on the value, it is passed to the agent that
+     * writes into these templates so its sentence lands in the same language.
+     * An enum here would refuse a market before anyone could try it.
+     */
+    language: z.string().trim().min(2).max(35).optional(),
   })
   .catchall(z.unknown())
   // `reviewMode` used to live here as a three-value enum that no decision path

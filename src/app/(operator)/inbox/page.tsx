@@ -12,6 +12,7 @@ import {
 } from "@/lib/db/schema";
 import { requireOperatorSession } from "@/lib/operator-session-server";
 import {
+  describeBounceKind,
   describeStatus,
   describeStopReason,
 } from "@/modules/presentation/status";
@@ -124,6 +125,13 @@ export default async function InboxPage({
               </div>
               <span className={`badge badge-${row.reply.classification}`}>
                 {row.reply.classification}
+                {/* A delivery report says one of three things and the badge
+                    said only "bounce". A notice that the server is still
+                    retrying is not a failed delivery, and reading it as one is
+                    what this sentence prevents. */}
+                {describeBounceKind(row.reply.bounceKind)
+                  ? ` · ${describeBounceKind(row.reply.bounceKind)}`
+                  : ""}
               </span>
             </header>
             <p className="reply-body">{row.reply.body}</p>

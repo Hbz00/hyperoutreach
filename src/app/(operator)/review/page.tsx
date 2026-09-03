@@ -23,6 +23,7 @@ import {
   readLadderSettings,
 } from "@/modules/email-resolution/ladder-service";
 import {
+  describeDeliveryFailures,
   describeLadderHold,
   describeResolutionReason,
   describeStatus,
@@ -658,6 +659,19 @@ export default async function ReviewPage({
                       {/* Naming the bound is what turns "raise a setting" into
                           an instruction: three of them produce the same
                           sentence above and only one of them is in the way. */}
+                      {/* The other reason a prospect is parked here, and the
+                          one that had no sentence: delivery kept giving up on
+                          the address. Shown as evidence rather than acted on —
+                          a full mailbox is not a dead address, and accepting
+                          another one by hand is the operator's move. */}
+                      {describeDeliveryFailures(row.deliveryFailures) ? (
+                        <>
+                          <br />
+                          <span className="muted">
+                            {describeDeliveryFailures(row.deliveryFailures)}
+                          </span>
+                        </>
+                      ) : null}
                       {row.heldBy && describeLadderHold(row.heldBy) ? (
                         <>
                           <br />

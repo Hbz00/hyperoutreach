@@ -599,6 +599,11 @@ export async function POST(
           "requireProfessionalRelevance",
         ),
         campaignDailyCap: integer(formData, "campaignDailyCap"),
+        // Omitted rather than defaulted when the operator leaves it blank: a
+        // guessed language is the same silent choice the shipped templates
+        // made, and the agent is better left free than told something nobody
+        // decided.
+        language: value(formData, "language"),
       },
       steps: campaignSteps(formData),
     });

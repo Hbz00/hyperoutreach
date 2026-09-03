@@ -92,6 +92,93 @@ describe("reply classification boundary", () => {
     },
   );
 
+  /**
+   * The same questions, asked in the prospects' own language.
+   *
+   * The rule table was written in English with two French tokens bolted on, so
+   * a French refusal, a French opt-out and a French out-of-office all fell
+   * through to `unknown`. Two did worse than fall through: "après avoir pris
+   * contact avec mon équipe, je ne suis pas intéressé" came back `referral` at
+   * 0.90 because the referral rule reads the word "contact" and "pris contact
+   * avec" contains it, and a plain acceptance came back `question` because it
+   * ended in a question mark. Both are terminal, so both wrote a permanently
+   * wrong stop reason.
+   */
+  it.each([
+    ["Bonjour, je ne suis pas intéressé.", "negative"],
+    ["Non merci.", "negative"],
+    ["Ce n'est pas une priorité pour nous cette année.", "negative"],
+    ["Merci de me retirer de votre liste de diffusion.", "unsubscribe"],
+    ["Arrêtez de m'envoyer des emails.", "unsubscribe"],
+    ["Je suis absent jusqu'au 3 septembre.", "out_of_office"],
+    ["Merci de voir avec Marie Dupont qui gère ce sujet.", "referral"],
+    ["Oui, cela m'intéresse. Pouvons-nous en discuter ?", "positive"],
+    // The confident wrong answer, kept as a regression: an explicit refusal
+    // must outrank the mention of a colleague it was reached through.
+    [
+      "Après avoir pris contact avec mon équipe, je ne suis pas intéressé.",
+      "negative",
+    ],
+  ])("classifies French reply text", async (body, category) => {
+    const result = await new DeterministicReplyClassifier().classify({
+      subject: "Re: votre flotte",
+      body,
+      sender: "person@example.com",
+    });
+    expect(result.category).toBe(category);
+  });
+
+  it("reads a French out-of-office subject", async () => {
+    const result = await new DeterministicReplyClassifier().classify({
+      subject: "Réponse automatique",
+      body: "Je serai de retour le 2 septembre.",
+      sender: "person@example.com",
+    });
+    expect(result.category).toBe("out_of_office");
+  });
+
+  /**
+   * The freight guard, in French.
+   *
+   * "N'a pas pu être livré" is what a haulier writes about a pallet and what a
+   * mail system writes about a message. The sender is what tells them apart
+   * here exactly as it does in English, and the French mail wording admitted
+   * below is deliberately postal rather than logistic — "remis", "adresse
+   * inconnue" — so a customer describing a failed delivery is never suppressed.
+   */
+  it.each([
+    [
+      "Notre livraison a échoué au dépôt de Lyon, pouvez-vous renvoyer les documents ?",
+      "marie.durand@transport-nord.example",
+      "question",
+    ],
+    [
+      "Deux palettes n'ont pas pu être livrées hier à cause de l'adresse du site.",
+      "paul.martin@transport-nord.example",
+      "unknown",
+    ],
+    [
+      "Votre message n'a pas pu être remis. Adresse inconnue.",
+      "MAILER-DAEMON@transport-nord.example",
+      "bounce",
+    ],
+    [
+      "Le destinataire est inconnu sur ce serveur.",
+      "postmaster@transport-nord.example",
+      "bounce",
+    ],
+  ])(
+    "reads the sender before calling French freight talk a bounce",
+    async (body, sender, category) => {
+      const result = await new DeterministicReplyClassifier().classify({
+        subject: "RE: votre flotte",
+        body,
+        sender,
+      });
+      expect(result.category).toBe(category);
+    },
+  );
+
   it("rejects an invalid provider classification", () => {
     expect(() =>
       validateReplyClassification({
@@ -135,6 +222,42 @@ describe("reply terminal mapping", () => {
       suppressRecipient: false,
       terminal: false,
     });
+  });
+
+  /**
+   * A delay notice is not a delivery failure.
+   *
+   * RFC 3464 separates `Action: delayed` — "I have not managed it yet and I am
+   * still retrying" — from `Action: failed` — "I retried and I am giving up".
+   * The transport already reads that field and then threw the distinction away
+   * one line later, so a routine delay notice stopped a sequence dead and
+   * cleared its schedule. Greylisting makes that the ordinary case for a cold
+   * first send, which is this product's entire profile.
+   *
+   * The definitive answer still arrives: a message that ultimately fails
+   * produces a second report, and that one parks.
+   */
+  it("resumes a sequence on a delay notice instead of parking it", () => {
+    expect(mapReplyOutcome("bounce", "delayed", true)).toMatchObject({
+      state: null,
+      stopReason: null,
+      terminal: false,
+      clearSchedule: false,
+      restoreSchedule: true,
+      suppressRecipient: false,
+    });
+  });
+
+  it("parks a delivery the server gave up on, whatever the hold setting", () => {
+    for (const holdNonTerminal of [true, false]) {
+      expect(mapReplyOutcome("bounce", "soft", holdNonTerminal)).toMatchObject({
+        state: "manual_review",
+        terminal: false,
+        clearSchedule: true,
+        restoreSchedule: false,
+        suppressRecipient: false,
+      });
+    }
   });
 
   it("holds non-terminal automated replies when configured", () => {

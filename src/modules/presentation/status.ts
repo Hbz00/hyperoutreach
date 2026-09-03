@@ -205,6 +205,47 @@ const LADDER_HOLD_REASONS: Record<string, string> = {
     "the circuit breaker — the explicit-failure share is over “Stop advancing above this failure share” in Settings",
 };
 
+/**
+ * What a delivery report actually said, in the operator's words.
+ *
+ * The reply screen showed the classification alone — `bounce` — so a notice
+ * meaning "the server is still retrying" and one meaning "the server gave up"
+ * were the same word on the one screen whose job is to explain a reply. Only
+ * the second means the message did not arrive, and only the third means the
+ * address does not exist.
+ */
+export function describeBounceKind(
+  kind: "hard" | "soft" | "delayed" | null | undefined,
+): string | null {
+  if (!kind) return null;
+  return kind === "hard"
+    ? "address does not exist"
+    : kind === "soft"
+      ? "delivery gave up"
+      : "still being retried";
+}
+
+/**
+ * How many times a delivery definitively gave up on this address.
+ *
+ * `enrollments.soft_bounce_count` was incremented on every one of them and read
+ * by nothing, which left the parked-prospect list — the one screen whose job is
+ * to make a parked prospect actionable — showing an empty reason.
+ *
+ * Stated to the operator rather than acted on. The address ladder answers one
+ * question, "does this address exist", and a mailbox that was full does not
+ * answer it: advancing on this signal would spend a rung and a per-company
+ * daily budget on evidence about capacity. The operator already holds the
+ * escape hatch — accepting another address by hand — and this is what tells
+ * them it is time to use it.
+ */
+export function describeDeliveryFailures(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1
+    ? "1 delivery gave up on this address"
+    : `${count} deliveries gave up on this address`;
+}
+
 export function describeLadderHold(value: string): string | null {
   return LADDER_HOLD_REASONS[value] ?? null;
 }

@@ -22,6 +22,37 @@ describe("campaign configuration", () => {
   // `automatic` and wrote them into a version that can never be edited. The
   // catchall means simply deleting the key would make the schema *accept* it
   // silently, which is the same lie in a quieter voice.
+  /**
+   * The language the operator wrote the templates in.
+   *
+   * Lives on the version rather than on the prospect because it describes the
+   * templates, and a version has exactly one set of those. A prospect's own
+   * language is a different question — which campaign to enrol them in — and it
+   * cannot change what a single-template campaign sends.
+   *
+   * Validated for shape, not against a fixed list, the same way the AI model
+   * and effort labels are: a closed enum would refuse a market before anyone
+   * could try it, and nothing here branches on the value.
+   */
+  it("accepts the language the templates are written in", () => {
+    const parsed = campaignConfigurationSchema.safeParse({ language: "fr" });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.language).toBe("fr");
+  });
+
+  it("refuses a language that is not a tag", () => {
+    expect(
+      campaignConfigurationSchema.safeParse({ language: "f" }).success,
+    ).toBe(false);
+    expect(
+      campaignConfigurationSchema.safeParse({ language: "  " }).success,
+    ).toBe(false);
+  });
+
+  it("stays valid for a version published before languages existed", () => {
+    expect(campaignConfigurationSchema.safeParse({}).success).toBe(true);
+  });
+
   it("rejects reviewMode rather than silently accepting it through the catchall", () => {
     const result = campaignConfigurationSchema.safeParse({
       reviewMode: "automatic",

@@ -35,6 +35,10 @@ export function createMicrosoftGraphInboundSource(
   const initial = `/me/mailFolders/Inbox/messages/delta?changeType=created&$select=${DELTA_SELECT}&$filter=${filter}`;
   return {
     kind: "microsoft_graph",
+    // The signal is accepted and not used: Graph's client is HTTP, each call is
+    // its own bounded request, and there is no long-lived socket for an abort
+    // to reclaim. Threading it into the Graph client is a separate piece of
+    // work with its own reasons, not a consequence of this one.
     async fetchSince(cursor, ingestPage) {
       let url = cursor ?? initial;
       let rebaselined = false;

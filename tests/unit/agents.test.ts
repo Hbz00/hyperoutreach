@@ -269,6 +269,97 @@ describe("narrow OpenAI agent contracts", () => {
     ).rejects.toThrow();
   });
 
+  /**
+   * The sentence the agent writes is dropped into the operator's template, so
+   * it has to be in the template's language.
+   *
+   * Nothing told it which. A run against French companies produced French job
+   * titles, a mostly-French research blob and `.fr` sources, and the agent was
+   * left to guess — undefined behaviour in the one place the prospect reads.
+   * Carried on a turn that already happens, so it costs nothing.
+   */
+  it("tells the personalization agent which language to write in", async () => {
+    const { provider, run } = providerReturning({
+      fields: [
+        {
+          name: "company_relevance",
+          value: "Mondial Relay ouvre vingt points relais.",
+          confidence: 0.9,
+          sourceUrls: ["https://mondialrelay.example/news"],
+        },
+      ],
+      sources: [
+        {
+          url: "https://mondialrelay.example/news",
+          title: "Actualites",
+          supports: ["personalization"],
+          retrievedAt: null,
+        },
+      ],
+    });
+    await new StructuredPersonalizationAgent(
+      provider,
+      "fast-model",
+    ).personalize({
+      declaredFields: ["company_relevance"],
+      trustedSourceUrls: ["https://mondialrelay.example/news"],
+      language: "fr",
+      context: {
+        company: "Mondial Relay",
+        firstName: "Nora",
+        jobTitle: "Directrice des operations",
+        research: { summary: "Ouverture de points relais" },
+      },
+    });
+    expect(run.mock.calls[0]?.[0]?.instructions).toContain("fr");
+  });
+
+  /**
+   * Which language a prospect is written to in, read off their own profile.
+   *
+   * Asked of the agent rather than inferred from the account's country, because
+   * country is not language and the live data says so: ten contacts at one
+   * French company, seven French titles, two English, one mixed. Optional, so a
+   * profile that does not settle the question leaves it unanswered instead of
+   * answering it wrongly.
+   */
+  it("asks contact discovery which language each person is written to in", async () => {
+    const { provider, run } = providerReturning({
+      contacts: [
+        {
+          firstName: "Nora",
+          lastName: "Blanc",
+          jobTitle: "Directrice des operations",
+          language: "fr",
+          linkedinUrl: "https://www.linkedin.com/in/nora-blanc",
+          confidence: 0.9,
+          evidence: [
+            {
+              url: "https://mondialrelay.example/team",
+              title: "Equipe",
+              supports: ["employment", "job_title"],
+              retrievedAt: null,
+            },
+          ],
+        },
+      ],
+    });
+    const result = await new StructuredContactDiscoveryAgent(
+      provider,
+      "research-model",
+    ).discover({
+      account: {
+        id: "27ecb44c-c619-4af9-b409-12d1a805dc0c",
+        name: "Mondial Relay",
+        domain: "mondialrelay.example",
+      },
+      roles: ["Directrice des operations"],
+      limit: 5,
+    });
+    expect(run.mock.calls[0]?.[0]?.instructions).toContain("language");
+    expect(result.output.contacts[0]?.language).toBe("fr");
+  });
+
   it("personalizes only declared reasoning fields", async () => {
     const { provider } = providerReturning(
       {

@@ -11,6 +11,7 @@ import {
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
 import type { PersonalizationAgent } from "@/modules/agents/contracts";
+import { campaignConfigurationSchema } from "@/modules/campaigns/input";
 import { readPersonalizationDeclaration } from "@/modules/messages/personalization-declaration";
 import {
   generateOutreachProposal,
@@ -67,6 +68,7 @@ export async function generateWithPersonalization(
       jobTitle: contacts.jobTitle,
       researchStatus: accounts.researchStatus,
       researchSnapshot: accounts.researchSnapshot,
+      configuration: campaignVersions.configuration,
       inboundHoldCount: enrollments.inboundHoldCount,
     })
     .from(enrollments)
@@ -161,9 +163,25 @@ export async function generateWithPersonalization(
     };
   }
 
+  /**
+   * The language this version's templates are written in, when it declared one.
+   *
+   * Read through the schema that owns the shape rather than off the raw jsonb,
+   * so a version whose configuration predates the field — every version
+   * published so far — yields `undefined` instead of throwing, and the agent is
+   * left exactly as free as it was.
+   */
+  const configuration = campaignConfigurationSchema.safeParse(
+    context.configuration,
+  );
+  const language = configuration.success
+    ? configuration.data.language
+    : undefined;
+
   const personalized = await personalizeReasoningFields(db, agent, {
     declaredFields: declared.fields,
     trustedSourceUrls,
+    ...(language ? { language } : {}),
     context: {
       company: context.company,
       firstName: context.firstName,

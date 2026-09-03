@@ -95,6 +95,71 @@ describe("operator command queue", () => {
     expect(runs).toHaveLength(1);
   });
 
+  /**
+   * The pass is bounded by its caller, and the boundary is between commands.
+   *
+   * The maintenance cycle races this stage against a deadline: when the timer
+   * wins, the cycle records a failure and hands its lease back while the pass
+   * keeps claiming. Without the signal the next cycle and the abandoned one
+   * drain the same queue side by side — no row runs twice, the claim sees to
+   * that, but the tick that reported failure is still spending the operator's
+   * ChatGPT window.
+   */
+  it("claims nothing once the caller's deadline has already passed", async () => {
+    const queued = await queueResearch();
+    const controller = new AbortController();
+    controller.abort();
+    const ran: string[] = [];
+
+    const drained = await drainOperatorCommands(
+      db,
+      async (input: { runId: string }) => {
+        ran.push(input.runId);
+        return { ok: true };
+      },
+      { now: NOW, signal: controller.signal },
+    );
+
+    expect(drained).toEqual([]);
+    expect(ran).toEqual([]);
+    // Untouched, not merely unfinished: a pass that never started this command
+    // must not spend one of its four attempts on it.
+    expect(await readCommand(queued.id)).toMatchObject({
+      status: "queued",
+      attempt: 0,
+      runId: null,
+      claimId: null,
+    });
+  });
+
+  it("lets the command in flight finish and refuses to start the next", async () => {
+    const first = await queueResearch({ dedupeKey: "deadline-first" });
+    const second = await queueResearch({ dedupeKey: "deadline-second" });
+    const controller = new AbortController();
+    let started = 0;
+
+    const drained = await drainOperatorCommands(
+      db,
+      async () => {
+        // The deadline expires while this one is at the provider. Abandoning it
+        // there would leave a claim standing for fifteen minutes over work
+        // nobody is doing; the one behind it simply waits for the next pass.
+        started += 1;
+        controller.abort();
+        return { ok: true };
+      },
+      { now: NOW, signal: controller.signal },
+    );
+
+    expect(started).toBe(1);
+    expect(drained).toHaveLength(1);
+    expect(await readCommand(first.id)).toMatchObject({ status: "succeeded" });
+    expect(await readCommand(second.id)).toMatchObject({
+      status: "queued",
+      attempt: 0,
+    });
+  });
+
   it("refuses to record an outcome for a claim it no longer holds", async () => {
     const queued = await queueResearch();
     const drained = await drainOperatorCommands(

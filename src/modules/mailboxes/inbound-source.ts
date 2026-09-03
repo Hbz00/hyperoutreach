@@ -19,5 +19,15 @@ export interface InboundMailSource {
   fetchSince(
     cursor: string | null,
     ingestPage: (messages: unknown[]) => Promise<number>,
+    /**
+     * The round's deadline, when it has one.
+     *
+     * Per call rather than held on the source, and that is the point: a source
+     * carrying a signal in a field invites being constructed once and reused
+     * across rounds, at which moment a stale aborted signal silently kills
+     * every future round. `ImapPort` already models cancellation per operation
+     * for the same reason.
+     */
+    options?: { signal?: AbortSignal },
   ): Promise<InboundFetchResult>;
 }

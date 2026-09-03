@@ -1,3 +1,25 @@
+import maintenanceConfig from "../../../config/maintenance.json";
+
+/**
+ * How long a cycle may legitimately be in flight.
+ *
+ * The sum of every stage's own deadline, plus one interval of slack for the
+ * bookkeeping between them. Past this a cycle cannot still be working, because
+ * each stage is bounded — so a fresh heartbeat past this point proves the
+ * process is alive and the work is not, which are the two things a single
+ * "running" state used to conflate.
+ */
+export function getMaintenanceCycleCeilingMs(intervalMs: number): number {
+  const stages = maintenanceConfig.stageMaximumsMs;
+  return (
+    stages.inbound +
+    stages.followups +
+    stages.recovery +
+    stages.commands +
+    intervalMs
+  );
+}
+
 export type MaintenanceStatus =
   "not_started" | "running" | "stalled" | "failed" | "overdue" | "healthy";
 
@@ -39,6 +61,15 @@ export function resolveMaintenanceStatus(
     : Number.POSITIVE_INFINITY;
 
   if (projection.ownerToken && heartbeatAgeMs <= options.staleLeaseMs) {
+    // A heartbeat says the process lives; it says nothing about progress. Every
+    // stage is deadlined, so a cycle older than all of them together is stuck
+    // rather than busy, and the operator is owed the difference.
+    const cycleAgeMs = projection.cycleStartedAt
+      ? options.now.getTime() - projection.cycleStartedAt.getTime()
+      : 0;
+    if (cycleAgeMs > getMaintenanceCycleCeilingMs(options.intervalMs)) {
+      return { state: "stalled", overdueWindowMs };
+    }
     return { state: "running", overdueWindowMs };
   }
 

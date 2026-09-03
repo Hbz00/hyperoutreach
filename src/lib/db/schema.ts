@@ -158,7 +158,14 @@ export const stopReason = pgEnum("stop_reason", [
   "mailbox_unavailable",
   "employment_changed",
 ]);
-export const bounceKind = pgEnum("bounce_kind", ["hard", "soft"]);
+/**
+ * What a delivery report said, in three states rather than two.
+ *
+ * `delayed` is a report that the message has not been given up on — the
+ * reporting server is still retrying. It is stored so the operator can see it
+ * on the reply, and so nothing downstream mistakes "not yet" for "never".
+ */
+export const bounceKind = pgEnum("bounce_kind", ["hard", "soft", "delayed"]);
 export const messageDirection = pgEnum("message_direction", [
   "outbound",
   "inbound",
@@ -266,6 +273,18 @@ export const contacts = pgTable(
     fullName: text("full_name").notNull(),
     normalizedFullName: text("normalized_full_name").notNull(),
     jobTitle: text("job_title"),
+    /**
+     * The language this person is written to in, as the discovery agent read it
+     * off their public profile.
+     *
+     * Nullable and never guessed. Country is not language — a live account list
+     * had ten contacts at one French company whose titles were seven French,
+     * two English and one of each in the same string — so an absent value means
+     * "nobody established it" and no default is invented for it. It selects
+     * which campaign a prospect belongs in; it cannot change what a campaign
+     * sends, because the message's language is the template's.
+     */
+    language: text("language"),
     linkedinUrl: text("linkedin_url"),
     status: contactStatus("status").default("discovered").notNull(),
     professionalRelevance: jsonb("professional_relevance").$type<

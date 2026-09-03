@@ -92,6 +92,7 @@ async function fixture(
     declared?: Record<string, unknown>;
     researched?: boolean;
     evidence?: boolean;
+    language?: string;
   } = {},
 ) {
   const suffix = crypto.randomUUID().slice(0, 8);
@@ -138,7 +139,13 @@ async function fixture(
     .returning();
   const [version] = await db
     .insert(schema.campaignVersions)
-    .values({ campaignId: campaign!.id, version: 1 })
+    .values({
+      campaignId: campaign!.id,
+      version: 1,
+      ...(options.language
+        ? { configuration: { language: options.language } }
+        : {}),
+    })
     .returning();
   await db.insert(schema.sequenceSteps).values({
     campaignVersionId: version!.id,
@@ -173,6 +180,32 @@ async function fixture(
   return { account: account!, enrollment: enrollment! };
 }
 
+/**
+ * The agent's sentence is dropped into the operator's template, so it has to
+ * come back in the template's language.
+ *
+ * Nothing told it which before. A run against French companies handed the agent
+ * French job titles, a French-leaning research blob and `.fr` sources, and left
+ * the language to chance — in the one field a prospect actually reads.
+ */
+async function languageSeenBy(language?: string): Promise<string | undefined> {
+  let seen: string | undefined;
+  const capturing: PersonalizationAgent = {
+    ...deterministicAgent,
+    async personalize(input) {
+      seen = input.language;
+      return deterministicAgent.personalize(input);
+    },
+  };
+  const { enrollment } = await fixture({
+    declared: { fields: ["company_relevance"], minConfidence: 0.5 },
+    ...(language ? { language } : {}),
+  });
+  const result = await generate(enrollment.id, capturing);
+  if (!result.ok) throw new Error(`Generation failed: ${result.code}`);
+  return seen;
+}
+
 function generate(
   enrollmentId: string,
   agent: PersonalizationAgent = deterministicAgent,
@@ -201,6 +234,16 @@ describe("the agent writes part of the message", () => {
 
   afterAll(async () => {
     await client.end();
+  });
+
+  it("hands the agent the language the campaign version declared", async () => {
+    expect(await languageSeenBy("fr")).toBe("fr");
+  });
+
+  it("says nothing about language for a version published before it existed", async () => {
+    // The live campaign has no language on its configuration, and it must keep
+    // generating exactly as it did rather than be told a language nobody chose.
+    expect(await languageSeenBy()).toBeUndefined();
   });
 
   it("leaves a step that declares nothing entirely deterministic", async () => {

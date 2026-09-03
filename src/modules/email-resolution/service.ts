@@ -21,6 +21,8 @@ import type { DnsMxResolver } from "@/modules/email-resolution/dns";
 import {
   generateCandidateAddress,
   inferEmailPatterns,
+  type NameRendering,
+  unusedPublicSamples,
   scoreEmailCandidate,
 } from "@/modules/email-resolution/patterns";
 import {
@@ -559,6 +561,21 @@ export async function resolveContactEmail(
   const candidates = new Map<string, CandidateValue>();
   const patterns = inferEmailPatterns(publicSamples, domain);
   /**
+   * The addresses this company's own search produced that no convention here
+   * explains.
+   *
+   * Recorded rather than discarded, because a confidence without its
+   * denominator is a number that cannot be argued with. A real run scored
+   * `first.last` at 0.970 on five samples while seven more at the same domain
+   * said something `EMAIL_PATTERNS` has no name for, and nothing anywhere said
+   * so. Written onto every candidate rather than once per company: the
+   * candidate row is what an operator opens when an address turns out wrong,
+   * and it is the row a bounce points at.
+   */
+  const unusedSamples = unusedPublicSamples(publicSamples, domain).map(
+    (sample) => sample.email,
+  );
+  /**
    * What this company's own delivery record has already said about these
    * conventions.
    *
@@ -582,36 +599,76 @@ export async function resolveContactEmail(
     .from(emailCandidates)
     .where(eq(emailCandidates.contactId, owner.contact.id));
   for (const pattern of patterns) {
-    const email = generateCandidateAddress({
-      firstName: owner.contact.firstName,
-      lastName: owner.contact.lastName,
-      domain,
-      pattern: pattern.pattern,
-    });
-    const confidence = scoreEmailCandidate({
-      sampleCount: pattern.sampleCount,
-      mxValid: mx.hasMx,
-    });
-    candidates.set(email, {
-      email,
-      normalizedEmail: email,
-      domain,
-      pattern: pattern.pattern,
-      confidence,
-      source: "public_pattern",
-      mxValid: mx.hasMx,
-      evidence: {
-        sourceUrls: pattern.sourceUrls,
+    /**
+     * The spellings this convention names for this person, best first.
+     *
+     * One entry for an ordinary name — the two renderings produce the same
+     * local part, so nothing is guessed and nothing extra is stored. Two for a
+     * compound name, and the order is the whole decision: what this company's
+     * own samples were observed to do, or, when none of them had a compound
+     * name to observe, the spelling that keeps what the name contains.
+     */
+    const renderings: NameRendering[] = pattern.preferredRendering
+      ? [
+          pattern.preferredRendering,
+          pattern.preferredRendering === "hyphenated"
+            ? "collapsed"
+            : "hyphenated",
+        ]
+      : ["hyphenated", "collapsed"];
+    let best = true;
+    const written = new Set<string>();
+    for (const rendering of renderings) {
+      let email: string;
+      try {
+        email = generateCandidateAddress({
+          firstName: owner.contact.firstName,
+          lastName: owner.contact.lastName,
+          domain,
+          pattern: pattern.pattern,
+          rendering,
+        });
+      } catch {
+        continue;
+      }
+      if (written.has(email)) continue;
+      written.add(email);
+      const evidenced = scoreEmailCandidate({
         sampleCount: pattern.sampleCount,
-        mxRecords: mx.records,
-        // When the company was searched, which is not when this contact was
-        // resolved: a colleague's search is reused for up to thirty days, and
-        // an operator deciding whether to force a fresh one has no other way to
-        // tell a search made today from one made four weeks ago.
-        searchedAt: evidenceFoundAt.toISOString(),
-        evidenceOrigin: reusing ? ("reused" as const) : ("searched" as const),
-      },
-    });
+        mxValid: mx.hasMx,
+      });
+      // The runner-up spelling is the same convention written a way nothing
+      // observed. Capped at what a single-sample convention scores, so it is a
+      // rung the ladder can reach and never the address a first send goes to.
+      const confidence = best ? evidenced : Math.min(evidenced, 0.75);
+      best = false;
+      // Two conventions can spell one person's name identically; the
+      // better-evidenced answer keeps the row.
+      const existing = candidates.get(email);
+      if (existing && existing.confidence >= confidence) continue;
+      candidates.set(email, {
+        email,
+        normalizedEmail: email,
+        domain,
+        pattern: pattern.pattern,
+        confidence,
+        source: "public_pattern",
+        mxValid: mx.hasMx,
+        evidence: {
+          sourceUrls: pattern.sourceUrls,
+          sampleCount: pattern.sampleCount,
+          mxRecords: mx.records,
+          // When the company was searched, which is not when this contact was
+          // resolved: a colleague's search is reused for up to thirty days, and
+          // an operator deciding whether to force a fresh one has no other way to
+          // tell a search made today from one made four weeks ago.
+          searchedAt: evidenceFoundAt.toISOString(),
+          evidenceOrigin: reusing ? ("reused" as const) : ("searched" as const),
+          unusedSamples,
+          rendering,
+        },
+      });
+    }
   }
 
   let bestConfidence = Math.max(

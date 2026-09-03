@@ -1884,6 +1884,11 @@ describe("address attempt ladder", () => {
       );
       expect(row?.contactName).toBe(parkedByBound.contact.fullName);
       expect(row?.resolutionReason).toBe("ladder_limit_reached");
+      // Carried on every parked row, not only on the ones delivery gave up on:
+      // the column behind it was written from the beginning and read by
+      // nothing, which is what left this screen's reason column blank for a
+      // prospect parked by repeated undeliverability.
+      expect(row?.deliveryFailures).toBe(0);
     });
 
     it("never counts one send as both proven dead and reached", async () => {

@@ -34,6 +34,13 @@ import {
   WorkflowRuntime,
   type WorkflowTaskServices,
 } from "@/modules/workflows/runtime";
+import { createOrGetAccount } from "@/modules/accounts/service";
+import { createOrGetContact } from "@/modules/contacts/service";
+import {
+  createDraftCampaign,
+  enrollContact,
+  publishCampaignVersion,
+} from "@/modules/campaigns/service";
 import { createWorkflowTaskServices } from "@/modules/workflows/service-factory";
 import { WORKFLOW_TASKS } from "@/modules/workflows/task-contracts";
 
@@ -133,6 +140,56 @@ async function projection() {
     .where(eq(schema.maintenanceState.id, 1));
   if (!row) throw new Error("maintenance projection missing");
   return row;
+}
+
+/** One enrollment whose next action is already due, and nothing else. */
+async function createDueEnrollment(label: string) {
+  const account = await createOrGetAccount(db, {
+    name: `Deadline ${label}`,
+    domain: `deadline-${label}.example`,
+  });
+  if (!account.ok) throw new Error("Account fixture failed");
+  const contact = await createOrGetContact(db, {
+    accountId: account.account.id,
+    firstName: "Iris",
+    lastName: label,
+    jobTitle: "Directrice des opérations",
+  });
+  if (!contact.ok) throw new Error("Contact fixture failed");
+  const campaign = await createDraftCampaign(db, {
+    name: `Deadline campaign ${label}`,
+    type: "commercial_outreach",
+    targetDescription: "Operations leaders",
+    configuration: {},
+    steps: [
+      {
+        delayMinutes: 0,
+        subjectTemplate: "Hello {{first_name}}",
+        bodyTemplate: "First touch",
+      },
+    ],
+  });
+  if (!campaign.ok) throw new Error("Campaign fixture failed");
+  const published = await publishCampaignVersion(db, {
+    campaignId: campaign.campaign.id,
+    campaignVersionId: campaign.version.id,
+  });
+  if (!published.ok) throw new Error("Campaign publish failed");
+  const enrollment = await enrollContact(db, {
+    campaignId: campaign.campaign.id,
+    campaignVersionId: campaign.version.id,
+    contactId: contact.contact.id,
+  });
+  if (!enrollment.ok) throw new Error("Enrollment fixture failed");
+  await db
+    .update(schema.enrollments)
+    .set({
+      state: "waiting",
+      nextActionAt: new Date("2026-08-14T10:00:00.000Z"),
+      nextActionToken: `deadline-${enrollment.enrollment.id}`,
+    })
+    .where(eq(schema.enrollments.id, enrollment.enrollment.id));
+  return enrollment.enrollment.id;
 }
 
 describe("aggregate maintenance dispatch", () => {
@@ -443,6 +500,115 @@ describe("aggregate maintenance dispatch", () => {
     }
   });
 
+  /**
+   * The deadline reaching the work, proven against the real inbound stage.
+   *
+   * A budget that only bounds the cycle leaves the abandoned round running and
+   * holding its advisory lock — the twenty-eight-minute wedge moved rather than
+   * fixed, because the next cycle's inbound stage then blocks behind that same
+   * lock. This asserts the three things that together close it: the cycle ends,
+   * the round is told to stop, and the lock is gone afterwards.
+   */
+  it("cancels a hung inbound round and leaves no advisory lock behind", async () => {
+    const originalGraph = resolveInboundProvider("microsoft_graph");
+    const aborted = deferred();
+    const started = deferred();
+    registerInboundProvider("microsoft_graph", {
+      createSource: () => ({
+        kind: "microsoft_graph",
+        async fetchSince(
+          _cursor: string | null,
+          _ingestPage: (messages: unknown[]) => Promise<number>,
+          options?: { signal?: AbortSignal },
+        ) {
+          started.resolve();
+          // Never returns on its own, exactly like a socket that stopped
+          // answering — and rejects on abort, exactly like `ImapClient`, whose
+          // `fetchRange` closes its connection when the signal fires and makes
+          // the iteration throw. A source that merely *observed* the abort
+          // would keep its advisory lock, which is the whole point of the last
+          // assertion below.
+          return new Promise<never>((_resolve, reject) => {
+            options?.signal?.addEventListener(
+              "abort",
+              () => {
+                aborted.resolve();
+                reject(
+                  new DOMException("The operation was aborted", "AbortError"),
+                );
+              },
+              { once: true },
+            );
+          });
+        },
+      }),
+      naming: (mailboxId) => defaultInboundNaming("microsoft_graph", mailboxId),
+      cursorEvents: () => defaultInboundCursorEvents("microsoft_graph"),
+    });
+    const address = `hung-${crypto.randomUUID()}@example.com`;
+    const [created] = await db
+      .insert(schema.mailboxConnections)
+      .values({
+        provider: "microsoft_graph" as const,
+        email: address,
+        normalizedEmail: address,
+        status: "available" as const,
+        syncCursor: "cursor-hung",
+        lastSyncedAt: new Date("2026-08-14T10:00:00.000Z"),
+      })
+      .returning({ id: schema.mailboxConnections.id });
+
+    try {
+      const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
+      const cycle = runMaintenanceCycle(
+        db,
+        {
+          "reconcile-inbound-mailboxes":
+            services["reconcile-inbound-mailboxes"],
+          "reconcile-due-follow-ups": vi.fn(async () => []),
+          "recover-stale-work": vi.fn(async () => ({ recovered: 0 })),
+          "drain-operator-commands": vi.fn(async () => []),
+        },
+        { observedAt: "2026-08-14T10:42:00.000Z" },
+        {
+          clock: () => new Date("2026-08-14T10:42:00.000Z"),
+          createOwnerToken: () => `hung-${crypto.randomUUID()}`,
+          heartbeatMs: 60_000,
+          leaseStaleMs: 120_000,
+          stageBudgetsMs: { inbound: 150 },
+        },
+      );
+
+      await started.promise;
+      await expect(cycle).rejects.toThrow("Maintenance cycle failed");
+      // The round was told to stop, not merely left behind.
+      await aborted.promise;
+
+      // Scoped to this database: `pg_locks` is cluster-wide and would also see
+      // anything else running on the same PostgreSQL server.
+      const deadline = Date.now() + 5_000;
+      let count = -1;
+      do {
+        [{ count }] = await client<[{ count: number }]>`
+          select count(*)::int as count
+          from pg_locks
+          where locktype = 'advisory'
+            and database = (select oid from pg_database where datname = current_database())
+        `;
+        if (count === 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } while (Date.now() < deadline);
+      expect(count).toBe(0);
+    } finally {
+      registerInboundProvider("microsoft_graph", originalGraph);
+      if (created) {
+        await db
+          .delete(schema.mailboxConnections)
+          .where(eq(schema.mailboxConnections.id, created.id));
+      }
+    }
+  });
+
   it("honors an explicit limit for the narrow inbound mailbox task", async () => {
     const originalGraph = resolveInboundProvider("microsoft_graph");
     const reconciled: string[] = [];
@@ -695,6 +861,159 @@ describe("aggregate maintenance dispatch", () => {
       ),
     ).resolves.toMatchObject({ status: "succeeded" });
     expect(order).toEqual(["inbound", "followups", "recovery"]);
+  });
+
+  /**
+   * A stage that never returns used to hold the lease forever.
+   *
+   * Observed in production: the inbound stage ran for twenty-eight minutes, the
+   * heartbeat kept renewing its lease so the stale-lease takeover never fired,
+   * and every tick in between recorded `maintenance-cycle.attempt` as
+   * `succeeded` — the dispatch had succeeded, the cycle had not. No inbound
+   * mail, no follow-ups, no recovery, no operator commands, and nothing said
+   * so. `config/maintenance.json` had declared `stageMaximumsMs.inbound` since
+   * the beginning; no code read it.
+   */
+  it("ends a cycle whose stage outruns its budget instead of holding the lease", async () => {
+    const hung = stages({
+      "reconcile-inbound-mailboxes": vi.fn(() => new Promise<never>(() => {})),
+    });
+
+    await expect(
+      runMaintenanceCycle(
+        db,
+        hung,
+        { observedAt: "2026-08-14T10:42:00.000Z" },
+        {
+          clock: () => new Date("2026-08-14T10:42:00.000Z"),
+          createOwnerToken: () => "hung-owner",
+          heartbeatMs: 60_000,
+          leaseStaleMs: 120_000,
+          stageBudgetsMs: { inbound: 50 },
+        },
+      ),
+    ).rejects.toThrow("Maintenance cycle failed");
+
+    expect(hung["reconcile-due-follow-ups"]).not.toHaveBeenCalled();
+    const row = await projection();
+    // Released, so the very next tick can claim it rather than waiting on a
+    // heartbeat that will never stop.
+    expect(row.ownerToken).toBeNull();
+    expect(row.lastError).toBe("Maintenance inbound stage failed");
+  });
+
+  /**
+   * The deadline is offered to the stage, not only enforced around it.
+   *
+   * Racing a promise leaves the losing work running — and still holding its
+   * advisory lock. The signal is what a stage needs to actually stop. This pins
+   * the offer itself against a stage that only listens; the tests around it
+   * prove the production stages act on what they are offered.
+   */
+  it("aborts the signal it handed the stage when the budget expires", async () => {
+    let aborted = false;
+    const hung = stages({
+      "reconcile-inbound-mailboxes": vi.fn(
+        (_payload: unknown, options?: { signal: AbortSignal }) => {
+          options?.signal.addEventListener("abort", () => {
+            aborted = true;
+          });
+          return new Promise<never>(() => {});
+        },
+      ),
+    });
+
+    await expect(
+      runMaintenanceCycle(
+        db,
+        hung,
+        { observedAt: "2026-08-14T10:42:00.000Z" },
+        {
+          clock: () => new Date("2026-08-14T10:42:00.000Z"),
+          createOwnerToken: () => "signalled-owner",
+          heartbeatMs: 60_000,
+          leaseStaleMs: 120_000,
+          stageBudgetsMs: { inbound: 50 },
+        },
+      ),
+    ).rejects.toThrow("Maintenance cycle failed");
+    expect(aborted).toBe(true);
+  });
+
+  /**
+   * The follow-up stage stops between prospects, on the real stage.
+   *
+   * It is the stage most likely to reach its deadline honestly — up to fifty
+   * due enrollments, a provider round trip each — and the cycle hands its lease
+   * back the moment that deadline fires. An abandoned loop would go on sending
+   * under a lease the next tick already owns, and the audit row would already
+   * say the cycle failed.
+   */
+  it("stops the follow-up stage before the next prospect once the budget expires", async () => {
+    await createDueEnrollment("followups");
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
+    const expired = new AbortController();
+    expired.abort();
+
+    const afterDeadline = await services["reconcile-due-follow-ups"](
+      { observedAt: "2026-08-14T10:42:00.000Z" },
+      { signal: expired.signal },
+    );
+    expect(afterDeadline).toEqual([]);
+
+    // The same tick, with budget left, does reach this prospect — which is what
+    // makes the empty result above a stop rather than an empty queue.
+    const withBudget = await services["reconcile-due-follow-ups"]({
+      observedAt: "2026-08-14T10:42:00.000Z",
+    });
+    expect(withBudget).toHaveLength(1);
+  });
+
+  /**
+   * The recovery stage stops at its lane boundaries.
+   *
+   * Every lane it runs either originates a delivery or spends an AI turn, and
+   * its last one completes the follow-ups the stage before it did not reach —
+   * the same sends, taken again under a lease that has already been handed
+   * back. The two lookups and the single pending inbound record are left to
+   * run: one row apiece, and skipping them would only make the returned shape
+   * lie about which lanes ran.
+   */
+  it("stops the recovery stage at its lane boundaries once the budget expires", async () => {
+    await createDueEnrollment("recovery");
+    const services = createWorkflowTaskServices(db, { AI_PROVIDER: "mock" });
+    const expired = new AbortController();
+    expired.abort();
+
+    const afterDeadline = (await services["recover-stale-work"](
+      { observedAt: "2026-08-14T10:42:00.000Z" },
+      { signal: expired.signal },
+    )) as { scheduledSends: unknown[]; followUpsRecovered: unknown[] };
+    expect(afterDeadline.scheduledSends).toEqual([]);
+    expect(afterDeadline.followUpsRecovered).toEqual([]);
+
+    const withBudget = (await services["recover-stale-work"]({
+      observedAt: "2026-08-14T10:42:00.000Z",
+    })) as { followUpsRecovered: unknown[] };
+    expect(withBudget.followUpsRecovered).toHaveLength(1);
+  });
+
+  it("leaves a stage that finishes inside its budget untouched", async () => {
+    const quick = stages({});
+    await expect(
+      runMaintenanceCycle(
+        db,
+        quick,
+        { observedAt: "2026-08-14T10:42:00.000Z" },
+        {
+          clock: () => new Date("2026-08-14T10:42:00.000Z"),
+          createOwnerToken: () => "quick-owner",
+          heartbeatMs: 60_000,
+          leaseStaleMs: 120_000,
+          stageBudgetsMs: { inbound: 5_000 },
+        },
+      ),
+    ).resolves.toMatchObject({ status: "succeeded" });
   });
 
   it("aborts after inbound failure, persists a sanitized failure, and releases ownership", async () => {

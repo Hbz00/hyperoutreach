@@ -107,7 +107,20 @@ export type DrainedOperatorCommand = {
 export async function drainOperatorCommands(
   db: AppDatabase,
   execute: OperatorCommandExecutor,
-  options: { now?: Date; limit?: number; clock?: () => Date } = {},
+  options: {
+    now?: Date;
+    limit?: number;
+    clock?: () => Date;
+    /**
+     * The caller's deadline, honoured between commands.
+     *
+     * The maintenance cycle bounds this stage by racing it against a timer,
+     * which ends the *cycle* and releases its lease while the pass keeps
+     * claiming. This is how the pass is told that the lease it was draining
+     * under is gone.
+     */
+    signal?: AbortSignal;
+  } = {},
 ): Promise<DrainedOperatorCommand[]> {
   // `now` fixes what is *due* and what lease has *expired*: one reference for
   // the whole pass, so a command that becomes eligible mid-pass waits for the
@@ -139,6 +152,12 @@ export async function drainOperatorCommands(
   let parked = 0;
 
   while (executed < limit && parked < parkLimit) {
+    // Between commands, never inside one. A command in flight holds its claim
+    // for fifteen minutes and may be holding the operator's single ChatGPT
+    // window; a caller that ran out of budget has a reason not to start
+    // another, not a reason to abandon the one running. Everything unclaimed
+    // keeps its place for the next pass.
+    if (options.signal?.aborted) break;
     const claimId = randomUUID();
     const runId = `command_${randomUUID()}`;
     const claimed = await claimNextCommand(db, {

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."bounce_kind" ADD VALUE 'delayed';

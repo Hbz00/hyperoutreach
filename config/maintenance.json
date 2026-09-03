@@ -4,7 +4,7 @@
     "inbound": 300000,
     "followups": 180000,
     "recovery": 300000,
-    "commands": 600000
+    "commands": 660000
   },
   "transportMarginMs": 60000,
   "aggregateBudgetMs": 1500000,

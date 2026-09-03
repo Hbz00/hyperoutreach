@@ -1602,7 +1602,14 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
     const deadline = Date.now() + 2_000;
     do {
       [{ count }] = await client<[{ count: number }]>`
-        select count(*)::int as count from pg_locks where locktype = 'advisory'
+        -- Scoped to this database. \`pg_locks\` is a cluster-wide view, so an
+        -- unfiltered count also sees the operator's own running stack on the
+        -- same PostgreSQL server — which turned a real product guarantee into a
+        -- test that only passes when nothing else is using the machine.
+        select count(*)::int as count
+        from pg_locks
+        where locktype = 'advisory'
+          and database = (select oid from pg_database where datname = current_database())
       `;
       if (count === 0) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -2186,6 +2193,86 @@ describe("durable lifecycle, inbound replies, and suppression", () => {
       ).toBe(suppressed);
     },
   );
+
+  /**
+   * The whole feature, as one sequence.
+   *
+   * A delay notice says the message has not been given up on — the reporting
+   * server is still retrying, and greylisting makes that the ordinary answer
+   * to a cold first send. It used to park the enrollment and clear its
+   * schedule, which is the opposite of what it means. It now resumes, and the
+   * definitive answer still arrives: when the server finally gives up, that
+   * second report is what parks the prospect for a human.
+   */
+  it("resumes on a delay notice and parks only when the server gives up", async () => {
+    const f = await fixture();
+    const read = async () => {
+      const [row] = await db
+        .select({
+          state: schema.enrollments.state,
+          nextActionAt: schema.enrollments.nextActionAt,
+          nextActionToken: schema.enrollments.nextActionToken,
+          softBounceCount: schema.enrollments.softBounceCount,
+        })
+        .from(schema.enrollments)
+        .where(eq(schema.enrollments.id, f.enrollment.id));
+      return row!;
+    };
+    const before = await read();
+
+    expect(
+      await ingestInboundMessage(db, classifier, {
+        mailboxId: f.mailbox.id,
+        providerMessageId: `dsn-delayed-${sequence}`,
+        conversationId: f.message.conversationId,
+        inReplyTo: f.message.internetMessageId,
+        sender: "postmaster@example.net",
+        recipient: f.mailbox.email,
+        bouncedRecipient: f.recipient,
+        subject: "Delivery delayed",
+        body: "The server will keep trying for 48 hours.",
+        bounceKind: "delayed",
+        receivedAt: new Date("2026-08-11T10:30:00Z"),
+      }),
+    ).toMatchObject({ ok: true, disposition: "processed" });
+
+    const afterDelay = await read();
+    // Put back exactly as it was: the arrival of any matched message parks the
+    // enrollment before it is classified, so "do not stop" has to be an
+    // explicit restore rather than an absence of change.
+    expect(afterDelay.state).toBe(before.state);
+    expect(afterDelay.nextActionAt).toEqual(before.nextActionAt);
+    expect(afterDelay.nextActionToken).toBe(before.nextActionToken);
+    // A delay that later succeeds was never a failure, so it counts as none.
+    expect(afterDelay.softBounceCount).toBe(0);
+
+    expect(
+      await ingestInboundMessage(db, classifier, {
+        mailboxId: f.mailbox.id,
+        providerMessageId: `dsn-gaveup-${sequence}`,
+        conversationId: f.message.conversationId,
+        inReplyTo: f.message.internetMessageId,
+        sender: "postmaster@example.net",
+        recipient: f.mailbox.email,
+        bouncedRecipient: f.recipient,
+        subject: "Delivery failed",
+        body: "Retry timeout exceeded.",
+        bounceKind: "soft",
+        receivedAt: new Date("2026-08-13T10:30:00Z"),
+      }),
+    ).toMatchObject({ ok: true, disposition: "processed" });
+
+    const afterFailure = await read();
+    expect(afterFailure.state).toBe("manual_review");
+    expect(afterFailure.nextActionAt).toBeNull();
+    expect(afterFailure.softBounceCount).toBe(1);
+    // Never suppressed: a mailbox that was full says nothing about whether the
+    // address exists, and suppression is permanent and global.
+    const entries = await listSuppressions(db, { scope: "email" });
+    expect(entries.map((entry) => entry.normalizedValue)).not.toContain(
+      f.recipient,
+    );
+  });
 
   it("suppresses the failed recipient rather than the DSN sender on hard bounce", async () => {
     const f = await fixture();

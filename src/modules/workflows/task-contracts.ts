@@ -93,6 +93,8 @@ export type WorkflowPayloads = {
   "personalize-message": {
     declaredFields: Array<"company_relevance" | "personalized_opening">;
     trustedSourceUrls: string[];
+    /** The campaign version's language, when it declared one. */
+    language?: string;
     context: {
       company: string;
       firstName: string;

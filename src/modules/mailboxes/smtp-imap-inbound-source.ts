@@ -130,7 +130,7 @@ function normalizeReferences(value: string | string[] | undefined): string[] {
 }
 
 async function parseDeliveryStatusReport(parsed: ParsedMail | null): Promise<{
-  bounceKind: "hard" | "soft";
+  bounceKind: "hard" | "soft" | "delayed";
   bouncedRecipient: string;
   inReplyTo?: string;
   outreachId?: string;
@@ -177,8 +177,26 @@ async function parseDeliveryStatusReport(parsed: ParsedMail | null): Promise<{
       ? clampNonEmpty(rawOutreachId, 200)
       : undefined;
   return {
+    /**
+     * Three answers, because the report gives three.
+     *
+     * `Action:` is what the reporting server actually did, and it was already
+     * read above before being collapsed into a binary: everything that was not
+     * a permanent failure came out `soft`, so "I am still retrying" and "I gave
+     * up" were indistinguishable — and a routine delay notice stopped a
+     * sequence and cleared its schedule.
+     *
+     * A `delayed` action with a permanent status code is trusted as delayed.
+     * The action says what happened; status codes are where DSN
+     * implementations are sloppiest, and a server that is still retrying has
+     * not failed whatever number it quoted.
+     */
     bounceKind:
-      status.startsWith("5.") && action === "failed" ? "hard" : "soft",
+      action === "delayed"
+        ? "delayed"
+        : status.startsWith("5.")
+          ? "hard"
+          : "soft",
     bouncedRecipient: normalized.address,
     inReplyTo: clampNonEmpty(original?.messageId, MESSAGE_ID_MAX_LENGTH),
     outreachId,
@@ -327,8 +345,13 @@ export class SmtpImapInboundSource implements InboundMailSource {
   async fetchSince(
     cursor: string | null,
     ingestPage: (messages: unknown[]) => Promise<number>,
+    // Every call below takes it. `ImapClient` closes its connection on abort,
+    // so a round the maintenance stage gives up on stops holding a socket and
+    // an advisory lock instead of running on unattended.
+    options?: { signal?: AbortSignal },
   ): Promise<InboundFetchResult> {
-    const status = await this.imap.status();
+    const signal = options?.signal;
+    const status = await this.imap.status(signal);
     const parsedCursor = cursor === null ? null : parseCursor(cursor);
     // A non-null cursor that fails to parse is corrupted storage, not "no
     // cursor" — both force a fresh walk, but only the corrupted case is a
@@ -342,7 +365,7 @@ export class SmtpImapInboundSource implements InboundMailSource {
         parsedCursor.uidValidity !== status.uidValidity);
     const freshWalk = parsedCursor === null || rebaselined;
     const startUid = freshWalk
-      ? await this.resolveBackfillStartUid(status)
+      ? await this.resolveBackfillStartUid(status, signal)
       : parsedCursor.lastUid + 1;
     const range = `${startUid}:*`;
 
@@ -379,7 +402,7 @@ export class SmtpImapInboundSource implements InboundMailSource {
     // "everything below `startUid` counts as caught up", never further.
     let highestUid = startUid - 1;
 
-    for await (const page of this.imap.fetchRange(range)) {
+    for await (const page of this.imap.fetchRange(range, signal)) {
       // Per RFC 3501 §6.4.8, a range ending in `*` always resolves to the
       // mailbox's highest UID, even when that UID is below the range's
       // start — so any fetch (not just a resumed one: the same trap applies
@@ -427,11 +450,12 @@ export class SmtpImapInboundSource implements InboundMailSource {
    * minutes"), this anchors at `uidNext` — "whatever arrives from here
    * on" — rather than falling back to `1`, which would silently reintroduce
    * the full-history walk this exists to avoid. */
-  private async resolveBackfillStartUid(status: {
-    uidNext: number;
-  }): Promise<number> {
+  private async resolveBackfillStartUid(
+    status: { uidNext: number },
+    signal?: AbortSignal,
+  ): Promise<number> {
     if (!this.since) return 1;
-    const firstUid = await this.imap.findFirstUidSince(this.since);
+    const firstUid = await this.imap.findFirstUidSince(this.since, signal);
     return firstUid ?? status.uidNext;
   }
 

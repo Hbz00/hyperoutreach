@@ -141,6 +141,15 @@ const discoveredContactSchema = z
     firstName: z.string().trim().min(1).max(200),
     lastName: z.string().trim().min(1).max(200),
     jobTitle: z.string().trim().min(1).max(500),
+    /**
+     * The language this person is written to in, when the profile settles it.
+     *
+     * Optional on purpose. A profile that gives no signal must leave this
+     * unanswered rather than fall back to the company's country, which is a
+     * different fact: one live account had seven French job titles, two English
+     * and one mixed, all at the same French company.
+     */
+    language: z.string().trim().min(2).max(35).optional(),
     linkedinUrl: nullableUrl,
     confidence: z.number().min(0).max(1),
     evidence: z.array(contactEvidenceSchema).min(1),
@@ -174,6 +183,13 @@ export const personalizationInputSchema = z
   .object({
     declaredFields: z.array(reasoningFieldSchema).min(1).max(2),
     trustedSourceUrls: z.array(httpUrl).min(1).max(100),
+    /**
+     * The campaign version's language, when it declared one.
+     *
+     * Optional because versions published before this existed carry none, and
+     * they must keep generating rather than start failing to parse.
+     */
+    language: z.string().trim().min(2).max(35).optional(),
     context: z
       .object({
         company: z.string().trim().min(1).max(300),

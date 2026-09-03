@@ -28,7 +28,7 @@ describe("imap inbound source", () => {
     };
     const source = new SmtpImapInboundSource(imap as never, "mbx-1");
     const result = await source.fetchSince(null, collect().ingestPage);
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
     expect(result.rebaselined).toBe(false);
   });
 
@@ -40,7 +40,7 @@ describe("imap inbound source", () => {
     };
     const source = new SmtpImapInboundSource(imap as never, "mbx-1");
     await source.fetchSince("7:41", collect().ingestPage);
-    expect(imap.fetchRange).toHaveBeenCalledWith("42:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("42:*", undefined);
   });
 
   it("rebaselines when uidvalidity changed", async () => {
@@ -52,7 +52,7 @@ describe("imap inbound source", () => {
     const source = new SmtpImapInboundSource(imap as never, "mbx-1");
     const result = await source.fetchSince("7:41", collect().ingestPage);
     expect(result.rebaselined).toBe(true);
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
   });
 
   it("advances the cursor to the highest fetched uid", async () => {
@@ -726,7 +726,7 @@ describe("imap inbound source", () => {
       collect().ingestPage,
     );
     expect(result.rebaselined).toBe(true);
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
   });
 
   it("does not read a truncated cursor's empty uid half as lastUid 0 (Number('') pitfall)", async () => {
@@ -741,7 +741,7 @@ describe("imap inbound source", () => {
     // range: an unparseable cursor must be honestly reported as a
     // rebaseline, not silently folded into "resumed normally from 0".
     expect(result.rebaselined).toBe(true);
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
   });
 
   it("bounds a fresh walk to the first uid on or after `since`, instead of walking the whole mailbox", async () => {
@@ -760,8 +760,8 @@ describe("imap inbound source", () => {
     );
     const result = await source.fetchSince(null, collect().ingestPage);
 
-    expect(findFirstUidSince).toHaveBeenCalledWith(since);
-    expect(imap.fetchRange).toHaveBeenCalledWith("500:*");
+    expect(findFirstUidSince).toHaveBeenCalledWith(since, undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("500:*", undefined);
     expect(result.nextCursor).toBe("7:499");
   });
 
@@ -780,7 +780,7 @@ describe("imap inbound source", () => {
     );
     const result = await source.fetchSince(null, collect().ingestPage);
 
-    expect(imap.fetchRange).toHaveBeenCalledWith("900:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("900:*", undefined);
     expect(result.nextCursor).toBe("7:899");
   });
 
@@ -795,7 +795,7 @@ describe("imap inbound source", () => {
     await source.fetchSince(null, collect().ingestPage);
 
     expect(findFirstUidSince).not.toHaveBeenCalled();
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
   });
 
   // --- Fix round 2/5 -------------------------------------------------------
@@ -1136,7 +1136,7 @@ describe("imap inbound source", () => {
     const { seen, ingestPage } = collect();
     const result = await source.fetchSince(null, ingestPage);
 
-    expect(imap.fetchRange).toHaveBeenCalledWith("100:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("100:*", undefined);
     expect(seen).toHaveLength(1);
     expect((seen[0] as { internetMessageId: string }).internetMessageId).toBe(
       "<msg-102@example.com>",
@@ -1189,7 +1189,7 @@ describe("imap inbound source", () => {
     const { seen, ingestPage } = collect();
     const result = await source.fetchSince("7:199", ingestPage);
 
-    expect(imap.fetchRange).toHaveBeenCalledWith("200:*");
+    expect(imap.fetchRange).toHaveBeenCalledWith("200:*", undefined);
     expect(seen).toHaveLength(1);
     expect(result.nextCursor).toBe("7:200");
   });
@@ -1362,6 +1362,89 @@ describe("imap inbound source", () => {
       outreachId: "outreach-123",
     });
   });
+
+  /**
+   * The distinction the parser already computed and then threw away.
+   *
+   * `Action:` is read three lines above, and the ternary that followed asked
+   * only whether the status began with 5 — so "I am still retrying" and "I
+   * gave up" came out as the same `soft`, and a routine delay notice stopped a
+   * sequence dead. Greylisting makes that the ordinary answer to a cold first
+   * send, which is exactly what this product does all day.
+   */
+  it.each([
+    ["delayed", "4.2.2", "delayed", "Delivery delayed"],
+    ["failed", "4.2.2", "soft", "Delivery failed"],
+    ["failed", "5.1.1", "hard", "Delivery failed"],
+    // A permanent code on a still-retrying action. The action wins: it says
+    // what the reporting server actually did, and status codes are where
+    // implementations are sloppiest.
+    ["delayed", "5.1.1", "delayed", "Delivery delayed"],
+  ])(
+    "reads Action %s with status %s as a %s bounce",
+    async (action, status, expected, subject) => {
+      const raw = [
+        "From: Mail Delivery System <mailer-daemon@example.net>",
+        "To: mailbox@example.com",
+        `Subject: ${subject}`,
+        "Message-ID: <dsn-2@example.net>",
+        'Content-Type: multipart/report; report-type=delivery-status; boundary="dsn-boundary"',
+        "",
+        "--dsn-boundary",
+        "Content-Type: text/plain; charset=utf-8",
+        "",
+        "The server will keep trying.",
+        "--dsn-boundary",
+        "Content-Type: message/delivery-status",
+        "",
+        "Final-Recipient: rfc822; prospect@example.com",
+        `Action: ${action}`,
+        `Status: ${status}`,
+        "--dsn-boundary",
+        "Content-Type: message/rfc822",
+        "",
+        "From: mailbox@example.com",
+        "To: prospect@example.com",
+        "Message-ID: <outreach-123@example.com>",
+        "X-Outreach-ID: outreach-123",
+        "Subject: Hello",
+        "",
+        "Original body",
+        "--dsn-boundary--",
+        "",
+      ].join("\r\n");
+      const imap = {
+        status: vi.fn().mockResolvedValue({ uidValidity: 7 }),
+        fetchRange: vi.fn().mockImplementation(async function* () {
+          yield [
+            {
+              uid: 43,
+              envelope: {
+                messageId: "<dsn-2@example.net>",
+                subject,
+                from: "mailer-daemon@example.net",
+                to: "mailbox@example.com",
+                date: new Date(0),
+              },
+              internalDate: new Date(0),
+              body: Buffer.from(raw),
+            },
+          ];
+        }),
+      };
+      const source = new SmtpImapInboundSource(
+        imap as never,
+        "mbx-1",
+        "mailbox@example.com",
+      );
+      const { seen, ingestPage } = collect();
+      await source.fetchSince(null, ingestPage);
+      expect(seen[0]).toMatchObject({
+        bounceKind: expected,
+        bouncedRecipient: "prospect@example.com",
+      });
+    },
+  );
 
   it("falls back to the placeholder for an address made only of NUL bytes", async () => {
     // `stripNul` avant `trim` : sinon la valeur reste « non vide » pour

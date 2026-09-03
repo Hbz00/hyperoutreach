@@ -124,7 +124,7 @@ export class StructuredContactDiscoveryAgent
   implements ContactDiscoveryAgent
 {
   readonly name = "contact_discovery";
-  readonly promptVersion = "contact-discovery-prompt-v1";
+  readonly promptVersion = "contact-discovery-prompt-v2";
   readonly schemaVersion = "contact-discovery-schema-v1";
 
   async discover(
@@ -135,7 +135,12 @@ export class StructuredContactDiscoveryAgent
       agent: this.name,
       model: this.model,
       instructions:
-        "Find current employees matching the requested roles. Each contact must include public evidence collectively supporting both current employment and current job title. Never invent a profile or stale role.",
+        "Find current employees matching the requested roles. Each contact must include public evidence collectively supporting both current employment and current job title. Never invent a profile or stale role." +
+        // Asked, never inferred from the company's country: one live account
+        // held seven French job titles, two English and one mixed, all at the
+        // same French company. An unanswered field is the correct answer when
+        // the profile does not settle it.
+        " Set `language` to the BCP-47 tag of the language this person is written to in, judged from the language of their own profile and public writing. Omit it when their profile does not settle the question; never infer it from the company's country.",
       input,
       outputSchema: contactDiscoveryOutputSchema,
       outputName: this.schemaVersion,
@@ -164,7 +169,13 @@ export class StructuredPersonalizationAgent
         agent: this.name,
         model: this.model,
         instructions:
-          "Fill only the declared reasoning placeholders from the supplied research. Do not generate a whole message and do not emit deterministic fields such as names, company, or title.",
+          "Fill only the declared reasoning placeholders from the supplied research. Do not generate a whole message and do not emit deterministic fields such as names, company, or title." +
+          // Appended rather than always present: a version published before
+          // languages existed declares none, and inventing one for it would
+          // change what an unchanged campaign writes.
+          (input.language
+            ? ` Write every field in ${input.language}, because the template it is dropped into is written in that language.`
+            : ""),
         input,
         outputSchema: personalizationOutputSchema,
         outputName: this.schemaVersion,

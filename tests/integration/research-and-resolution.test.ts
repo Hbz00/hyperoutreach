@@ -118,7 +118,7 @@ class AccountResearchFixture implements AccountResearchAgent {
 class ContactDiscoveryFixture implements ContactDiscoveryAgent {
   readonly name = "contact_discovery";
   readonly model = "mock-research";
-  readonly promptVersion = "contact-discovery-prompt-v1";
+  readonly promptVersion = "contact-discovery-prompt-v2";
   readonly schemaVersion = "contact-discovery-schema-v1";
   calls = 0;
   constructor(private readonly output: ContactDiscoveryOutput) {}
@@ -247,7 +247,11 @@ async function accountAndContact(suffix: string, evidencedDomain = true) {
   const contact = await createOrGetContact(db, {
     accountId: account.account.id,
     firstName: "Alice",
-    lastName: suffix,
+    // The hyphens are stripped on purpose. This fixture wants a *unique*
+    // surname, not a compound one — and a compound name legitimately produces
+    // two ladder rungs, which would silently change what every test built on
+    // this helper is measuring.
+    lastName: suffix.replace(/-/g, ""),
     jobTitle: "VP Sales",
   });
   if (!contact.ok) throw new Error("Contact fixture failed");
@@ -955,6 +959,286 @@ describe("database-backed research and email resolution", () => {
       ok: true,
       disposition: "reused",
       snapshot: { facts: { summary: "New winning snapshot" } },
+    });
+  });
+
+  /**
+   * A profile headline is not a job title.
+   *
+   * Six of the ten contacts a real run discovered carried their employer inside
+   * the title — "Directeur agence chez FedEx Express FR" — which is what made a
+   * template naming both the title and the company print the company twice. The
+   * raw headline stays in the evidence row; the column gets a title.
+   */
+  it("strips the employer from a discovered job title", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Headline Express France",
+      domain: "headline-express.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    const discovered = await discoverContacts(
+      db,
+      new ContactDiscoveryFixture({
+        contacts: [
+          {
+            firstName: "Loïc",
+            lastName: "Gerard",
+            jobTitle: "Directeur des Opérations chez Headline Express France",
+            linkedinUrl: "https://www.linkedin.com/in/loic-gerard",
+            confidence: 0.9,
+            evidence: [
+              {
+                url: "https://headline-express.example/team/loic",
+                title: "Team",
+                supports: ["employment", "job_title"],
+                retrievedAt,
+              },
+            ],
+          },
+          {
+            // The false positive the rule has to survive: a real title that
+            // shares a word with the account name.
+            firstName: "Sebastien",
+            lastName: "Bouche",
+            jobTitle: "Directeur Régional des Opérations - région Nord",
+            linkedinUrl: "https://www.linkedin.com/in/sebastien-bouche",
+            confidence: 0.9,
+            evidence: [
+              {
+                url: "https://headline-express.example/team/sebastien",
+                title: "Team",
+                supports: ["employment", "job_title"],
+                retrievedAt,
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        accountId: account.account.id,
+        roles: ["Directeur des Opérations"],
+        limit: 10,
+      },
+    );
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok) return;
+    expect(
+      discovered.contacts
+        .map((contact) => contact.jobTitle)
+        .sort((left, right) => (left ?? "").localeCompare(right ?? "")),
+    ).toEqual([
+      "Directeur des Opérations",
+      "Directeur Régional des Opérations - région Nord",
+    ]);
+  });
+
+  /**
+   * The prospect's own language, stored beside them.
+   *
+   * It does not change what any campaign sends — that is the template's
+   * language — but it is what tells an operator whether this person belongs in
+   * the French campaign or the English one.
+   */
+  it("stores the language the discovery agent read off the profile", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Langue Discovery",
+      domain: "langue-discovery.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    const discovered = await discoverContacts(
+      db,
+      new ContactDiscoveryFixture({
+        contacts: [
+          {
+            firstName: "Nora",
+            lastName: "Blanc",
+            jobTitle: "Directrice des opérations",
+            language: "fr",
+            linkedinUrl: "https://www.linkedin.com/in/nora-blanc-langue",
+            confidence: 0.9,
+            evidence: [
+              {
+                url: "https://langue-discovery.example/equipe",
+                title: "Equipe",
+                supports: ["employment", "job_title"],
+                retrievedAt,
+              },
+            ],
+          },
+          {
+            // The agent could not tell, so nothing is invented for them.
+            firstName: "Sam",
+            lastName: "Doe",
+            jobTitle: "Head of Logistics",
+            linkedinUrl: "https://www.linkedin.com/in/sam-doe-langue",
+            confidence: 0.9,
+            evidence: [
+              {
+                url: "https://langue-discovery.example/equipe",
+                title: "Equipe",
+                supports: ["employment", "job_title"],
+                retrievedAt,
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        accountId: account.account.id,
+        roles: ["Directrice des opérations"],
+        limit: 10,
+      },
+    );
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok) return;
+    const byName = new Map(
+      discovered.contacts.map((contact) => [
+        contact.fullName,
+        contact.language,
+      ]),
+    );
+    expect(byName.get("Nora Blanc")).toBe("fr");
+    expect(byName.get("Sam Doe")).toBeNull();
+  });
+
+  /**
+   * The upgrade branch is the one that most often has a language to gain.
+   *
+   * A contact with no LinkedIn URL was written before discovery could identify
+   * them globally, so they usually predate a read language too. Dropping it
+   * here leaves them unknown-language for good — and the enrollment warning
+   * counts unknown as agreement, so nothing would ever say the campaign is
+   * writing to them in the wrong one.
+   */
+  it("keeps the language when discovery upgrades a contact that had no LinkedIn URL", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Langue Upgrade",
+      domain: "langue-upgrade.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    const weak = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Amel",
+      lastName: "Renard",
+      jobTitle: "Responsable logistique",
+    });
+    if (!weak.ok) throw new Error("Contact fixture failed");
+    expect(weak.contact.linkedinUrl).toBeNull();
+    expect(weak.contact.language).toBeNull();
+
+    const discovered = await discoverContacts(
+      db,
+      new ContactDiscoveryFixture({
+        contacts: [
+          {
+            firstName: "Amel",
+            lastName: "Renard",
+            jobTitle: "Responsable logistique",
+            language: "fr",
+            linkedinUrl: "https://www.linkedin.com/in/amel-renard-upgrade",
+            confidence: 0.9,
+            evidence: [
+              {
+                url: "https://langue-upgrade.example/equipe",
+                title: "Equipe",
+                supports: ["employment", "job_title"],
+                retrievedAt,
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        accountId: account.account.id,
+        roles: ["Responsable logistique"],
+        limit: 5,
+      },
+    );
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok) return;
+    // The same row, upgraded — not a second contact standing beside the first.
+    expect(discovered.contacts).toHaveLength(1);
+    expect(discovered.contacts[0]).toMatchObject({
+      id: weak.contact.id,
+      linkedinUrl: "https://www.linkedin.com/in/amel-renard-upgrade",
+      language: "fr",
+    });
+  });
+
+  /**
+   * A title belongs to an employment, and this one has ended.
+   *
+   * The headline the agent reports on a move sometimes reduces to the new
+   * employer's name and nothing else. Falling back to the stored title then
+   * repins the contact to the new account while personalization goes on
+   * describing the job they left. Blank says so out loud: generation refuses a
+   * contact with no title in words the operator can act on.
+   */
+  it("does not keep a title that belonged to the employer left behind", async () => {
+    const oldAccount = await createOrGetAccount(db, {
+      name: "Prior Carrier",
+      domain: "prior-carrier.example",
+    });
+    const newAccount = await createOrGetAccount(db, {
+      name: "Nextdaydelivery",
+      domain: "nextdaydelivery.example",
+    });
+    if (!oldAccount.ok || !newAccount.ok)
+      throw new Error("Account fixture failed");
+    const existing = await createOrGetContact(db, {
+      accountId: oldAccount.account.id,
+      firstName: "Grace",
+      lastName: "Hopper",
+      jobTitle: "Directrice des opérations",
+      linkedinUrl: "https://linkedin.com/in/grace-hopper-move/",
+    });
+    if (!existing.ok) throw new Error("Contact fixture failed");
+
+    const discovered = await discoverContacts(
+      db,
+      new ContactDiscoveryFixture({
+        contacts: [
+          {
+            firstName: "Grace",
+            lastName: "Hopper",
+            // The whole headline is the employer, so stripping leaves nothing.
+            jobTitle: "Nextdaydelivery",
+            linkedinUrl: "https://linkedin.com/in/grace-hopper-move/",
+            confidence: 0.95,
+            evidence: [
+              {
+                url: "https://www.linkedin.com/in/grace-hopper-move",
+                title: "LinkedIn profile",
+                supports: ["employment", "job_title"],
+                retrievedAt,
+              },
+            ],
+          },
+        ],
+      }),
+      { accountId: newAccount.account.id, roles: ["Operations"], limit: 5 },
+    );
+    expect(discovered).toMatchObject({ ok: true, conflicts: [] });
+    if (!discovered.ok) return;
+    expect(discovered.contacts[0]).toMatchObject({
+      id: existing.contact.id,
+      accountId: newAccount.account.id,
+      jobTitle: null,
+      emailResolutionReason: "employment_changed",
+    });
+
+    // Nothing was lost: the raw headline is still on the employment record.
+    const [transition] = await db
+      .select()
+      .from(schema.stateTransitions)
+      .where(
+        and(
+          eq(schema.stateTransitions.entityType, "contact_employment"),
+          eq(schema.stateTransitions.entityId, existing.contact.id),
+        ),
+      );
+    expect(transition?.metadata).toMatchObject({
+      jobTitle: "Nextdaydelivery",
     });
   });
 
@@ -2114,6 +2398,153 @@ describe("database-backed research and email resolution", () => {
     // and confidence never changes once the samples are counted. Storing it
     // would be a second copy of the same number.
     expect(new Set(rows.map((row) => row.confidence)).size).toBe(1);
+  });
+
+  /**
+   * Evidence that was gathered, paid for with a web search, and then not used.
+   *
+   * A real run searched fedex.com, got thirteen real addresses back, and could
+   * read six of them. The seven it could not — `fwsmith@`, `djbronczek@`,
+   * `dlcunningham@` and their siblings — follow a convention this product has
+   * no pattern for, and they were dropped with nothing written down anywhere.
+   * The convention that did win was then scored 0.970, a number that means
+   * "at least three sources agree" and says nothing about the seven sources
+   * that suggested otherwise. The point of recording them is that the
+   * denominator behind a confidence stops being invisible.
+   */
+  it("records the public samples no convention could read", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Unread Samples",
+      domain: "unread-samples.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://unread-samples.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Nora",
+      lastName: "Blanc",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+
+    const result = await resolveContactEmail(
+      db,
+      new MockDnsMxResolver(true),
+      new NoResultEmailEnrichmentProvider(),
+      {
+        contactId: contact.contact.id,
+        publicSamples: [
+          {
+            firstName: "Marie",
+            lastName: "Dupont",
+            email: "marie.dupont@unread-samples.example",
+            sourceUrl: "https://unread-samples.example/team",
+          },
+          {
+            firstName: "Jean",
+            lastName: "Martin",
+            email: "jean.martin@unread-samples.example",
+            sourceUrl: "https://unread-samples.example/team",
+          },
+          // First initial, middle initial, last name. A real convention, and
+          // one `EMAIL_PATTERNS` cannot express — contacts carry no middle
+          // name, so it can be recognised as unread but never generated.
+          {
+            firstName: "Frederick",
+            lastName: "Smith",
+            email: "fwsmith@unread-samples.example",
+            sourceUrl: "https://unread-samples.example/leadership",
+          },
+        ],
+      },
+    );
+    expect(result.ok).toBe(true);
+
+    const [row] = await db
+      .select()
+      .from(schema.emailCandidates)
+      .where(eq(schema.emailCandidates.contactId, contact.contact.id));
+    expect(
+      (row?.evidence as { unusedSamples?: unknown })?.unusedSamples,
+    ).toEqual(["fwsmith@unread-samples.example"]);
+    // The convention still wins on the two samples that were readable; the
+    // record of the third does not change what was decided, only what can be
+    // audited about it.
+    expect(row?.pattern).toBe("first.last");
+  });
+
+  /**
+   * A compound first name becomes two rungs, not one silent guess.
+   *
+   * `pierreyves.gudefin@fedex.com` was accepted at 0.970 for a contact whose
+   * real address keeps the hyphen. The spelling was never evidence — no sample
+   * in that company's corpus had a compound name — so the ladder now carries
+   * both and a bounce settles it in one step instead of ending the prospect.
+   */
+  it("offers both spellings of a compound name, hyphenated first", async () => {
+    const account = await createOrGetAccount(db, {
+      name: "Compound Names",
+      domain: "compound-names.example",
+    });
+    if (!account.ok) throw new Error("Account fixture failed");
+    await db.insert(schema.evidenceSources).values({
+      accountId: account.account.id,
+      url: "https://compound-names.example/about",
+      sourceType: "company_website",
+      supports: ["identity", "domain"],
+      confidence: "0.990",
+    });
+    const contact = await createOrGetContact(db, {
+      accountId: account.account.id,
+      firstName: "Pierre-yves",
+      lastName: "Gudefin",
+    });
+    if (!contact.ok) throw new Error("Contact fixture failed");
+
+    const result = await resolveContactEmail(
+      db,
+      new MockDnsMxResolver(true),
+      new NoResultEmailEnrichmentProvider(),
+      {
+        contactId: contact.contact.id,
+        publicSamples: [
+          // Neither sample has a compound name, so neither settles the
+          // spelling — which is exactly the state the real fedex.com corpus
+          // was in.
+          {
+            firstName: "Marie",
+            lastName: "Dupont",
+            email: "marie.dupont@compound-names.example",
+            sourceUrl: "https://compound-names.example/team",
+          },
+          {
+            firstName: "Jean",
+            lastName: "Martin",
+            email: "jean.martin@compound-names.example",
+            sourceUrl: "https://compound-names.example/team",
+          },
+        ],
+      },
+    );
+    expect(result.ok).toBe(true);
+
+    const rows = await db
+      .select()
+      .from(schema.emailCandidates)
+      .where(eq(schema.emailCandidates.contactId, contact.contact.id))
+      .orderBy(schema.emailCandidates.ladderRank);
+    expect(
+      rows.map((row) => ({ email: row.normalizedEmail, rank: row.ladderRank })),
+    ).toEqual([
+      { email: "pierre-yves.gudefin@compound-names.example", rank: 1 },
+      { email: "pierreyves.gudefin@compound-names.example", rank: 2 },
+    ]);
+    expect(rows[0]?.status).toBe("accepted");
   });
 
   it("keeps a strictly better-evidenced convention on rung one without calling it tied", async () => {
