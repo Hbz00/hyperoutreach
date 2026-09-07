@@ -26,6 +26,14 @@ const inputSchema = z.object({
   actor: z.string().trim().min(1).max(200),
 });
 
+// Refusals discovered after demoting the previous address must roll back the
+// transaction before becoming the ordinary service result.
+class ManualEmailRefusal extends Error {
+  constructor(readonly code: "ADDRESS_DEAD" | "ADDRESS_SUPPRESSED") {
+    super(code);
+  }
+}
+
 export type AcceptManualEmailResult =
   | {
       ok: true;
@@ -177,7 +185,7 @@ export async function acceptManualEmail(
               domain,
             });
             if (suppressed.has(normalizedEmail)) {
-              return { ok: false, code: "ADDRESS_SUPPRESSED" } as const;
+              throw new ManualEmailRefusal("ADDRESS_SUPPRESSED");
             }
           }
           /**
@@ -245,10 +253,9 @@ export async function acceptManualEmail(
               .from(emailCandidates)
               .where(eq(emailCandidates.id, existing.id))
               .limit(1);
-            return {
-              ok: false,
-              code: refused?.deadAt ? "ADDRESS_DEAD" : "ADDRESS_SUPPRESSED",
-            } as const;
+            throw new ManualEmailRefusal(
+              refused?.deadAt ? "ADDRESS_DEAD" : "ADDRESS_SUPPRESSED",
+            );
           }
 
           /**
@@ -298,7 +305,10 @@ export async function acceptManualEmail(
           return { ok: true, disposition: "accepted", candidate } as const;
         }),
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof ManualEmailRefusal) {
+      return { ok: false, code: error.code };
+    }
     return { ok: false, code: "DATABASE_ERROR" };
   }
 }

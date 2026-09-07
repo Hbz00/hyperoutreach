@@ -4,7 +4,16 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import * as schema from "@/lib/db/schema";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
@@ -88,6 +97,15 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
     await client.end();
   });
 
+  beforeEach(async () => {
+    // Maintenance scans every available mailbox and pending event. Each test
+    // must own those inputs, including when selected alone or shuffled.
+    await client.unsafe(
+      "truncate table mailbox_connections, oauth_authorization_requests, workflow_events restart identity cascade",
+    );
+  });
+  afterEach(() => vi.useRealTimers());
+
   it("completes OAuth with encrypted refresh token and idempotent mailbox identity", async () => {
     let calls = 0;
     const fetcher: typeof fetch = async (input) => {
@@ -144,13 +162,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
   });
 
   it("creates the initial subscription through the production maintenance flow", async () => {
-    const [mailbox] = await db
-      .select()
-      .from(schema.mailboxConnections)
-      .where(
-        eq(schema.mailboxConnections.normalizedEmail, "operator@example.com"),
-      );
-    if (!mailbox) throw new Error("connected mailbox fixture missing");
+    const mailbox = await insertMailbox();
     const graph = new MicrosoftGraphClient({
       accessToken: async () => "access",
       fetcher: async (input, init = {}) => {
@@ -489,6 +501,10 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
 
   it("creates, renews, and deletes immutable-ID subscriptions", async () => {
     const mailbox = await insertMailbox();
+    const secondMailbox = await insertMailbox({
+      subscriptionId: "second-subscription-id",
+      subscriptionExpiresAt: new Date("2026-08-18T10:00:00.000Z"),
+    });
     const calls: Array<{
       method: string;
       url: string;
@@ -517,7 +533,9 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
       }
       if (init.method === "PATCH") {
         return Response.json({
-          id: "subscription-id",
+          id: decodeURIComponent(
+            new URL(String(input)).pathname.split("/").at(-1)!,
+          ),
           expirationDateTime: "2026-08-18T11:00:00.000Z",
         });
       }
@@ -557,6 +575,13 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
       clientState: config.webhookClientState,
       changeType: "created,updated",
     });
+    expect(
+      new Set(
+        calls
+          .filter((call) => call.method === "PATCH")
+          .map((call) => new URL(call.url).pathname.split("/").at(-1)),
+      ),
+    ).toEqual(new Set(["subscription-id", secondMailbox.subscriptionId]));
   });
 
   it("recovers a remotely-created subscription after local persistence loss", async () => {
@@ -756,6 +781,8 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
   });
 
   it("releases a failed webhook claim for deterministic retry", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-12T10:00:00.000Z"));
     const mailbox = await insertMailbox({
       subscriptionId: "retry-subscription",
     });
@@ -800,6 +827,7 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
         { now: new Date("2026-08-12T10:00:00.000Z") },
       ),
     ).resolves.toMatchObject({ failed: 1 });
+    vi.setSystemTime(new Date("2026-08-12T10:01:00.000Z"));
     await expect(
       reconcilePendingGraphNotifications(
         db,
@@ -1126,6 +1154,103 @@ describe("Microsoft Graph OAuth persistence and recovery", () => {
       .from(schema.mailboxConnections)
       .where(eq(schema.mailboxConnections.id, mailbox.id));
     expect(stored?.subscriptionId).toBe("replacement-subscription");
+  });
+
+  it("keeps the durable cursor and failed health when a delta page contains an unparseable message, then recovers by replay", async () => {
+    const cursor = "https://graph.microsoft.com/v1.0/before-malformed-page";
+    const anchor = new Date("2026-08-12T09:50:00.000Z");
+    const mailbox = await insertMailbox({
+      syncCursor: cursor,
+      lastSyncedAt: anchor,
+    });
+    let repaired = false;
+    const requested: string[] = [];
+    const graph = new MicrosoftGraphClient({
+      accessToken: async () => "synthetic-access",
+      fetcher: async (input) => {
+        requested.push(String(input));
+        return Response.json({
+          value: repaired ? [] : [{ id: "lost-opt-out", subject: 42 }],
+          "@odata.deltaLink":
+            "https://graph.microsoft.com/v1.0/after-malformed-page",
+        });
+      },
+    });
+    await expect(
+      reconcileGraphDelta(
+        db,
+        graph,
+        new DeterministicReplyClassifier(),
+        mailbox.id,
+      ),
+    ).rejects.toThrow("Microsoft Graph delta contains an invalid message");
+    const [failedMailbox] = await db
+      .select()
+      .from(schema.mailboxConnections)
+      .where(eq(schema.mailboxConnections.id, mailbox.id));
+    const [failedHealth] = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(
+        eq(
+          schema.workflowEvents.idempotencyKey,
+          `graph:delta-health:${mailbox.id}`,
+        ),
+      );
+    expect(failedMailbox).toMatchObject({
+      syncCursor: cursor,
+      lastSyncedAt: anchor,
+    });
+    expect(failedHealth).toMatchObject({
+      status: "failed",
+      workflowName: GRAPH_DELTA_HEALTH_WORKFLOW_NAME,
+    });
+    await expect(
+      reconcileGraphDelta(
+        db,
+        graph,
+        new DeterministicReplyClassifier(),
+        mailbox.id,
+      ),
+    ).rejects.toThrow();
+    expect(requested).toEqual([cursor]);
+    const retryEvents = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(eq(schema.workflowEvents.entityId, mailbox.id));
+    const retryAt = Math.max(
+      ...retryEvents.map((event) => event.scheduledAt?.getTime() ?? 0),
+    );
+    expect(retryAt).toBeGreaterThan(Date.now());
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(retryAt + 1));
+    repaired = true;
+    await expect(
+      reconcileGraphDelta(
+        db,
+        graph,
+        new DeterministicReplyClassifier(),
+        mailbox.id,
+      ),
+    ).resolves.toMatchObject({ processed: 0 });
+    const [recoveredMailbox] = await db
+      .select()
+      .from(schema.mailboxConnections)
+      .where(eq(schema.mailboxConnections.id, mailbox.id));
+    const [recoveredHealth] = await db
+      .select()
+      .from(schema.workflowEvents)
+      .where(
+        eq(
+          schema.workflowEvents.idempotencyKey,
+          `graph:delta-health:${mailbox.id}`,
+        ),
+      );
+    expect(recoveredMailbox?.syncCursor).toBe(
+      "https://graph.microsoft.com/v1.0/after-malformed-page",
+    );
+    expect(recoveredHealth).toMatchObject({ status: "succeeded", error: null });
+    expect(requested).toEqual([cursor, cursor]);
   });
 
   it("rebaselines an expired delta token and persists only the replacement deltaLink", async () => {

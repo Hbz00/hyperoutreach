@@ -1,11 +1,12 @@
 import { NextRequest } from "next/server";
+import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { describe, expect, it } from "vitest";
 
 import {
   createOperatorSession,
   OPERATOR_SESSION_COOKIE,
 } from "@/lib/operator-auth";
-import { applyOperatorProxy } from "@/proxy";
+import { applyOperatorProxy, config } from "@/proxy";
 
 const environment = {
   OPERATOR_EMAIL: "operator@example.com",
@@ -15,6 +16,31 @@ const environment = {
 };
 
 describe("operator proxy", () => {
+  it("bypasses body cloning only for routes with their own authentication or public validation", () => {
+    for (const url of [
+      "/api/operator/session",
+      "/api/operator/commands/create-prospect",
+      "/api/webhooks/microsoft",
+    ]) {
+      expect(
+        unstable_doesMiddlewareMatch({ config, nextConfig: {}, url }),
+        url,
+      ).toBe(false);
+    }
+    for (const url of [
+      "/prospects",
+      "/settings",
+      "/api/internal/workflows/reconcile",
+      "/api/integrations/microsoft/authorize",
+      "/api/operator/session-other",
+      "/api/operator/commands-other",
+    ]) {
+      expect(
+        unstable_doesMiddlewareMatch({ config, nextConfig: {}, url }),
+        url,
+      ).toBe(true);
+    }
+  });
   it("lets a valid browser session reach protected pages", () => {
     const { token } = createOperatorSession(environment);
     const request = new NextRequest("http://localhost/prospects", {

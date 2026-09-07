@@ -4,17 +4,18 @@
 
 ## Microsoft 365
 
-Set `MAIL_PROVIDER=microsoft_graph`, then register a Microsoft Entra web
-application whose redirect URI exactly matches `MICROSOFT_REDIRECT_URI`. Grant
+Register a Microsoft Entra web application whose redirect URI exactly matches
+`MICROSOFT_REDIRECT_URI`. Grant
 delegated `Mail.ReadWrite` and `Mail.Send`; the former is required to create and
 retrieve the persisted draft, while the latter sends it. OAuth also asks for
 `openid profile email offline_access`. No directory-wide application permission
 is used.
 
-Sending and inbound reconciliation still resolve the adapter from each
-connected mailbox. The global `MAIL_PROVIDER=microsoft_graph` value additionally
-enables the separate Graph notification-subscription maintenance task; without
-that value the task intentionally skips, even if a Microsoft mailbox row exists.
+Sending and inbound reconciliation resolve the adapter from each connected
+mailbox. Graph notification drain and subscription maintenance likewise follow
+available Microsoft mailbox rows. The global `MAIL_PROVIDER` selects the fallback
+when no mailbox is bound; it does not disable maintenance for connected Graph
+mailboxes in a mixed-provider installation.
 
 Generate a 32-byte encryption key and assign it a stable ID:
 
@@ -97,9 +98,11 @@ now** is an additional operator action, not a correctness requirement. Before
 classification or body persistence, mail must match an outbound identity;
 unrelated private mailbox traffic is ignored.
 Standard delivery-status reports become hard/soft bounce signals. Verified hard
-bounces stop the enrollment and suppress the recipient. Definite SMTP 5xx
-recipient refusals are terminal failures, while ambiguous socket failures remain
-quarantined to prevent duplicate sends.
+bounces and definite SMTP recipient refusals suppress the dead address. For an
+enrollment using the [address ladder](address-ladder.md), another eligible address
+can produce a replacement message for approval; address death alone need not end
+the person's enrollment. Exhausted ladders and other terminal outcomes stop it.
+Ambiguous socket failures remain quarantined to prevent duplicate sends.
 
 For local verification, `npm run db:up` starts loopback-only GreenMail and
 `npm run test:integration` executes the real TLS IMAP/SMTP round trip. The suite

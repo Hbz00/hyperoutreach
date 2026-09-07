@@ -28,7 +28,7 @@ describe("imap inbound source", () => {
     };
     const source = new SmtpImapInboundSource(imap as never, "mbx-1");
     const result = await source.fetchSince(null, collect().ingestPage);
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined, 7);
     expect(result.rebaselined).toBe(false);
   });
 
@@ -40,7 +40,7 @@ describe("imap inbound source", () => {
     };
     const source = new SmtpImapInboundSource(imap as never, "mbx-1");
     await source.fetchSince("7:41", collect().ingestPage);
-    expect(imap.fetchRange).toHaveBeenCalledWith("42:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("42:*", undefined, 7);
   });
 
   it("rebaselines when uidvalidity changed", async () => {
@@ -52,7 +52,7 @@ describe("imap inbound source", () => {
     const source = new SmtpImapInboundSource(imap as never, "mbx-1");
     const result = await source.fetchSince("7:41", collect().ingestPage);
     expect(result.rebaselined).toBe(true);
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined, 9);
   });
 
   it("advances the cursor to the highest fetched uid", async () => {
@@ -726,7 +726,7 @@ describe("imap inbound source", () => {
       collect().ingestPage,
     );
     expect(result.rebaselined).toBe(true);
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined, 7);
   });
 
   it("does not read a truncated cursor's empty uid half as lastUid 0 (Number('') pitfall)", async () => {
@@ -741,7 +741,7 @@ describe("imap inbound source", () => {
     // range: an unparseable cursor must be honestly reported as a
     // rebaseline, not silently folded into "resumed normally from 0".
     expect(result.rebaselined).toBe(true);
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined, 7);
   });
 
   it("bounds a fresh walk to the first uid on or after `since`, instead of walking the whole mailbox", async () => {
@@ -761,7 +761,7 @@ describe("imap inbound source", () => {
     const result = await source.fetchSince(null, collect().ingestPage);
 
     expect(findFirstUidSince).toHaveBeenCalledWith(since, undefined);
-    expect(imap.fetchRange).toHaveBeenCalledWith("500:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("500:*", undefined, 7);
     expect(result.nextCursor).toBe("7:499");
   });
 
@@ -780,7 +780,7 @@ describe("imap inbound source", () => {
     );
     const result = await source.fetchSince(null, collect().ingestPage);
 
-    expect(imap.fetchRange).toHaveBeenCalledWith("900:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("900:*", undefined, 7);
     expect(result.nextCursor).toBe("7:899");
   });
 
@@ -795,7 +795,7 @@ describe("imap inbound source", () => {
     await source.fetchSince(null, collect().ingestPage);
 
     expect(findFirstUidSince).not.toHaveBeenCalled();
-    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("1:*", undefined, 7);
   });
 
   // --- Fix round 2/5 -------------------------------------------------------
@@ -1136,7 +1136,7 @@ describe("imap inbound source", () => {
     const { seen, ingestPage } = collect();
     const result = await source.fetchSince(null, ingestPage);
 
-    expect(imap.fetchRange).toHaveBeenCalledWith("100:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("100:*", undefined, 7);
     expect(seen).toHaveLength(1);
     expect((seen[0] as { internetMessageId: string }).internetMessageId).toBe(
       "<msg-102@example.com>",
@@ -1189,7 +1189,7 @@ describe("imap inbound source", () => {
     const { seen, ingestPage } = collect();
     const result = await source.fetchSince("7:199", ingestPage);
 
-    expect(imap.fetchRange).toHaveBeenCalledWith("200:*", undefined);
+    expect(imap.fetchRange).toHaveBeenCalledWith("200:*", undefined, 7);
     expect(seen).toHaveLength(1);
     expect(result.nextCursor).toBe("7:200");
   });

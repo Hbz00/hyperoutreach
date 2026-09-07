@@ -233,11 +233,12 @@ describe("Microsoft Graph HTTP and mail contracts", () => {
 });
 
 describe("Graph inbound and webhook validation", () => {
-  it("skips one malformed delta item and still advances the page cursor", async () => {
+  it("refuses a malformed delta item and advances only after the page is repaired", async () => {
+    let repaired = false;
     const graph = {
       get: async () => ({
         value: [
-          { id: "poison", subject: 42 },
+          ...(repaired ? [] : [{ id: "poison", subject: 42 }]),
           {
             id: "valid",
             internetMessageId: "<valid@example.com>",
@@ -260,6 +261,14 @@ describe("Graph inbound and webhook validation", () => {
       since: new Date("2026-08-13T09:00:00.000Z"),
     });
     const pages: unknown[][] = [];
+    await expect(
+      source.fetchSince(null, async (messages) => {
+        pages.push(messages);
+        return messages.length;
+      }),
+    ).rejects.toThrow("Microsoft Graph delta contains an invalid message");
+    expect(pages).toHaveLength(0);
+    repaired = true;
     const result = await source.fetchSince(null, async (messages) => {
       pages.push(messages);
       return messages.length;

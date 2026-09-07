@@ -2,7 +2,15 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import * as schema from "@/lib/db/schema";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
@@ -39,6 +47,12 @@ describe("durable workflow execution audit", () => {
 
   afterAll(async () => {
     await client.end();
+  });
+
+  beforeEach(async () => {
+    await client.unsafe(
+      "truncate table accounts, campaigns, mailbox_connections, operator_commands, workflow_events restart identity cascade",
+    );
   });
 
   it("persists every executor attempt and sanitized completion state", async () => {

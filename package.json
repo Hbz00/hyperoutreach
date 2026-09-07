@@ -9,6 +9,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-postgres.mjs",
     "dev": "node scripts/run-local-stack.mjs dev",
     "dev:web": "next dev",
     "build": "next build",
@@ -43,9 +44,9 @@
     "@next/env": "16.3.0",
     "@trigger.dev/sdk": "4.5.10",
     "drizzle-orm": "0.45.2",
-    "html-to-text": "10.0.0",
+    "html-to-text": "10.0.1",
     "imapflow": "1.7.0",
-    "mailparser": "3.9.15",
+    "mailparser": "3.9.20",
     "next": "16.3.0",
     "nodemailer": "9.0.5",
     "postgres": "3.4.9",
@@ -64,6 +65,7 @@
     "@types/react-dom": "19.2.4",
     "dotenv": "17.4.2",
     "drizzle-kit": "0.31.10",
+    "esbuild": "0.28.2",
     "eslint": "9.39.2",
     "eslint-config-next": "16.3.0",
     "prettier": "3.9.6",

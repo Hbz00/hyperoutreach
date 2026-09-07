@@ -46,6 +46,25 @@ function stubImapFlow(connect: ReturnType<typeof vi.fn>): {
 }
 
 describe("ImapClient connection failures", () => {
+  it.each([true, false])(
+    "fetchRange preserves the same definite-auth distinction (definite=%s)",
+    async (definite) => {
+      const failure = Object.assign(new Error("Command failed"), {
+        authenticationFailed: true,
+        response: definite ? "a2 NO Login failed" : false,
+      });
+      const { close } = stubImapFlow(vi.fn().mockRejectedValue(failure));
+      const client = new ImapClient(transport, credentials);
+      const operation = client.fetchRange("1:*").next();
+      if (definite) {
+        await expect(operation).rejects.toBeInstanceOf(ImapAuthenticationError);
+      } else {
+        await expect(operation).rejects.toBe(failure);
+      }
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
+
   it("wraps a real imapflow LOGIN failure into ImapAuthenticationError", async () => {
     const authError = new Error("Command failed") as Error & {
       authenticationFailed?: boolean;

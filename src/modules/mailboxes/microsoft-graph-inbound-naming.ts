@@ -1,3 +1,8 @@
+import {
+  GraphRetryDeferredError,
+  graphRetryNotBefore,
+  recordGraphRetry,
+} from "@/lib/microsoft/graph-retry";
 import type {
   InboundCursorEvents,
   InboundHealthOptions,
@@ -12,11 +17,9 @@ import type {
  * and one consumer reads them back: the send gate in send-service.ts, which
  * blocks sends while `workflowName: "graph_delta_health"` is unresolved.
  *
- * Deliberately a plain constants module: no registry, no side effect, no
- * `@/lib/microsoft/*` import. Either producer can depend on it without
- * coupling to the other's import order — importing `inbound-reconciliation`
- * here is safe because that module is itself side-effect free and already a
- * dependency of both producers.
+ * Both producers also receive the same durable provider-retry hooks here.
+ * Importing this module registers nothing and performs no database I/O;
+ * the hooks use the database supplied by the active reconciliation round.
  */
 export const GRAPH_DELTA_HEALTH_WORKFLOW_NAME = "graph_delta_health";
 export const GRAPH_DELTA_RECONCILIATION_WORKFLOW_NAME =
@@ -44,6 +47,12 @@ export function graphDeltaHealthOptions(
     event: GRAPH_DELTA_FAILED_EVENT,
     workflowName: GRAPH_DELTA_HEALTH_WORKFLOW_NAME,
     failureError: GRAPH_DELTA_FAILURE_ERROR,
+    retry: {
+      notBefore: (db) => graphRetryNotBefore(db, mailboxId),
+      deferredError: (deadline) => new GraphRetryDeferredError(deadline),
+      recordFailure: (db, error, now, policyDelayMs) =>
+        recordGraphRetry(db, mailboxId, error, now, policyDelayMs),
+    },
   };
 }
 

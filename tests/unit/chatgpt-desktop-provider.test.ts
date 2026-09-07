@@ -384,6 +384,15 @@ describe("answer extraction", () => {
     ).toContainEqual({ a: 1 });
   });
 
+  it("bounds attempted object starts even when earlier braces never close", () => {
+    expect(() => extractJsonCandidates(`${"{".repeat(5)}{"a":1}`)).toThrowError(
+      ChatGptDesktopOutputValidationError,
+    );
+    expect(extractJsonCandidates(`${"{".repeat(4)}{"a":1}`)).toContainEqual({
+      a: 1,
+    });
+  });
+
   it("offers both readings of a line break inside a string", () => {
     // Escaping keeps prose intact; deleting is what a broken URL needs. The
     // schema picks the winner, not the extractor.
@@ -468,6 +477,13 @@ describe("provider construction", () => {
   });
 
   it("never logs the prompt through the ask double", async () => {
+    const recorded: unknown[][] = [];
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map(
+      (method) =>
+        vi.spyOn(console, method).mockImplementation((...values) => {
+          recorded.push(values);
+        }),
+    );
     const ask = vi.fn(async () => ({
       text: JSON.stringify({ answer: "ok", confidence: 1 }),
       model: null,
@@ -475,8 +491,14 @@ describe("provider construction", () => {
       temporary: true,
     }));
 
-    await provider(ask as never).run(request());
-
-    expect(ask).toHaveBeenCalledOnce();
+    try {
+      await provider(ask as never).run(request());
+      expect(ask).toHaveBeenCalledOnce();
+      const output = JSON.stringify(recorded);
+      expect(output).not.toContain("secret-prompt-marker");
+      expect(output).not.toContain("Acme");
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
   });
 });

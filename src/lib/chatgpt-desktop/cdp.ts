@@ -198,7 +198,18 @@ export class CdpSession {
           reject(error);
         },
       });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(
+          new ChatGptDesktopError(
+            "ChatGPT desktop devtools command could not be sent",
+            "app_unreachable",
+          ),
+        );
+      }
     });
   }
 

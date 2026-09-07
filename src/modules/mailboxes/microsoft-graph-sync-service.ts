@@ -15,6 +15,11 @@ import {
   GraphApiError,
   type MicrosoftGraphClient,
 } from "@/lib/microsoft/graph-client";
+import {
+  assertGraphRetryReady,
+  GraphRetryDeferredError,
+  recordGraphRetry,
+} from "@/lib/microsoft/graph-retry";
 import { graphMessageToInbound } from "@/modules/mailboxes/microsoft-graph-message";
 import { createMicrosoftGraphInboundSource } from "@/modules/mailboxes/microsoft-graph-inbound-source";
 import {
@@ -60,7 +65,10 @@ function messagePath(messageId: string): string {
 
 export async function processGraphWebhook(
   db: AppDatabase,
-  graphForMailbox: (mailboxId: string) => MicrosoftGraphClient,
+  graphForMailbox: (
+    mailboxId: string,
+    mailboxDb?: AppDatabase,
+  ) => MicrosoftGraphClient,
   classifier: ReplyClassifier,
   config: MicrosoftConfig,
   rawPayload: unknown,
@@ -80,7 +88,10 @@ export async function processGraphWebhook(
 
 export async function runMicrosoftGraphMaintenance(
   db: AppDatabase,
-  graphForMailbox: (mailboxId: string) => MicrosoftGraphClient,
+  graphForMailbox: (
+    mailboxId: string,
+    mailboxDb?: AppDatabase,
+  ) => MicrosoftGraphClient,
   classifier: ReplyClassifier,
   config: MicrosoftConfig,
   options: { notificationUrl: string; now?: Date },
@@ -100,7 +111,7 @@ export async function runMicrosoftGraphMaintenance(
   for (const mailbox of mailboxes) {
     const subscription = await ensureGraphSubscription(
       db,
-      graphForMailbox(mailbox.id),
+      (lockedDb) => graphForMailbox(mailbox.id, lockedDb),
       config,
       mailbox.id,
       { notificationUrl: options.notificationUrl, now },
@@ -130,7 +141,7 @@ export async function runMicrosoftGraphMaintenance(
     try {
       await reconcileGraphDelta(
         db,
-        graphForMailbox(mailbox.id),
+        (roundDb) => graphForMailbox(mailbox.id, roundDb),
         classifier,
         mailbox.id,
       );
@@ -257,7 +268,10 @@ export async function stageGraphWebhook(
 
 export async function reconcilePendingGraphNotifications(
   db: AppDatabase,
-  graphForMailbox: (mailboxId: string) => MicrosoftGraphClient,
+  graphForMailbox: (
+    mailboxId: string,
+    mailboxDb?: AppDatabase,
+  ) => MicrosoftGraphClient,
   classifier: ReplyClassifier,
   options: { now?: Date; limit?: number; claimTtlMs?: number } = {},
 ) {
@@ -316,6 +330,7 @@ export async function reconcilePendingGraphNotifications(
     try {
       let terminalNote: string | null = null;
       if (claimed.changeType !== "deleted") {
+        await assertGraphRetryReady(db, claimed.mailboxId, now);
         let raw: unknown;
         try {
           raw = await graphForMailbox(claimed.mailboxId).get<unknown>(
@@ -325,7 +340,7 @@ export async function reconcilePendingGraphNotifications(
           if (error instanceof GraphApiError && error.status === 404) {
             await reconcileGraphDelta(
               db,
-              graphForMailbox(claimed.mailboxId),
+              (roundDb) => graphForMailbox(claimed.mailboxId, roundDb),
               classifier,
               claimed.mailboxId,
             );
@@ -398,17 +413,24 @@ export async function reconcilePendingGraphNotifications(
           ),
         );
       processed += 1;
-    } catch {
+    } catch (error) {
       const retryDelayMs = Math.min(
         60 * 60_000,
         1_000 * 2 ** Math.min(claimed.attemptCount, 12),
+      );
+      const retryAt = await recordGraphRetry(
+        db,
+        claimed.mailboxId,
+        error,
+        new Date(Math.max(now.getTime(), Date.now())),
+        retryDelayMs,
       );
       await db
         .update(graphNotificationReceipts)
         .set({
           claimId: null,
           claimedAt: null,
-          nextAttemptAt: new Date(now.getTime() + retryDelayMs),
+          nextAttemptAt: retryAt,
           error: "Graph notification processing failed",
         })
         .where(
@@ -446,7 +468,10 @@ export async function resolveGraphNotificationQuarantine(
 
 export async function reconcilePendingGraphLifecycleEvents(
   db: AppDatabase,
-  graphForMailbox: (mailboxId: string) => MicrosoftGraphClient,
+  graphForMailbox: (
+    mailboxId: string,
+    mailboxDb?: AppDatabase,
+  ) => MicrosoftGraphClient,
   classifier: ReplyClassifier,
   config: MicrosoftConfig,
   options: { notificationUrl?: string; now?: Date; limit?: number } = {},
@@ -491,6 +516,10 @@ export async function reconcilePendingGraphLifecycleEvents(
         and(
           eq(workflowEvents.id, event.id),
           or(
+            isNull(workflowEvents.scheduledAt),
+            lte(workflowEvents.scheduledAt, now),
+          ),
+          or(
             inArray(workflowEvents.status, ["scheduled", "failed"]),
             and(
               eq(workflowEvents.status, "started"),
@@ -506,7 +535,9 @@ export async function reconcilePendingGraphLifecycleEvents(
       subscriptionId?: string;
     };
     try {
-      const graph = graphForMailbox(claimed.entityId);
+      await assertGraphRetryReady(db, claimed.entityId, now);
+      const graph = (lockedDb: AppDatabase) =>
+        graphForMailbox(claimed.entityId, lockedDb);
       if (payload.lifecycleEvent === "reauthorizationRequired") {
         const reauthorization = await reauthorizeGraphSubscriptionIfCurrent(
           db,
@@ -516,9 +547,33 @@ export async function reconcilePendingGraphLifecycleEvents(
           now,
         );
         if (!reauthorization.ok) {
+          if ("retryAt" in reauthorization)
+            throw new GraphRetryDeferredError(reauthorization.retryAt);
           throw new Error("Subscription reauthorization failed");
         }
-        await reconcileGraphDelta(db, graph, classifier, claimed.entityId);
+        if (reauthorization.disposition === "missing") {
+          if (!options.notificationUrl)
+            throw new Error("Graph notification URL is required for recovery");
+          const recovery = await recoverGraphSubscription(
+            db,
+            graph,
+            config,
+            claimed.entityId,
+            payload.subscriptionId,
+            { notificationUrl: options.notificationUrl, now },
+          );
+          if (!recovery.ok) {
+            if ("retryAt" in recovery)
+              throw new GraphRetryDeferredError(recovery.retryAt);
+            throw new Error("Subscription recovery failed");
+          }
+        }
+        await reconcileGraphDelta(
+          db,
+          (roundDb) => graphForMailbox(claimed.entityId, roundDb),
+          classifier,
+          claimed.entityId,
+        );
       } else {
         if (payload.lifecycleEvent === "subscriptionRemoved") {
           if (!options.notificationUrl) {
@@ -532,9 +587,18 @@ export async function reconcilePendingGraphLifecycleEvents(
             payload.subscriptionId,
             { notificationUrl: options.notificationUrl, now },
           );
-          if (!subscription.ok) throw new Error("Subscription recovery failed");
+          if (!subscription.ok) {
+            if ("retryAt" in subscription)
+              throw new GraphRetryDeferredError(subscription.retryAt);
+            throw new Error("Subscription recovery failed");
+          }
         }
-        await reconcileGraphDelta(db, graph, classifier, claimed.entityId);
+        await reconcileGraphDelta(
+          db,
+          (roundDb) => graphForMailbox(claimed.entityId, roundDb),
+          classifier,
+          claimed.entityId,
+        );
       }
       await db
         .update(workflowEvents)
@@ -546,16 +610,20 @@ export async function reconcilePendingGraphLifecycleEvents(
           ),
         );
       processed += 1;
-    } catch {
+    } catch (error) {
+      const retryAt = await recordGraphRetry(
+        db,
+        claimed.entityId,
+        error,
+        new Date(Math.max(now.getTime(), Date.now())),
+        Math.min(60 * 60_000, 1_000 * 2 ** Math.min(claimed.attempt, 12)),
+      );
       await db
         .update(workflowEvents)
         .set({
           status: "failed",
           completedAt: new Date(),
-          scheduledAt: new Date(
-            now.getTime() +
-              Math.min(60 * 60_000, 1_000 * 2 ** Math.min(claimed.attempt, 12)),
-          ),
+          scheduledAt: retryAt,
           error: "Graph lifecycle recovery failed",
         })
         .where(
@@ -572,7 +640,8 @@ export async function reconcilePendingGraphLifecycleEvents(
 
 export async function reconcileGraphDelta(
   db: AppDatabase,
-  graph: MicrosoftGraphClient,
+  graph:
+    MicrosoftGraphClient | ((roundDb: AppDatabase) => MicrosoftGraphClient),
   classifier: ReplyClassifier,
   mailboxId: string,
 ) {
@@ -585,9 +654,9 @@ export async function reconcileGraphDelta(
     // this literal set has exactly one place of truth, shared with the
     // generic "reconcile-inbound-mailbox" task's registry entry.
     graphDeltaHealthOptions(mailboxId),
-    async () => {
+    async (roundDb) => {
       const roundStartedAt = new Date();
-      const [mailbox] = await db
+      const [mailbox] = await roundDb
         .select()
         .from(mailboxConnections)
         .where(eq(mailboxConnections.id, mailboxId))
@@ -601,19 +670,22 @@ export async function reconcileGraphDelta(
       // The audit payload needs the count while the round is still running,
       // because `saveCursor` is only told about the cursor.
       const counted = createCountingIngest((message) =>
-        ingestMatchedInboundMessage(db, classifier, message),
+        ingestMatchedInboundMessage(roundDb, classifier, message),
       );
       const result = await reconcileInboundMailbox(
         {
-          source: createMicrosoftGraphInboundSource(graph, {
-            id: mailbox.id,
-            since: mailbox.lastSyncedAt ?? new Date(0),
-          }),
+          source: createMicrosoftGraphInboundSource(
+            typeof graph === "function" ? graph(roundDb) : graph,
+            {
+              id: mailbox.id,
+              since: mailbox.lastSyncedAt ?? new Date(0),
+            },
+          ),
           mailboxId: mailbox.id,
         },
         {
           loadCursor: async () => mailbox.syncCursor,
-          saveCursor: createInboundCursorWriter(db, {
+          saveCursor: createInboundCursorWriter(roundDb, {
             events: graphDeltaCursorEvents(),
             startedAt: roundStartedAt,
             payload: (round) => ({

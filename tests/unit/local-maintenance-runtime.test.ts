@@ -86,6 +86,8 @@ describe("local maintenance preflight", () => {
       delete childEnvironment.OPERATOR_API_TOKEN;
       delete childEnvironment.LOCAL_MAINTENANCE_BASE_URL;
       delete childEnvironment.WORKFLOW_PROVIDER;
+      delete childEnvironment.LOCAL_MAINTENANCE_ENABLED;
+      delete childEnvironment.AI_RESEARCH_TIMEOUT_MS;
       delete childEnvironment.__NEXT_PROCESSED_ENV;
 
       try {
@@ -132,6 +134,11 @@ console.log(JSON.stringify({ baseUrl: config.baseUrl, nodeEnvironment: process.e
     delete childEnvironment.PORT;
     delete childEnvironment.OPERATOR_API_TOKEN;
     delete childEnvironment.LOCAL_MAINTENANCE_BASE_URL;
+    // This fixture tests file loading, independently of the operator's launch
+    // switches (including the disabled worker required by the audit sandbox).
+    delete childEnvironment.WORKFLOW_PROVIDER;
+    delete childEnvironment.LOCAL_MAINTENANCE_ENABLED;
+    delete childEnvironment.AI_RESEARCH_TIMEOUT_MS;
     delete childEnvironment.__NEXT_PROCESSED_ENV;
 
     try {

@@ -4,6 +4,7 @@ import {
   GraphApiError,
   type MicrosoftGraphClient,
 } from "@/lib/microsoft/graph-client";
+import { throwIfAborted } from "@/lib/smtp-imap/abort";
 import type { InboundMailSource } from "@/modules/mailboxes/inbound-source";
 import {
   graphMessageSchema,
@@ -35,19 +36,25 @@ export function createMicrosoftGraphInboundSource(
   const initial = `/me/mailFolders/Inbox/messages/delta?changeType=created&$select=${DELTA_SELECT}&$filter=${filter}`;
   return {
     kind: "microsoft_graph",
-    // The signal is accepted and not used: Graph's client is HTTP, each call is
-    // its own bounded request, and there is no long-lived socket for an abort
-    // to reclaim. Threading it into the Graph client is a separate piece of
-    // work with its own reasons, not a consequence of this one.
-    async fetchSince(cursor, ingestPage) {
+    async fetchSince(cursor, ingestPage, options) {
       let url = cursor ?? initial;
       let rebaselined = false;
       let finalDeltaLink: string | undefined;
+      const visited = new Set<string>();
       for (;;) {
+        throwIfAborted(options?.signal);
+        if (visited.has(url)) {
+          throw new Error("Microsoft Graph delta repeated a continuation URL");
+        }
+        visited.add(url);
         let page;
         try {
-          page = deltaPageSchema.parse(await graph.get<unknown>(url));
+          page = deltaPageSchema.parse(
+            await graph.get<unknown>(url, options?.signal),
+          );
+          throwIfAborted(options?.signal);
         } catch (error) {
+          throwIfAborted(options?.signal);
           if (
             !rebaselined &&
             error instanceof GraphApiError &&
@@ -57,6 +64,7 @@ export function createMicrosoftGraphInboundSource(
             // restart replays it from the anchor and ingestion is idempotent.
             rebaselined = true;
             url = initial;
+            visited.clear();
             continue;
           }
           throw error;
@@ -67,7 +75,13 @@ export function createMicrosoftGraphInboundSource(
             continue;
           }
           const parsedMessage = graphMessageSchema.safeParse(raw);
-          if (!parsedMessage.success) continue;
+          if (!parsedMessage.success) {
+            // Advancing past an unparsed reply can lose its stop signal. Reject
+            // the page before ingestion so the durable cursor remains replayable.
+            throw new Error(
+              "Microsoft Graph delta contains an invalid message",
+            );
+          }
           messages.push(
             graphMessageToInbound(
               mailbox.id,
@@ -79,6 +93,7 @@ export function createMicrosoftGraphInboundSource(
         // Ingest before requesting the next page: a page that fails must not
         // discard the pages already persisted.
         await ingestPage(messages);
+        throwIfAborted(options?.signal);
         const next = page["@odata.nextLink"];
         if (next) {
           url = next;

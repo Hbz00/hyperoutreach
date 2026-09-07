@@ -38,6 +38,9 @@ class FakeChildProcess extends EventEmitter {
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM") {
+    // An exited fake has no descendants. A real empty group cannot receive
+    // another signal, and ChildProcess.kill likewise returns false after exit.
+    if (this.exitCode !== null || this.signalCode !== null) return false;
     this.kills.push(signal);
     if (this.exitSignals.includes(signal)) this.exit(null, signal);
     return true;
@@ -141,6 +144,90 @@ afterEach(() => {
 });
 
 describe("local stack supervisor startup", () => {
+  it.each([
+    ["dev", enabledConfig()],
+    ["start", enabledConfig()],
+    ["dev", disabledConfig("explicit")],
+    ["start", disabledConfig("explicit")],
+  ] as const)(
+    "defaults the local %s server to loopback, including when the worker is disabled",
+    async (mode, config) => {
+      const { supervisor, spawnProcess } = harness({ mode, config });
+      await supervisor.start();
+      expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
+        join(process.cwd(), "node_modules/next/dist/bin/next"),
+        mode,
+        "--hostname",
+        "127.0.0.1",
+      ]);
+      await supervisor.shutdown();
+    },
+  );
+
+  it.each([
+    ["--hostname", "0.0.0.0"],
+    ["--hostname=0.0.0.0"],
+    ["-H", "::1"],
+    ["-H0.0.0.0"],
+  ])("preserves an explicit Next hostname: %s", async (...args) => {
+    const { supervisor, spawnProcess } = harness({ mode: "start", args });
+    await supervisor.start();
+    expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
+      join(process.cwd(), "node_modules/next/dist/bin/next"),
+      "start",
+      "--hostname",
+      "127.0.0.1",
+      ...args,
+    ]);
+    await supervisor.shutdown();
+  });
+
+  it("does not treat a positional argument after -- as an explicit host option", async () => {
+    const args = ["--", "--hostname"];
+    const { supervisor, spawnProcess } = harness({ args });
+    await supervisor.start();
+    expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
+      join(process.cwd(), "node_modules/next/dist/bin/next"),
+      "dev",
+      "--hostname",
+      "127.0.0.1",
+      ...args,
+    ]);
+    await supervisor.shutdown();
+  });
+
+  it.each([
+    ["--experimental-https-key", "-Hprivate-key.pem"],
+    ["--experimental-upload-trace", "-Htrace"],
+  ])(
+    "keeps the local binding when %s has a value beginning with -H",
+    async (...args) => {
+      const { supervisor, spawnProcess } = harness({ mode: "dev", args });
+      await supervisor.start();
+      expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
+        join(process.cwd(), "node_modules/next/dist/bin/next"),
+        "dev",
+        "--hostname",
+        "127.0.0.1",
+        ...args,
+      ]);
+      await supervisor.shutdown();
+    },
+  );
+
+  it("preserves the deployment hostname default when Trigger owns scheduling", async () => {
+    const { supervisor, spawnProcess } = harness({
+      mode: "start",
+      config: disabledConfig("trigger"),
+    });
+    await supervisor.start();
+    expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
+      join(process.cwd(), "node_modules/next/dist/bin/next"),
+      "start",
+    ]);
+    await supervisor.shutdown();
+  });
+
   it("starts Next and the worker in local mode and forwards Next arguments", async () => {
     const web = new FakeChildProcess("web");
     const worker = new FakeChildProcess("worker");
@@ -160,6 +247,8 @@ describe("local stack supervisor startup", () => {
     expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
       join(process.cwd(), "node_modules/next/dist/bin/next"),
       "dev",
+      "--hostname",
+      "127.0.0.1",
       "--hostname",
       "127.0.0.1",
       "--webpack",
@@ -347,6 +436,8 @@ describe("local stack supervisor startup", () => {
     expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
       join(process.cwd(), "node_modules/next/dist/bin/next"),
       "start",
+      "--hostname",
+      "127.0.0.1",
       "--hostname",
       "127.0.0.1",
     ]);

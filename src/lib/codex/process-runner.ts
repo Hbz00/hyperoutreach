@@ -80,6 +80,9 @@ export class NodeProcessRunner implements ProcessRunner {
           env: request.environment as NodeJS.ProcessEnv,
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
+          // Give this invocation its own process group so timeout cleanup also
+          // reaches descendants. Windows retains direct-child termination.
+          detached: process.platform !== "win32",
         });
       } catch {
         reject(
@@ -97,6 +100,19 @@ export class NodeProcessRunner implements ProcessRunner {
       let terminalError: ProcessExecutionError | null = null;
       let settled = false;
       let escalation: ReturnType<typeof setTimeout> | null = null;
+      const processGroup = process.platform !== "win32" ? child.pid : undefined;
+      const killGroup = (signal: NodeJS.Signals) => {
+        if (!processGroup) return;
+        try {
+          process.kill(-processGroup, signal);
+        } catch {
+          // The private invocation group may already have exited.
+        }
+      };
+      const signalChild = (signal: NodeJS.Signals) => {
+        if (processGroup) killGroup(signal);
+        else child.kill(signal);
+      };
 
       const onStdout = (chunk: Buffer) => capture(stdout, chunk);
       const onStderr = (chunk: Buffer) => capture(stderr, chunk);
@@ -123,6 +139,7 @@ export class NodeProcessRunner implements ProcessRunner {
         settled = true;
         cleanup();
         if (abandonChild) {
+          killGroup("SIGKILL");
           child.stdin.destroy();
           child.stdout.destroy();
           child.stderr.destroy();
@@ -135,14 +152,14 @@ export class NodeProcessRunner implements ProcessRunner {
         if (terminalError || settled) return;
         terminalError = error;
         try {
-          child.kill("SIGTERM");
+          signalChild("SIGTERM");
         } catch {
           // Escalation below still enforces a hard settlement bound.
         }
         if (settled) return;
         escalation = setTimeout(() => {
           try {
-            child.kill("SIGKILL");
+            signalChild("SIGKILL");
           } catch {
             // The caller must still receive the sanitized primary failure.
           }
@@ -189,6 +206,9 @@ export class NodeProcessRunner implements ProcessRunner {
         settled = true;
         cleanup();
         if (terminalError) {
+          // A cooperative parent can close before its resistant descendant;
+          // clearing escalation must not leave that descendant behind.
+          killGroup("SIGKILL");
           reject(terminalError);
           return;
         }

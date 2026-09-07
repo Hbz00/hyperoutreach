@@ -178,8 +178,6 @@ contract-tested; their live verification needs your own credentials.
 - [Authentication and secrets](docs/security.md) — sessions, CSRF, the login rate
   limit and why it is shaped that way, secret rotation
 - [Validation](docs/validation.md) — the test suite, the eval fixture, the probes
-- [`SPEC.md`](SPEC.md) — the original architecture document (French; its AI
-  transport is superseded, the code is the source of truth)
 
 ## License
 

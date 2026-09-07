@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "@/lib/db/schema";
 import { actionLockKey, withActionLocks } from "@/lib/db/action-lock";
 import { resolveDatabaseUrls } from "@/lib/db/test-database";
+import { MicrosoftGraphClient } from "@/lib/microsoft/graph-client";
 import { ImapAuthenticationError } from "@/lib/smtp-imap/imap-client";
 import {
   decryptSecret,
@@ -34,6 +35,7 @@ import {
   DatabaseMockMailProvider,
   MockMailProvider,
 } from "@/modules/mailboxes/mock-mail-provider";
+import { MicrosoftGraphMailProvider } from "@/modules/mailboxes/microsoft-graph-mail-provider";
 import {
   defaultInboundNaming,
   withInboundReconciliationHealth,
@@ -914,13 +916,10 @@ describe("reliable send attempt ownership and provider confirmation", () => {
     });
   });
 
-  // `"drafted"` is deliberately absent from this matrix: unlike `"throws"`
-  // and `"null"` (nothing usable to act on either way), a fresh `"drafted"`
-  // reconciliation is *positive proof* nothing was sent, and — as of this
-  // fix — is the one outcome that releases the claim instead of re-marking
-  // it uncertain forever. See the two dedicated tests immediately below
-  // this block for that behavior, and the task's report for why leaving it
-  // out of this matrix is intentional, not an oversight.
+  // Drafted reconciliation from the SMTP journal or deterministic mock can
+  // establish that no acceptance remains. Graph draft visibility cannot prove
+  // that after asynchronous acceptance; its dedicated cases below retain the
+  // uncertain attempt. This matrix exercises unavailable reconciliation.
   it.each([
     { providerOutcome: "throws" as const, claimAge: "fresh" as const },
     { providerOutcome: "throws" as const, claimAge: "stale" as const },
@@ -993,6 +992,98 @@ describe("reliable send attempt ownership and provider confirmation", () => {
       expect(acceptedProvider.sendDraftCalls).toHaveLength(
         sendCallsBeforeRecovery,
       );
+    },
+  );
+
+  it.each([false, true])(
+    "never resubmits a Graph draft after asynchronous acceptance (concurrent=%s)",
+    async (concurrent) => {
+      const fixture = await prepareApprovedMessage({ mailbox: true });
+      const mailboxId = fixture.mailbox!.id;
+      await db
+        .update(schema.mailboxConnections)
+        .set({ provider: "microsoft_graph" })
+        .where(eq(schema.mailboxConnections.id, mailboxId));
+      await db
+        .update(schema.contacts)
+        .set({ emailResolutionStatus: "resolved" })
+        .where(eq(schema.contacts.id, fixture.enrollment.contactId));
+      await db.insert(schema.emailCandidates).values({
+        contactId: fixture.enrollment.contactId,
+        email: fixture.message.recipient,
+        normalizedEmail: fixture.message.recipient,
+        domain: fixture.message.recipient.split("@")[1]!,
+        confidence: "1.000",
+        source: "manual",
+        status: "accepted",
+      });
+      let sendPosts = 0;
+      let draftPosts = 0;
+      let confirmed = false;
+      const graph = new MicrosoftGraphClient({
+        accessToken: async () => "synthetic-test-token",
+        // Complete transport substitution: no network or live Graph account.
+        // A 202 is returned while the message remains visible as a draft.
+        fetcher: async (input, init = {}) => {
+          const url = String(input);
+          if (init.method === "POST" && url.endsWith("/me/messages")) {
+            draftPosts += 1;
+          }
+          if (init.method === "POST" && url.endsWith("/send")) {
+            sendPosts += 1;
+            return new Response(null, { status: 202 });
+          }
+          if (
+            (init.method === "POST" && url.endsWith("/me/messages")) ||
+            (init.method === "GET" && url.includes("/me/messages/"))
+          ) {
+            return Response.json({
+              id: `async-graph-draft-${draftPosts}`,
+              isDraft: !confirmed,
+              internetMessageId: "<async-graph@example.test>",
+              conversationId: "async-graph-conversation",
+            });
+          }
+          throw new Error(
+            `Unexpected synthetic Graph request: ${init.method} ${url}`,
+          );
+        },
+      });
+      const send = () =>
+        sendApprovedMessage(
+          db,
+          new MicrosoftGraphMailProvider(graph, mailboxId),
+          { messageId: fixture.message.id },
+        );
+      await expect(send()).resolves.toMatchObject({
+        ok: false,
+        code: "DELIVERY_UNCERTAIN",
+      });
+      expect(sendPosts).toBe(1);
+      expect(draftPosts).toBe(1);
+      // A second invocation used to erase attemptCount; a third submitted again.
+      if (concurrent) await Promise.all(Array.from({ length: 4 }, send));
+      else {
+        await send();
+        await send();
+      }
+      expect(sendPosts).toBe(1);
+      expect(draftPosts).toBe(1);
+      const [pending] = await db
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.id, fixture.message.id));
+      expect(pending).toMatchObject({
+        status: "delivery_uncertain",
+        attemptCount: 1,
+      });
+      confirmed = true;
+      await expect(send()).resolves.toMatchObject({
+        ok: true,
+        disposition: "sent",
+      });
+      expect(sendPosts).toBe(1);
+      expect(draftPosts).toBe(1);
     },
   );
 

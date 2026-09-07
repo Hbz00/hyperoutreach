@@ -60,10 +60,10 @@ export function registerMailProvider(
  * failures land *inside* the error handling the send/reconcile paths already
  * have. This gives every other provider the same shape.
  *
- * The load is memoized only on success. Caching a rejection would turn a
- * transient failure (a database blip while re-reading the mailbox row) into
- * a permanent one for the lifetime of this instance — and the send path
- * retries through the same provider object.
+ * Only concurrent loads are shared. Later operations must re-read mailbox
+ * credentials and configuration after a rotation or disconnect. Neither a
+ * successful load nor a transient failure may be cached for the lifetime of
+ * a provider instance reused by the send/reconciliation path.
  */
 export function lazyMailProvider(
   kind: MailProviderKind,
@@ -72,9 +72,8 @@ export function lazyMailProvider(
   let pending: Promise<MailProvider> | null = null;
   const resolve = (): Promise<MailProvider> => {
     if (!pending) {
-      pending = load().catch((error: unknown) => {
+      pending = load().finally(() => {
         pending = null;
-        throw error;
       });
     }
     return pending;

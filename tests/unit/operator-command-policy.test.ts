@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { workflowTaskNames } from "@/modules/workflows/task-contracts";
 
 import {
   classifyCommandOutcome,
@@ -130,5 +131,8 @@ describe("which operator commands leave the request", () => {
 
   it("queues nothing that is not a real workflow task", () => {
     expect(Object.values(QUEUED_OPERATOR_COMMANDS).length).toBeGreaterThan(0);
+    for (const task of Object.values(QUEUED_OPERATOR_COMMANDS)) {
+      expect(workflowTaskNames).toContain(task);
+    }
   });
 });

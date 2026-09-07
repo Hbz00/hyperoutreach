@@ -77,9 +77,28 @@ export async function askChatGptDesktop(
   if (request.prompt.trim() === "") {
     throw new ChatGptDesktopError("Prompt must not be empty", "request");
   }
+  const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new ChatGptDesktopError(
+      "Timeout must be positive and finite",
+      "request",
+    );
+  }
+  const deadline = performance.now() + timeoutMs;
+  const remainingMs = () => {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      throw new ChatGptDesktopError(
+        "ChatGPT desktop request timed out",
+        "timeout",
+      );
+    }
+    return remaining;
+  };
   const temporary = request.temporary ?? true;
-  return serialize(() =>
-    withSurface(options, async (session) => {
+  return serialize(() => {
+    remainingMs();
+    return withSurface(options, async (session) => {
       if (!(await readSurface(session)).hasComposer) {
         throw new ChatGptDesktopError(
           "ChatGPT desktop is not showing the Chat surface",
@@ -90,7 +109,12 @@ export async function askChatGptDesktop(
 
       // The temporary-chat toggle only exists on an empty chat, so the new
       // chat has to come first — both to read the current mode and to set it.
-      await startNewChat(session);
+      if (!(await startNewChat(session))) {
+        throw new ChatGptDesktopError(
+          "ChatGPT desktop could not start a new chat",
+          "evaluate",
+        );
+      }
       const before = await readSurface(session);
       const outcome = await setTemporary(session, temporary);
       if (outcome === "unavailable") {
@@ -104,32 +128,55 @@ export async function askChatGptDesktop(
       try {
         if (request.model) await selectModel(session, request.model);
         if (request.effort) await selectEffort(session, request.effort);
-        const model =
-          request.model ?? (await readSelectedModel(session)) ?? null;
+        const model = await readSelectedModel(session);
+        if (
+          request.model &&
+          model?.toLowerCase() !== request.model.toLowerCase()
+        ) {
+          throw new ChatGptDesktopError(
+            "ChatGPT desktop did not confirm the requested model",
+            "evaluate",
+          );
+        }
         // `setTemporary` reports that it clicked the control, not that the
         // surface obeyed it. This read already happens, one step before the
         // prompt is sent, so confirming it costs nothing on the happy path.
-        // A reading of `null` is left alone — `setTemporary` already confirmed
-        // the control was there — and a contradiction is re-read once, because
-        // the picker has just closed and its animation should not be able to
-        // fail a turn that is in fact correctly configured.
+        // An unknown or contradictory reading is re-read once because the
+        // picker has just closed. A successful click alone cannot establish
+        // whether this prompt will be kept in chat history.
         let state = await readSurface(session);
-        if (state.temporary !== null && state.temporary !== temporary) {
+        if (state.temporary !== temporary) {
           await wait(600);
           state = await readSurface(session);
         }
-        if (state.temporary !== null && state.temporary !== temporary) {
+        if (state.temporary !== temporary) {
           throw new ChatGptDesktopError(
             `ChatGPT desktop did not switch temporary chat ${temporary ? "on" : "off"}`,
             "evaluate",
-            "the control was clicked but the surface still reports the other mode",
+            "the surface does not confirm the requested mode",
+          );
+        }
+        if (
+          request.effort &&
+          state.effort?.toLowerCase() !== request.effort.toLowerCase()
+        ) {
+          throw new ChatGptDesktopError(
+            "ChatGPT desktop did not confirm the requested effort",
+            "evaluate",
           );
         }
 
         const baselineCount = await countAssistantMessages(session);
+        if (baselineCount !== 0) {
+          throw new ChatGptDesktopError(
+            "ChatGPT desktop did not confirm an empty chat",
+            "evaluate",
+          );
+        }
+        remainingMs();
         await submitPrompt(session, request.prompt);
         const text = await awaitAnswer(session, {
-          timeoutMs: request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          timeoutMs: remainingMs(),
           baselineCount,
         });
         return {
@@ -145,8 +192,8 @@ export async function askChatGptDesktop(
           await setTemporary(session, before.temporary ?? false);
         }
       }
-    }),
-  );
+    });
+  });
 }
 
 export function listChatGptDesktopModels(

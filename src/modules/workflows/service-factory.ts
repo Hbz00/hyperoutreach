@@ -118,8 +118,8 @@ function microsoftDependencies(
   db: AppDatabase,
 ) {
   const config = requireMicrosoftConfig(environment);
-  const graphForMailbox = (mailboxId: string) =>
-    createMailboxGraphClient(db, config, mailboxId);
+  const graphForMailbox = (mailboxId: string, mailboxDb = db) =>
+    createMailboxGraphClient(mailboxDb, config, mailboxId);
   return { db, config, graphForMailbox };
 }
 
@@ -239,24 +239,26 @@ export function createWorkflowTaskServices(
       db,
       mailbox.id,
       entry.naming(mailbox.id),
-      async () => {
+      async (roundDb) => {
         const roundStartedAt = new Date();
-        const [current] = await db
+        const [current] = await roundDb
           .select()
           .from(mailboxConnections)
           .where(eq(mailboxConnections.id, mailbox.id))
           .limit(1);
         if (!current) throw new Error("Mailbox not found");
-        const source = await entry.createSource(db, current, { environment });
+        const source = await entry.createSource(roundDb, current, {
+          environment,
+        });
         const counted = createCountingIngest((message) =>
-          ingestMatchedInboundMessage(db, classifier, message),
+          ingestMatchedInboundMessage(roundDb, classifier, message),
         );
         const result = await reconcileInboundMailbox(
           { source, mailboxId: current.id },
           {
             ...(signal ? { signal } : {}),
             loadCursor: async () => current.syncCursor,
-            saveCursor: createInboundCursorWriter(db, {
+            saveCursor: createInboundCursorWriter(roundDb, {
               events: entry.cursorEvents(),
               startedAt: roundStartedAt,
               payload: (round) => ({
@@ -323,8 +325,18 @@ export function createWorkflowTaskServices(
       return results;
     },
     "drain-graph-webhooks": async (payload) => {
-      if (environment.MAIL_PROVIDER !== "microsoft_graph") {
-        return { skipped: true, reason: "microsoft_graph_disabled" };
+      const [mailbox] = await db
+        .select({ id: mailboxConnections.id })
+        .from(mailboxConnections)
+        .where(
+          and(
+            eq(mailboxConnections.provider, "microsoft_graph"),
+            eq(mailboxConnections.status, "available"),
+          ),
+        )
+        .limit(1);
+      if (!mailbox) {
+        return { skipped: true, reason: "no_microsoft_graph_mailboxes" };
       }
       const { config, graphForMailbox } = microsoftDependencies(
         environment,
@@ -403,8 +415,18 @@ export function createWorkflowTaskServices(
       return { observedAt: payload.observedAt, results };
     },
     "maintain-graph-subscriptions": async (payload) => {
-      if (environment.MAIL_PROVIDER !== "microsoft_graph") {
-        return { skipped: true, reason: "microsoft_graph_disabled" };
+      const [mailbox] = await db
+        .select({ id: mailboxConnections.id })
+        .from(mailboxConnections)
+        .where(
+          and(
+            eq(mailboxConnections.provider, "microsoft_graph"),
+            eq(mailboxConnections.status, "available"),
+          ),
+        )
+        .limit(1);
+      if (!mailbox) {
+        return { skipped: true, reason: "no_microsoft_graph_mailboxes" };
       }
       const notificationUrl = environment.MICROSOFT_GRAPH_NOTIFICATION_URL;
       if (!notificationUrl) {
@@ -590,7 +612,8 @@ export function createWorkflowTaskServices(
         //
         // The cycle's deadline is forwarded too: without it this is the one
         // stage that cannot be told to stop, and the pass would claim another
-        // command after the cycle had already given its lease back.
+        // command after the cycle had timed out. The cycle retains its lease
+        // until that cooperative work actually settles.
         "drain-operator-commands": (_payload, options) =>
           drainOperatorCommands(db, runQueuedCommand, {
             ...(options?.signal ? { signal: options.signal } : {}),

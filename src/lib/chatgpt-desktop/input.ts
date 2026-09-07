@@ -53,10 +53,18 @@ async function centerOf(
   return session.evaluate<{ x: number; y: number } | null>(
     `(() => {
        const element = document.querySelector(${JSON.stringify(selector)});
-       if (!element) return null;
+       if (!element || element.matches(':disabled') || element.closest('[hidden], [inert], [aria-hidden="true"], [aria-disabled="true"], [data-disabled]')) return null;
+       // CDP uses viewport coordinates. A mounted sidebar item can be below
+       // the viewport even though it has a nonzero layout box.
+       element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
        const box = element.getBoundingClientRect();
-       if (box.width === 0 && box.height === 0) return null;
-       return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+       if (box.width <= 0 || box.height <= 0) return null;
+       const x = box.left + box.width / 2;
+       const y = box.top + box.height / 2;
+       if (x < 0 || x >= window.innerWidth || y < 0 || y >= window.innerHeight) return null;
+       const hit = document.elementFromPoint(x, y);
+       if (!hit || !element.contains(hit)) return null;
+       return { x, y };
      })()`,
     10_000,
   );

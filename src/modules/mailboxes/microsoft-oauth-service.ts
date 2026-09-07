@@ -9,13 +9,16 @@ import {
   stateTransitions,
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
-import { withActionLocks } from "@/lib/db/action-lock";
+import { actionLockKey, withActionLocks } from "@/lib/db/action-lock";
 import {
   buildMicrosoftAuthorizationRequest,
   MICROSOFT_DELEGATED_SCOPES,
   type MicrosoftConfig,
 } from "@/lib/microsoft/config";
-import { MicrosoftGraphClient } from "@/lib/microsoft/graph-client";
+import {
+  MicrosoftGraphClient,
+  readGraphJson,
+} from "@/lib/microsoft/graph-client";
 import { decryptSecret, encryptSecret } from "@/lib/microsoft/token-crypto";
 import { normalizeEmail } from "@/modules/prospects/normalization";
 
@@ -84,23 +87,32 @@ async function tokenRequest(
   requestTimeoutMs: number,
   fallbackScopes: readonly string[],
 ) {
+  const signal = AbortSignal.timeout(requestTimeoutMs);
   const response = await fetcher(config.tokenEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
-    signal: AbortSignal.timeout(requestTimeoutMs),
+    signal,
+    redirect: "error",
   });
   if (!response.ok) {
     let code: string | null = null;
     try {
-      const raw = (await response.json()) as { error?: unknown };
-      code = typeof raw.error === "string" ? raw.error : null;
+      const raw = (await readGraphJson(response, signal, 64 * 1024)) as {
+        error?: unknown;
+      };
+      code =
+        typeof raw.error === "string" && /^[A-Za-z0-9_]{1,128}$/.test(raw.error)
+          ? raw.error
+          : null;
     } catch {
       code = null;
     }
     throw new OAuthTokenError(response.status, code);
   }
-  const token = tokenSchema.parse(await response.json());
+  const token = tokenSchema.parse(
+    await readGraphJson(response, signal, 1024 * 1024),
+  );
   const grantedScopes = token.scope
     ? scopeList(token.scope)
     : [...fallbackScopes];
@@ -215,15 +227,24 @@ export async function completeMicrosoftConnection(
     if (!token.refresh_token) {
       return { ok: false, code: "REFRESH_TOKEN_MISSING" } as const;
     }
+    const profileSignal = AbortSignal.timeout(
+      options.requestTimeoutMs ?? 10_000,
+    );
     const meResponse = await fetcher(
       "https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName",
       {
         headers: { Authorization: `Bearer ${token.access_token}` },
-        signal: AbortSignal.timeout(options.requestTimeoutMs ?? 10_000),
+        signal: profileSignal,
+        redirect: "error",
       },
     );
-    if (!meResponse.ok) throw new Error("Microsoft profile lookup failed");
-    const me = meSchema.parse(await meResponse.json());
+    if (!meResponse.ok) {
+      void meResponse.body?.cancel().catch(() => undefined);
+      throw new Error("Microsoft profile lookup failed");
+    }
+    const me = meSchema.parse(
+      await readGraphJson(meResponse, profileSignal, 1024 * 1024),
+    );
     const email = me.mail ?? me.userPrincipalName;
     const normalizedEmail = normalizeEmail(email);
     const grantedScopes = token.grantedScopes;
@@ -464,48 +485,54 @@ export async function disconnectMicrosoftMailbox(
     deleteSubscription?: (subscriptionId: string) => Promise<void>;
   } = {},
 ) {
-  const [mailbox] = await db
-    .select()
-    .from(mailboxConnections)
-    .where(eq(mailboxConnections.id, mailboxId))
-    .limit(1);
-  if (!mailbox || mailbox.provider !== "microsoft_graph") {
-    return { ok: false, code: "NOT_FOUND" } as const;
-  }
-  let remoteDeleteFailed = false;
-  if (mailbox.subscriptionId && options.deleteSubscription) {
-    try {
-      await options.deleteSubscription(mailbox.subscriptionId);
-    } catch {
-      remoteDeleteFailed = true;
-    }
-  }
-  await db.transaction(async (tx) => {
-    await tx
-      .update(mailboxConnections)
-      .set({
-        status: "disconnected",
-        encryptedRefreshToken: null,
-        accessTokenCiphertext: null,
-        tokenExpiresAt: null,
-        grantedScopes: [],
-        syncCursor: null,
-        subscriptionId: null,
-        subscriptionExpiresAt: null,
-        subscriptionClientStateHash: null,
-        subscriptionResource: null,
-      })
-      .where(eq(mailboxConnections.id, mailbox.id));
-    await tx.insert(stateTransitions).values({
-      entityType: "mailbox",
-      entityId: mailbox.id,
-      fromState: mailbox.status,
-      toState: "disconnected",
-      reason: remoteDeleteFailed
-        ? "microsoft_disconnected_remote_delete_failed"
-        : "microsoft_disconnected",
-      actor: "operator",
-    });
-  });
-  return { ok: true, remoteDeleteFailed } as const;
+  return withActionLocks(
+    db,
+    [actionLockKey.mailbox(mailboxId)],
+    async (lockedDb) => {
+      const [mailbox] = await lockedDb
+        .select()
+        .from(mailboxConnections)
+        .where(eq(mailboxConnections.id, mailboxId))
+        .limit(1);
+      if (!mailbox || mailbox.provider !== "microsoft_graph") {
+        return { ok: false, code: "NOT_FOUND" } as const;
+      }
+      let remoteDeleteFailed = false;
+      if (mailbox.subscriptionId && options.deleteSubscription) {
+        try {
+          await options.deleteSubscription(mailbox.subscriptionId);
+        } catch {
+          remoteDeleteFailed = true;
+        }
+      }
+      await lockedDb.transaction(async (tx) => {
+        await tx
+          .update(mailboxConnections)
+          .set({
+            status: "disconnected",
+            encryptedRefreshToken: null,
+            accessTokenCiphertext: null,
+            tokenExpiresAt: null,
+            grantedScopes: [],
+            syncCursor: null,
+            subscriptionId: null,
+            subscriptionExpiresAt: null,
+            subscriptionClientStateHash: null,
+            subscriptionResource: null,
+          })
+          .where(eq(mailboxConnections.id, mailbox.id));
+        await tx.insert(stateTransitions).values({
+          entityType: "mailbox",
+          entityId: mailbox.id,
+          fromState: mailbox.status,
+          toState: "disconnected",
+          reason: remoteDeleteFailed
+            ? "microsoft_disconnected_remote_delete_failed"
+            : "microsoft_disconnected",
+          actor: "operator",
+        });
+      });
+      return { ok: true, remoteDeleteFailed } as const;
+    },
+  );
 }

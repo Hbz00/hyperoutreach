@@ -33,6 +33,7 @@ const credentials = { user: "boite@d.tld", pass: "s3cret" };
 function stubImapFlow(overrides: { fetch: ReturnType<typeof vi.fn> }): {
   close: ReturnType<typeof vi.fn>;
   lockRelease: ReturnType<typeof vi.fn>;
+  logout: ReturnType<typeof vi.fn>;
 } {
   const close = vi.fn();
   const logout = vi.fn().mockResolvedValue(undefined);
@@ -42,7 +43,7 @@ function stubImapFlow(overrides: { fetch: ReturnType<typeof vi.fn> }): {
   ImapFlow.mockImplementationOnce(function ImapFlowStub() {
     return { connect, close, logout, getMailboxLock, fetch: overrides.fetch };
   });
-  return { close, lockRelease };
+  return { close, lockRelease, logout };
 }
 
 async function collectPages<T>(generator: AsyncGenerator<T[]>): Promise<T[][]> {
@@ -139,12 +140,13 @@ describe("ImapClient.fetchRange", () => {
       };
       throw new Error("connection dropped");
     });
-    const { lockRelease } = stubImapFlow({ fetch });
+    const { lockRelease, logout } = stubImapFlow({ fetch });
     const client = new ImapClient(transport, credentials);
 
     await expect(collectPages(client.fetchRange("1:*"))).rejects.toThrow(
       "connection dropped",
     );
     expect(lockRelease).toHaveBeenCalledTimes(1);
+    expect(logout).toHaveBeenCalledTimes(1);
   });
 });

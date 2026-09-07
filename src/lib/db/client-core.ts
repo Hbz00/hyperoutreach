@@ -20,6 +20,14 @@ const globalForDatabase = globalThis as unknown as {
 };
 
 export function getSqlClient(): ReturnType<typeof postgres> {
+  const revision = (
+    postgres as typeof postgres & { hyperoutreachReservationPatch?: string }
+  ).hyperoutreachReservationPatch;
+  if (revision !== "hyperoutreach-postgres-3.4.9-v1") {
+    throw new Error(
+      "PostgreSQL driver repair is missing or incompatible; run npm run postinstall, then rebuild and restart the application",
+    );
+  }
   const existing = globalForDatabase.hyperoutreachPostgres;
   if (existing) return existing;
   const client = postgres(databaseUrl(), {

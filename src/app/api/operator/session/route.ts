@@ -12,6 +12,10 @@ import {
   verifyOperatorSession,
 } from "@/lib/operator-auth";
 import { mutableRedirect } from "@/lib/http-response";
+import {
+  bodyErrorResponse,
+  readLimitedFormData,
+} from "@/lib/http-request-body";
 import { OperatorLoginThrottle } from "@/lib/operator-login-throttle";
 
 export const runtime = "nodejs";
@@ -57,9 +61,9 @@ function setSessionCookie(
 export async function POST(request: Request) {
   let formData: FormData;
   try {
-    formData = await request.formData();
-  } catch {
-    return Response.json({ error: "Invalid request" }, { status: 400 });
+    formData = await readLimitedFormData(request, 16 * 1024);
+  } catch (error) {
+    return bodyErrorResponse(error, "Invalid request");
   }
   const intent = formData.get("intent");
   if (intent === "logout") {

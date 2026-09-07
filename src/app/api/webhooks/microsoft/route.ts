@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { bodyErrorResponse, readLimitedJson } from "@/lib/http-request-body";
 
 import { getMicrosoftServerContext } from "@/lib/microsoft/server";
 import { stageGraphWebhook } from "@/modules/mailboxes/microsoft-graph-sync-service";
@@ -23,15 +24,15 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const validation = validationResponse(request);
-  if (validation) return validation;
+  if (validation) {
+    void request.body?.cancel().catch(() => undefined);
+    return validation;
+  }
   let payload: unknown;
   try {
-    payload = await request.json();
-  } catch {
-    return Response.json(
-      { error: "Invalid notification payload" },
-      { status: 400 },
-    );
+    payload = await readLimitedJson(request, 32 * 1024 * 1024);
+  } catch (error) {
+    return bodyErrorResponse(error, "Invalid notification payload");
   }
   try {
     const { db, config } = getMicrosoftServerContext();

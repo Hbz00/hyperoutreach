@@ -402,7 +402,11 @@ export class SmtpImapInboundSource implements InboundMailSource {
     // "everything below `startUid` counts as caught up", never further.
     let highestUid = startUid - 1;
 
-    for await (const page of this.imap.fetchRange(range, signal)) {
+    for await (const page of this.imap.fetchRange(
+      range,
+      signal,
+      status.uidValidity,
+    )) {
       // Per RFC 3501 §6.4.8, a range ending in `*` always resolves to the
       // mailbox's highest UID, even when that UID is below the range's
       // start — so any fetch (not just a resumed one: the same trap applies

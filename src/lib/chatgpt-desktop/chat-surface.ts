@@ -23,11 +23,32 @@ export const SELECTORS = {
   newChat: "New chat",
   temporaryOn: "Turn on temporary chat",
   temporaryOff: "Turn off temporary chat",
+  temporaryIdle: "Temporary chat",
+  powerPicker: "[data-model-picker-view]",
+  powerControl: '[data-reasoning-slider="true"]',
+  powerModelToggle: '[data-model-picker-view-toggle="true"]',
 } as const;
 
 const ADVANCED_COLLAPSED = "Show advanced options";
 const ADVANCED_EXPANDED = "Show compact options";
 const MENU_STEP_LIMIT = 12;
+
+// Updates can leave an older panel mounted during a transition. Its labels
+// cannot establish the state of the controls the user can currently operate.
+const VISIBLE_CONTROLS = `
+  const visible = (element) => {
+    if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+    const style = getComputedStyle(element);
+    if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+    const box = element.getBoundingClientRect();
+    return box.width > 0 && box.height > 0;
+  };
+  const visibleMatches = (selector) => Array.from(document.querySelectorAll(selector)).filter(visible);
+  const uniqueVisible = (selector) => {
+    const matches = visibleMatches(selector);
+    return matches.length === 1 ? matches[0] : null;
+  };
+`;
 
 export type SurfaceState = {
   hasComposer: boolean;
@@ -36,56 +57,82 @@ export type SurfaceState = {
   temporary: boolean | null;
 };
 
-function labelExpression(label: string): string {
+function labelExpression(label: string, textOnly = false): string {
   return `(() => {
-     const element = Array.from(document.querySelectorAll("button, [role=button], [role=menuitem], [aria-label]"))
-       .find((candidate) => ((candidate.getAttribute("aria-label") || candidate.textContent || "").trim() === ${JSON.stringify(label)}));
-     if (!element) return null;
+     ${VISIBLE_CONTROLS}
+     document.querySelectorAll('[data-chatgpt-cli-target]').forEach(element => element.removeAttribute('data-chatgpt-cli-target'));
+     const candidates = visibleMatches("button, [role=button], [role=menuitem], [aria-label]")
+       .filter((candidate) => !candidate.matches(':disabled, [aria-disabled="true"], [data-disabled]'));
+     // The current sidebar offers both a text-only New chat button and an
+     // explicitly labelled icon. Prefer the explicit control; text is only
+     // a fallback, and duplicate explicit labels must still be refused.
+     const explicit = candidates.filter(candidate => (candidate.getAttribute('aria-label') || '').trim() === ${JSON.stringify(label)});
+     if (explicit.length > 1) return null;
+     const usingExplicit = !${textOnly} && explicit.length > 0;
+     const matches = usingExplicit ? explicit : candidates.filter(candidate => !candidate.getAttribute('aria-label') && (candidate.textContent || '').trim() === ${JSON.stringify(label)});
+     if (matches.length !== 1) return null;
+     const element = matches[0];
      element.setAttribute("data-chatgpt-cli-target", "1");
-     return true;
+     return usingExplicit ? "explicit" : "text";
    })()`;
 }
 
 async function clickByLabel(
   session: CdpSession,
   label: string,
+  textOnly = false,
 ): Promise<boolean> {
-  const tagged = await session.evaluate<boolean | null>(
-    labelExpression(label),
+  const tagged = await session.evaluate<"explicit" | "text" | null>(
+    labelExpression(label, textOnly),
     10_000,
   );
   if (!tagged) return false;
-  const clicked = await clickSelector(session, '[data-chatgpt-cli-target="1"]');
-  await session.evaluate<null>(
-    `(() => {
-       const element = document.querySelector('[data-chatgpt-cli-target="1"]');
-       if (element) element.removeAttribute("data-chatgpt-cli-target");
-       return null;
-     })()`,
-    10_000,
-  );
+  let clicked: boolean;
+  try {
+    clicked = await clickSelector(session, '[data-chatgpt-cli-target="1"]');
+  } finally {
+    await session.evaluate<null>(
+      `(() => {
+         document.querySelectorAll('[data-chatgpt-cli-target]').forEach(element => element.removeAttribute('data-chatgpt-cli-target'));
+         return null;
+       })()`,
+      10_000,
+    );
+  }
+  // A covered sidebar icon is not actionable even after scrolling. Only
+  // New chat has the observed equivalent text button. A false click result
+  // means no mouse input was sent, so trying that unique alternative is safe.
+  if (!clicked && tagged === "explicit" && label === SELECTORS.newChat) {
+    return clickByLabel(session, label, true);
+  }
   return clicked;
 }
 
 export async function readSurface(session: CdpSession): Promise<SurfaceState> {
   return session.evaluate<SurfaceState>(
     `(() => {
-       const trigger = document.querySelector(${JSON.stringify(SELECTORS.modelTrigger)});
-       const modelRow = document.querySelector(${JSON.stringify(SELECTORS.modelRow)});
-       const effortRow = document.querySelector(${JSON.stringify(SELECTORS.effortRow)});
-       const labels = Array.from(document.querySelectorAll("[aria-label]"))
+       ${VISIBLE_CONTROLS}
+       const trigger = uniqueVisible(${JSON.stringify(SELECTORS.modelTrigger)});
+       const modelRow = uniqueVisible(${JSON.stringify(SELECTORS.modelRow)});
+       const effortRows = visibleMatches(${JSON.stringify(SELECTORS.effortRow)});
+       const effortRow = effortRows.length === 1 ? effortRows[0] : null;
+       const labels = visibleMatches("button[aria-label], [role=button][aria-label]")
          .map((element) => (element.getAttribute("aria-label") || "").trim());
-       const temporary = labels.includes(${JSON.stringify(SELECTORS.temporaryOff)})
-         ? true
-         : labels.includes(${JSON.stringify(SELECTORS.temporaryOn)})
-           ? false
-           : null;
+       const temporaryLabels = labels.filter(label => ${JSON.stringify([SELECTORS.temporaryOff, SELECTORS.temporaryOn, SELECTORS.temporaryIdle])}.includes(label));
+       const temporary = temporaryLabels.length === 1 ? temporaryLabels[0] === ${JSON.stringify(SELECTORS.temporaryOff)} : null;
        const strip = (value, prefix) => (value ? value.slice(prefix.length).trim() : null);
+       // The power picker uses "medium" internally for both Medium and Pro.
+       // Read its displayed label rather than treating that value as proof.
+       const display = trigger?.querySelector('[data-tooltip-overflow-target]')?.cloneNode(true);
+       display?.querySelectorAll('[aria-hidden="true"]').forEach(e => e.remove());
+       const displayedEffort = display?.textContent?.trim()
+         .match(/^(?:\\d+(?:\\.\\d+)*\\s+)?(Extra High|Instant|Medium|High|Pro)$/)?.[1];
+       const usesPowerLabel = trigger?.hasAttribute('data-codex-intelligence-trigger') || display !== undefined;
        return {
          hasComposer: document.querySelector(${JSON.stringify(SELECTORS.composer)}) !== null,
          model: strip(modelRow && modelRow.getAttribute("aria-label"), "Model"),
-         effort: strip(effortRow && effortRow.getAttribute("aria-label"), "Effort")
-           || (trigger && trigger.getAttribute("data-selected-reasoning-effort")),
+         effort: effortRows.length > 1 ? null : strip(effortRow && effortRow.getAttribute("aria-label"), "Effort")
+           || (usesPowerLabel ? displayedEffort || null : trigger && trigger.getAttribute("data-selected-reasoning-effort")),
          temporary,
        };
      })()`,
@@ -113,6 +160,7 @@ async function openPicker(session: CdpSession): Promise<void> {
     );
   }
   await wait(700);
+  if (await hasPowerPicker(session)) return;
   for (let step = 0; step < MENU_STEP_LIMIT; step += 1) {
     const label = await activeLabel(session);
     if (label === ADVANCED_EXPANDED) return;
@@ -131,6 +179,190 @@ async function openPicker(session: CdpSession): Promise<void> {
 async function closePicker(session: CdpSession): Promise<void> {
   await press(session, "Escape", 250);
   await press(session, "Escape", 250);
+}
+
+async function hasPowerPicker(session: CdpSession): Promise<boolean> {
+  return session.evaluate<boolean>(
+    `(() => { ${VISIBLE_CONTROLS} return uniqueVisible(${JSON.stringify(SELECTORS.powerPicker)}) !== null; })()`,
+    10_000,
+  );
+}
+
+async function readPowerModel(session: CdpSession): Promise<string | null> {
+  return session.evaluate<string | null>(
+    `(() => {
+      ${VISIBLE_CONTROLS}
+      const picker = uniqueVisible('${SELECTORS.powerPicker}');
+      // The current picker keeps its model list in an inert panel while its
+      // Power view is shown. Read that list only within the active picker,
+      // and require one selected row instead of trusting the first match.
+      const selected = picker?.querySelectorAll('[role="menuitemradio"][data-model-selected="true"]');
+      const checked = picker?.querySelectorAll('[role="menuitemradio"][aria-checked="true"]');
+      return selected?.length === 1 && checked?.length === 1 && selected[0] === checked[0]
+        ? selected[0].textContent?.trim() || null : null;
+    })()`,
+    10_000,
+  );
+}
+
+async function powerModels(
+  session: CdpSession,
+  wanted?: string,
+): Promise<string[]> {
+  const simple = await session.evaluate<boolean>(
+    `(() => { ${VISIBLE_CONTROLS} return uniqueVisible('${SELECTORS.powerPicker}')?.getAttribute('data-model-picker-view') === 'simple'; })()`,
+    10_000,
+  );
+  if (simple) {
+    if (!(await clickSelector(session, SELECTORS.powerModelToggle))) {
+      throw new ChatGptDesktopError(
+        "ChatGPT desktop model list was not reachable",
+        "evaluate",
+      );
+    }
+    await wait(700);
+  }
+  const options = await session.evaluate<string[]>(
+    `(() => {
+      ${VISIBLE_CONTROLS}
+      const picker = uniqueVisible('${SELECTORS.powerPicker}');
+      return Array.from(picker?.querySelectorAll('[role="menuitemradio"]') || [])
+        .filter(e => visible(e) && !e.hasAttribute('data-disabled') && e.getAttribute('aria-disabled') !== 'true')
+        .map(e => e.textContent.trim()).filter(Boolean);
+    })()`,
+    10_000,
+  );
+  if (wanted !== undefined) {
+    const matches = options.filter(
+      (option) => option.toLowerCase() === wanted.toLowerCase(),
+    );
+    if (matches.length > 1)
+      throw new ChatGptDesktopError(
+        `ChatGPT desktop model option "${wanted}" is ambiguous`,
+        "evaluate",
+      );
+    const match = matches[0];
+    if (!match)
+      throw new ChatGptDesktopError(
+        `ChatGPT desktop does not offer "${wanted}"`,
+        "evaluate",
+        `available: ${options.join(", ")}`,
+      );
+    await session.evaluate(
+      `(() => {
+        ${VISIBLE_CONTROLS}
+        const picker = uniqueVisible('${SELECTORS.powerPicker}');
+        const e = Array.from(picker?.querySelectorAll('[role="menuitemradio"]') || [])
+          .find(e => visible(e) && !e.hasAttribute('data-disabled') && e.getAttribute('aria-disabled') !== 'true' && e.textContent.trim() === ${JSON.stringify(match)});
+        e?.setAttribute('data-chatgpt-cli-model', '1');})()`,
+      10_000,
+    );
+    try {
+      if (!(await clickSelector(session, '[data-chatgpt-cli-model="1"]'))) {
+        throw new ChatGptDesktopError(
+          "ChatGPT desktop model option was not reachable",
+          "evaluate",
+        );
+      }
+      await wait(700);
+    } finally {
+      await session.evaluate(
+        `document.querySelector('[data-chatgpt-cli-model="1"]')?.removeAttribute('data-chatgpt-cli-model')`,
+        10_000,
+      );
+    }
+  }
+  return options;
+}
+
+async function readPower(
+  session: CdpSession,
+): Promise<{ value: number; max: number; label: string }> {
+  const state = await session.evaluate<{
+    value: number;
+    max: number;
+    label: string;
+  } | null>(
+    `(() => {
+      const control = document.querySelector('${SELECTORS.powerControl}');
+      const slider = control?.querySelector('[role="slider"]');
+      if (!control || control.closest('[inert], [aria-hidden="true"]') || control.getAttribute('aria-disabled') === 'true' || !slider) return null;
+      const status = (control.getAttribute('aria-describedby') || '').split(/\\s+/).map(id => document.getElementById(id)).find(e => e?.getAttribute('role') === 'status');
+      const match = status?.textContent?.trim().match(/^(.+), (\\d+) of (\\d+)\\.$/);
+      const value = Number(slider.getAttribute('aria-valuenow'));
+      const max = Number(slider.getAttribute('aria-valuemax'));
+      if (!match || slider.getAttribute('aria-valuemin') !== '0' || !Number.isInteger(value) || !Number.isInteger(max) || max < 0 || max >= ${MENU_STEP_LIMIT} || value < 0 || value > max || Number(match[2]) !== value + 1 || Number(match[3]) !== max + 1) return null;
+      return {value, max, label: match[1]};
+    })()`,
+    10_000,
+  );
+  if (!state)
+    throw new ChatGptDesktopError(
+      "ChatGPT desktop effort slider could not be verified",
+      "evaluate",
+    );
+  return state;
+}
+
+async function movePower(session: CdpSession, target: number): Promise<void> {
+  for (let step = 0; step < MENU_STEP_LIMIT; step += 1) {
+    const current = await readPower(session);
+    if (current.value === target) return;
+    const focused = await session.evaluate<boolean>(
+      `(() => {const e = document.querySelector('${SELECTORS.powerControl}'); e?.focus(); return e !== null && document.activeElement === e;})()`,
+      10_000,
+    );
+    if (!focused) break;
+    await press(
+      session,
+      current.value < target ? "ArrowRight" : "ArrowLeft",
+      300,
+    );
+  }
+  throw new ChatGptDesktopError(
+    "ChatGPT desktop effort slider did not reach the requested stop",
+    "evaluate",
+  );
+}
+
+async function powerEfforts(
+  session: CdpSession,
+  wanted?: string,
+): Promise<string[]> {
+  const original = await readPower(session);
+  const options: string[] = [];
+  let selected = false;
+  try {
+    for (let value = 0; value <= original.max; value += 1) {
+      await movePower(session, value);
+      const current = await readPower(session);
+      options.push(current.label);
+      if (
+        wanted !== undefined &&
+        current.label.toLowerCase() === wanted.toLowerCase()
+      ) {
+        selected = true;
+        return options;
+      }
+    }
+    if (wanted !== undefined)
+      throw new ChatGptDesktopError(
+        `ChatGPT desktop does not offer "${wanted}"`,
+        "evaluate",
+        `available: ${options.join(", ")}`,
+      );
+    return options;
+  } finally {
+    if (!selected) {
+      await movePower(session, original.value);
+      if ((await readPower(session)).label !== original.label) {
+        throw new ChatGptDesktopError(
+          "ChatGPT desktop effort could not be restored",
+          "evaluate",
+        );
+      }
+    }
+  }
 }
 
 async function openRowSubmenu(
@@ -196,8 +428,13 @@ async function listRowOptions(
   session: CdpSession,
   prefix: "Model" | "Effort",
 ): Promise<string[]> {
-  await openPicker(session);
   try {
+    await openPicker(session);
+    if (await hasPowerPicker(session)) {
+      return prefix === "Model"
+        ? await powerModels(session)
+        : await powerEfforts(session);
+    }
     await openRowSubmenu(session, prefix);
     return await readSubmenuOptions(session);
   } finally {
@@ -220,11 +457,13 @@ export function listEfforts(session: CdpSession): Promise<string[]> {
 export async function readSelectedModel(
   session: CdpSession,
 ): Promise<string | null> {
-  await openPicker(session);
   try {
+    await openPicker(session);
+    if (await hasPowerPicker(session)) return await readPowerModel(session);
     return await session.evaluate<string | null>(
       `(() => {
-         const row = document.querySelector(${JSON.stringify(SELECTORS.modelRow)});
+         ${VISIBLE_CONTROLS}
+         const row = uniqueVisible(${JSON.stringify(SELECTORS.modelRow)});
          const label = row && row.getAttribute("aria-label");
          return label ? label.slice("Model".length).trim() : null;
        })()`,
@@ -243,7 +482,8 @@ async function readRowValue(
     prefix === "Model" ? SELECTORS.modelRow : SELECTORS.effortRow;
   return session.evaluate<string | null>(
     `(() => {
-       const row = document.querySelector(${JSON.stringify(selector)});
+       ${VISIBLE_CONTROLS}
+       const row = uniqueVisible(${JSON.stringify(selector)});
        const label = row && row.getAttribute("aria-label");
        return label ? label.slice(${prefix.length}).trim() : null;
      })()`,
@@ -256,8 +496,13 @@ async function selectRowOption(
   prefix: "Model" | "Effort",
   wanted: string,
 ): Promise<void> {
-  await openPicker(session);
   try {
+    await openPicker(session);
+    if (await hasPowerPicker(session)) {
+      if (prefix === "Model") await powerModels(session, wanted);
+      else await powerEfforts(session, wanted);
+      return;
+    }
     const current = await readRowValue(session, prefix);
     // Walking the submenu costs a second of animation waits; skip it when the
     // app is already on the requested value.
@@ -301,10 +546,12 @@ export async function setTemporary(
   const state = await readSurface(session);
   if (state.temporary === null) return "unavailable";
   if (state.temporary === enabled) return "already";
-  const clicked = await clickByLabel(
+  let clicked = await clickByLabel(
     session,
     enabled ? SELECTORS.temporaryOn : SELECTORS.temporaryOff,
   );
+  if (!clicked && enabled)
+    clicked = await clickByLabel(session, SELECTORS.temporaryIdle);
   if (!clicked) return "unavailable";
   await wait(700);
   return "toggled";
@@ -323,15 +570,23 @@ export async function submitPrompt(
   session: CdpSession,
   prompt: string,
 ): Promise<void> {
-  const focused = await session.evaluate<boolean>(
+  const focused = await session.evaluate<boolean | "not_empty">(
     `(() => {
        const composer = document.querySelector(${JSON.stringify(SELECTORS.composer)});
        if (!composer) return false;
+       if ((composer.textContent || "").trim() !== "") return "not_empty";
        composer.focus();
        return document.activeElement === composer;
      })()`,
     10_000,
   );
+  if (focused === "not_empty") {
+    throw new ChatGptDesktopError(
+      "ChatGPT desktop composer is not empty",
+      "evaluate",
+      "the new-chat action left an existing draft; refusing to append the prompt",
+    );
+  }
   if (!focused) {
     throw new ChatGptDesktopError(
       "ChatGPT desktop composer could not be focused",

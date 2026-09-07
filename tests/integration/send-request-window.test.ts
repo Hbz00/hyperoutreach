@@ -158,6 +158,9 @@ describe("send request window", () => {
   });
 
   beforeEach(async () => {
+    await client.unsafe(
+      "truncate table accounts, campaigns, mailbox_connections, operator_commands, workflow_events restart identity cascade",
+    );
     await permissiveSendingSettings();
   });
 
@@ -275,20 +278,38 @@ describe("send request window", () => {
   it("stamps the send request when the claim starts from approved, and not when it resumes", async () => {
     const fixture = await seed();
     const requested = await fixture.message({ status: "approved" });
-    const resumed = await fixture.message({
-      stepIndex: 1,
+    const resumedFixture = await seed();
+    const resumedOutreachId = `out_${crypto.randomUUID()}`;
+    const resumed = await resumedFixture.message({
+      outreachId: resumedOutreachId,
       status: "drafted",
-      providerDraftId: `draft_${crypto.randomUUID()}`,
+      providerDraftId: `mock-draft-${resumedOutreachId}`,
       sendRequestedAt: null,
     });
 
     const provider = new DatabaseMockMailProvider(db);
-    await sendApprovedMessage(db, provider, { messageId: requested.id });
-    await sendApprovedMessage(db, provider, { messageId: resumed.id });
+    const requestedResult = await sendApprovedMessage(
+      db,
+      provider,
+      { messageId: requested.id },
+      { clock: () => NOW },
+    );
+    const resumedResult = await sendApprovedMessage(
+      db,
+      provider,
+      { messageId: resumed.id },
+      { clock: () => NOW },
+    );
+
+    expect(requestedResult).toMatchObject({ ok: true, disposition: "sent" });
+    expect(resumedResult).toMatchObject({ ok: true, disposition: "sent" });
+    expect((await readMessage(requested.id)).status).toBe("sent");
+    expect((await readMessage(resumed.id)).status).toBe("sent");
 
     expect((await readMessage(requested.id)).sendRequestedAt).toBeInstanceOf(
       Date,
     );
+    expect((await readMessage(requested.id)).sendRequestedAt).toEqual(NOW);
     expect((await readMessage(resumed.id)).sendRequestedAt).toBeNull();
   });
 

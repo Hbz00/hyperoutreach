@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ProcessRequest,
@@ -21,6 +21,7 @@ class CapturingRunner implements ProcessRunner {
 }
 
 describe("getCodexCliStatus", () => {
+  afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     vi.resetModules();
   });
@@ -121,6 +122,5 @@ describe("getCodexCliStatus", () => {
       "OPENAI_API_KEY",
     );
     expect(runner.requests[0]?.environment).not.toHaveProperty("DATABASE_URL");
-    vi.unstubAllEnvs();
   });
 });

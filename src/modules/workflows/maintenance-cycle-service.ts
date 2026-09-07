@@ -74,7 +74,8 @@ export class MaintenanceStageTimeoutError extends Error {
  * without a single failed audit row.
  *
  * The signal is aborted before the rejection, so a stage that consumes it is
- * told to stop rather than merely abandoned — and all four consume it. Inbound
+ * told to stop. Ownership must outlive the underlying work, including its
+ * asynchronous cleanup: abort notification alone does not prove it stopped. Inbound
  * cancels the round in flight, because an abandoned IMAP fetch holds its
  * advisory lock until its own socket timeouts fire and the next cycle's inbound
  * stage then queues behind that same lock. The other three stop at the boundary
@@ -87,18 +88,29 @@ async function runStage<T>(
   stage: keyof MaintenanceStageBudgetsMs,
   budgetMs: number,
   run: (options: MaintenanceStageOptions) => Promise<T>,
+  retainWork: (settlement: Promise<void>) => void,
 ): Promise<T> {
   const controller = new AbortController();
+  const work = Promise.resolve().then(() => run({ signal: controller.signal }));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
+      // Observe both outcomes immediately, including a rejection triggered by
+      // abort. The caller reports failure now but retains the singleton until
+      // this exact operation finishes; a late result cannot become success.
+      retainWork(
+        work.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
       controller.abort();
       reject(new MaintenanceStageTimeoutError(stage, budgetMs));
     }, budgetMs);
     timer.unref();
   });
   try {
-    return await Promise.race([run({ signal: controller.signal }), deadline]);
+    return await Promise.race([work, deadline]);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -203,7 +215,7 @@ export async function runMaintenanceCycle(
       await waitForHeartbeat();
       if (stoppingHeartbeat) break;
       try {
-        await renewLease();
+        if (!(await renewLease())) break;
       } catch {
         // A stage-boundary renewal remains authoritative. A transient
         // background renewal failure must not create an unhandled rejection.
@@ -211,11 +223,26 @@ export async function runMaintenanceCycle(
     }
   })();
 
+  let pendingWork: Promise<void> | undefined;
+  const retainWork = (settlement: Promise<void>) => {
+    pendingWork = settlement;
+  };
+  const stopHeartbeat = async () => {
+    stoppingHeartbeat = true;
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
+    releaseHeartbeatWait?.();
+    await heartbeatLoop;
+  };
+
   let currentStage: MaintenanceFailureStage = "inbound";
   try {
     const stagePayload = { observedAt: payload.observedAt };
-    const inbound = await runStage("inbound", budgets.inbound, (stageOptions) =>
-      stages["reconcile-inbound-mailboxes"](stagePayload, stageOptions),
+    const inbound = await runStage(
+      "inbound",
+      budgets.inbound,
+      (stageOptions) =>
+        stages["reconcile-inbound-mailboxes"](stagePayload, stageOptions),
+      retainWork,
     );
     if (!(await renewLease())) return { status: "busy" };
     currentStage = "followup";
@@ -224,6 +251,7 @@ export async function runMaintenanceCycle(
       budgets.followups,
       (stageOptions) =>
         stages["reconcile-due-follow-ups"](stagePayload, stageOptions),
+      retainWork,
     );
     if (!(await renewLease())) return { status: "busy" };
     currentStage = "recovery";
@@ -232,6 +260,7 @@ export async function runMaintenanceCycle(
       budgets.recovery,
       (stageOptions) =>
         stages["recover-stale-work"](stagePayload, stageOptions),
+      retainWork,
     );
     if (!(await renewLease())) return { status: "busy" };
     currentStage = "commands";
@@ -240,6 +269,7 @@ export async function runMaintenanceCycle(
       budgets.commands,
       (stageOptions) =>
         stages["drain-operator-commands"](stagePayload, stageOptions),
+      retainWork,
     );
     currentStage = "finalization";
     const completedAt = clock();
@@ -269,7 +299,7 @@ export async function runMaintenanceCycle(
     const [failed] = await db
       .update(maintenanceState)
       .set({
-        ownerToken: null,
+        ...(pendingWork ? {} : { ownerToken: null }),
         heartbeatAt: failedAt,
         lastFailedAt: failedAt,
         lastError: safeError.auditMessage,
@@ -285,9 +315,32 @@ export async function runMaintenanceCycle(
     if (!failed) return { status: "busy" };
     throw safeError;
   } finally {
-    stoppingHeartbeat = true;
-    if (heartbeatTimer) clearTimeout(heartbeatTimer);
-    releaseHeartbeatWait?.();
-    await heartbeatLoop;
+    if (pendingWork) {
+      // The request must report the deadline promptly, while the lease guards
+      // work still running in this process. Drain the heartbeat before release
+      // and fence cleanup so it cannot clear a replacement owner's lease.
+      void pendingWork
+        .then(async () => {
+          await stopHeartbeat();
+          await db
+            .update(maintenanceState)
+            .set({
+              ownerToken: null,
+              updatedAt: clock(),
+            })
+            .where(
+              and(
+                eq(maintenanceState.id, 1),
+                eq(maintenanceState.ownerToken, ownerToken),
+              ),
+            );
+        })
+        .catch(() => {
+          // Failure was already reported. A failed release stops renewing and
+          // expires through the existing stale-lease takeover mechanism.
+        });
+    } else {
+      await stopHeartbeat();
+    }
   }
 }

@@ -7,13 +7,27 @@ export type EncryptionKeyring = {
 
 const ENVELOPE_VERSION = "v1";
 
+function validKeyId(id: string): boolean {
+  return typeof id === "string" && id.length > 0 && !/[.,:]/.test(id);
+}
+
 export function encryptSecret(
   plaintext: string,
   keyring: EncryptionKeyring,
 ): string {
+  if (!validKeyId(keyring.activeKeyId)) {
+    throw new Error("Invalid token encryption key ID");
+  }
   const key = keyring.keys[keyring.activeKeyId];
-  if (!key || key.length !== 32) {
+  if (
+    !Object.hasOwn(keyring.keys, keyring.activeKeyId) ||
+    !Buffer.isBuffer(key) ||
+    key.length !== 32
+  ) {
     throw new Error("Active token encryption key must contain 32 bytes");
+  }
+  if (typeof plaintext !== "string" || plaintext.length === 0) {
+    throw new Error("Secret to encrypt must be a nonempty string");
   }
   const nonce = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, nonce);
@@ -44,19 +58,32 @@ export function parseEncryptionKeyring(
   serialized: string,
   activeKeyId: string,
 ): EncryptionKeyring {
-  const keys: Record<string, Buffer> = {};
+  if (!validKeyId(activeKeyId)) {
+    throw new Error("Invalid token encryption key ID");
+  }
+  const keys: Record<string, Buffer> = Object.create(null);
   for (const entry of serialized.split(",")) {
     const separator = entry.indexOf(":");
     if (separator <= 0) throw new Error("Invalid token encryption keyring");
     const id = entry.slice(0, separator).trim();
     const encoded = entry.slice(separator + 1).trim();
+    if (!validKeyId(id) || Object.hasOwn(keys, id)) {
+      throw new Error("Invalid or duplicate token encryption key ID");
+    }
     const key = Buffer.from(encoded, "base64");
-    if (!id || key.length !== 32) {
+    // Node's decoder ignores invalid characters. Accept standard/base64url
+    // alphabets and optional padding only when the complete value matches.
+    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const canonical = key.toString("base64");
+    if (
+      key.length !== 32 ||
+      (normalized !== canonical && normalized !== canonical.replace(/=$/, ""))
+    ) {
       throw new Error("Every token encryption key must be 32 bytes");
     }
     keys[id] = key;
   }
-  if (!keys[activeKeyId]) {
+  if (!Object.hasOwn(keys, activeKeyId)) {
     throw new Error("Active token encryption key is missing from keyring");
   }
   return { activeKeyId, keys };
@@ -89,29 +116,43 @@ export function decryptSecret(
   keyring: EncryptionKeyring,
 ): { plaintext: string; keyId: string; needsRotation: boolean } {
   try {
-    const [version, keyId, nonceValue, ciphertextValue, tagValue, extra] =
-      envelope.split(".");
+    const parts = envelope.split(".");
+    const [version, keyId, nonceValue, ciphertextValue, tagValue] = parts;
     if (
+      parts.length !== 5 ||
       version !== ENVELOPE_VERSION ||
       !keyId ||
       !nonceValue ||
       !ciphertextValue ||
-      !tagValue ||
-      extra
+      !tagValue
     ) {
       throw new Error("invalid envelope");
     }
     const key = keyring.keys[keyId];
-    if (!key || key.length !== 32) throw new Error("unknown key");
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      key,
-      Buffer.from(nonceValue, "base64url"),
-    );
+    if (
+      !Object.hasOwn(keyring.keys, keyId) ||
+      !Buffer.isBuffer(key) ||
+      key.length !== 32
+    ) {
+      throw new Error("unknown key");
+    }
+    const nonce = Buffer.from(nonceValue, "base64url");
+    const ciphertext = Buffer.from(ciphertextValue, "base64url");
+    const tag = Buffer.from(tagValue, "base64url");
+    if (
+      nonce.length !== 12 ||
+      tag.length !== 16 ||
+      nonce.toString("base64url") !== nonceValue ||
+      ciphertext.toString("base64url") !== ciphertextValue ||
+      tag.toString("base64url") !== tagValue
+    ) {
+      throw new Error("invalid envelope");
+    }
+    const decipher = createDecipheriv("aes-256-gcm", key, nonce);
     decipher.setAAD(Buffer.from(`${version}:${keyId}`));
-    decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+    decipher.setAuthTag(tag);
     const plaintext = Buffer.concat([
-      decipher.update(Buffer.from(ciphertextValue, "base64url")),
+      decipher.update(ciphertext),
       decipher.final(),
     ]).toString("utf8");
     return {

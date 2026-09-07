@@ -7,6 +7,10 @@ import { z } from "zod";
 import { getDatabase } from "@/lib/db/client";
 import { mutableRedirect } from "@/lib/http-response";
 import {
+  bodyErrorResponse,
+  readLimitedFormData,
+} from "@/lib/http-request-body";
+import {
   cookieValue,
   OPERATOR_SESSION_COOKIE,
   verifyCsrfToken,
@@ -347,17 +351,19 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ command: string }> },
 ) {
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch {
-    return Response.json({ error: "Invalid request" }, { status: 400 });
-  }
   const session = verifyOperatorSession(
     cookieValue(request, OPERATOR_SESSION_COOKIE),
   );
-  if (!session)
+  if (!session) {
+    void request.body?.cancel().catch(() => undefined);
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  let formData: FormData;
+  try {
+    formData = await readLimitedFormData(request, 1024 * 1024);
+  } catch (error) {
+    return bodyErrorResponse(error, "Invalid request");
+  }
   const csrf = formData.get("csrf");
   if (!verifyCsrfToken(session, typeof csrf === "string" ? csrf : null)) {
     return Response.json({ error: "Forbidden" }, { status: 403 });
@@ -636,6 +642,7 @@ export async function POST(
           "requireProfessionalRelevance",
         ),
         campaignDailyCap: integer(formData, "campaignDailyCap"),
+        language: value(formData, "language"),
       },
       steps: campaignSteps(formData),
     });
@@ -1176,9 +1183,10 @@ export async function POST(
   // touches the row and reports its cause via the redirect notice, same as
   // every command below.
   if (command === "connect-smtp-mailbox") {
+    const password = formData.get("password");
     const result = await connectSmtpImapMailbox(db, {
       email: value(formData, "email"),
-      password: value(formData, "password"),
+      password: typeof password === "string" ? password : undefined,
       // No `?? value(formData, "email")` fallback: on the target Zimbra
       // server (and most non-Gmail-style IMAP/SMTP setups) the login
       // username is *not* the email address (the settings form's own

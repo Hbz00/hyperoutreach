@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:17.6-alpine3.22
+    restart: unless-stopped
     environment:
       POSTGRES_DB: hyperoutreach
       POSTGRES_USER: hyperoutreach
@@ -15,9 +16,8 @@ services:
     volumes:
       - hyperoutreach_postgres_data:/var/lib/postgresql/data
 
-  # Task 14: a real IMAP/SMTP server for tests/integration/smtp-imap-round-trip.test.ts
-  # -- the only place in this codebase's tests that actually opens a socket to a
-  # mail server, everything else doubles ImapPort/SmtpPort. GreenMail's default
+  # Real IMAP/SMTP for the round-trip and controlled-recovery integration suites.
+  # Other provider suites double ImapPort/SmtpPort. GreenMail's default
   # image already ships with `-Dgreenmail.setup.test.all` (every protocol variant
   # listening, including the TLS-wrapped ones our transport schema requires --
   # there is no plaintext path) and `-Dgreenmail.auth.disabled` (any username/

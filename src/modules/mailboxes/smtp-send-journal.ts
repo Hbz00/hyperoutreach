@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 
 import { workflowEvents } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
+import { summarizeSmtpDiagnostic } from "@/lib/smtp-imap/diagnostic";
 import type {
   SendJournal,
   SmtpRejectionDetails,
@@ -104,13 +105,12 @@ export class WorkflowEventsSendJournal implements SendJournal {
       .limit(1);
     if (!row) return null;
     const payload = row.payload as Record<string, unknown>;
+    const diagnostic = summarizeSmtpDiagnostic(payload);
     return {
       responseCode: Number(payload.responseCode),
-      ...(typeof payload.response === "string"
-        ? { response: payload.response }
-        : {}),
-      ...(typeof payload.smtpErrorCode === "string"
-        ? { smtpErrorCode: payload.smtpErrorCode }
+      response: diagnostic.response,
+      ...(diagnostic.smtpErrorCode
+        ? { smtpErrorCode: diagnostic.smtpErrorCode }
         : {}),
       releaseAttempt: false,
     };
@@ -154,6 +154,7 @@ export class WorkflowEventsSendJournal implements SendJournal {
     messageKey: string,
     rejection: SmtpRejectionDetails,
   ): Promise<void> {
+    const diagnostic = summarizeSmtpDiagnostic(rejection);
     await this.db.transaction(async (tx) => {
       await tx
         .insert(workflowEvents)
@@ -167,12 +168,10 @@ export class WorkflowEventsSendJournal implements SendJournal {
             : `${REJECTION_PREFIX}:${messageKey}`,
           status: "failed",
           completedAt: new Date(),
-          error: rejection.response ?? `SMTP ${rejection.responseCode}`,
+          error: diagnostic.response,
           payload: {
             messageKey,
-            responseCode: rejection.responseCode,
-            response: rejection.response ?? null,
-            smtpErrorCode: rejection.smtpErrorCode ?? null,
+            ...diagnostic,
             released: rejection.releaseAttempt,
           },
         })

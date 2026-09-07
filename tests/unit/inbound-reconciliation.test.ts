@@ -25,6 +25,45 @@ function pagedSource(
 }
 
 describe("cancelling an inbound round", () => {
+  it.each(["before-load", "after-load", "empty-fetch", "last-ingest"])(
+    "refuses cursor success when cancelled at %s",
+    async (boundary) => {
+      const controller = new AbortController();
+      const saveCursor = vi.fn();
+      const loadCursor = vi.fn(async () => {
+        if (boundary === "after-load") controller.abort();
+        return "1:0";
+      });
+      const ingest = vi.fn(async () => {
+        controller.abort();
+        return { ok: true, disposition: "processed" };
+      });
+      const fetchSince = vi.fn(
+        async (_cursor: string | null, ingestPage: IngestPage) => {
+          if (boundary === "last-ingest") {
+            await ingestPage([{ providerMessageId: "uid-1" }]);
+          } else {
+            controller.abort();
+          }
+          return { nextCursor: "1:1", rebaselined: false };
+        },
+      );
+      if (boundary === "before-load") controller.abort();
+      await expect(
+        reconcileInboundMailbox(
+          { mailboxId: "mbx-1", source: { kind: "smtp_imap", fetchSince } },
+          { loadCursor, saveCursor, ingest, signal: controller.signal },
+        ),
+      ).rejects.toThrow(/abort/i);
+      expect(saveCursor).not.toHaveBeenCalled();
+      if (boundary === "before-load") expect(loadCursor).not.toHaveBeenCalled();
+      if (boundary === "before-load" || boundary === "after-load") {
+        expect(fetchSince).not.toHaveBeenCalled();
+      }
+      if (boundary === "last-ingest") expect(ingest).toHaveBeenCalledTimes(1);
+    },
+  );
+
   /**
    * The stage deadline can only end a round the round agrees to end.
    *

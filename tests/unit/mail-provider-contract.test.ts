@@ -173,6 +173,35 @@ function makeGraphProviderWithFakeClient(): {
   };
 }
 
+describe("Graph's actual draft creation boundary", () => {
+  it("creates distinct remote drafts for repeated direct adapter calls", async () => {
+    if (!draftInput.mailboxId)
+      throw new Error("Graph fixture requires a mailbox");
+    let creates = 0;
+    const provider = new MicrosoftGraphMailProvider(
+      new MicrosoftGraphClient({
+        accessToken: async () => "synthetic-access",
+        fetcher: async (url, init) => {
+          expect(String(url)).toBe(
+            "https://graph.microsoft.com/v1.0/me/messages",
+          );
+          expect(init?.method).toBe("POST");
+          creates += 1;
+          return Response.json({
+            id: `honest-draft-${creates}`,
+            isDraft: true,
+          });
+        },
+      }),
+      draftInput.mailboxId,
+    );
+    const first = await provider.createDraft(draftInput);
+    const second = await provider.createDraft(draftInput);
+    expect(creates).toBe(2);
+    expect(second.draftId).not.toBe(first.draftId);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // smtp_imap — a fake IMAP/SMTP transport pair, real SmtpImapMailProvider.
 // ---------------------------------------------------------------------------

@@ -865,7 +865,9 @@ describe("Codex CLI structured provider", () => {
         });
       } catch (error) {
         if (error instanceof ProcessExecutionError && error.code === "spawn") {
-          return;
+          throw new Error(
+            "Cannot verify Codex capabilities: the configured executable could not be started",
+          );
         }
         throw error;
       }
@@ -1321,13 +1323,17 @@ describe("Codex CLI structured provider", () => {
     let active = 0;
     let highestActive = 0;
     const releases: Array<() => void> = [];
+    let cleaningUp = false;
+    const pending: Promise<unknown>[] = [];
     const started: Array<() => void> = [];
     const runner: ProcessRunner = {
       async run() {
         active += 1;
         highestActive = Math.max(highestActive, active);
         started.shift()?.();
-        await new Promise<void>((resolve) => releases.push(resolve));
+        if (!cleaningUp) {
+          await new Promise<void>((resolve) => releases.push(resolve));
+        }
         active -= 1;
         return {
           exitCode: 0,
@@ -1349,30 +1355,46 @@ describe("Codex CLI structured provider", () => {
       runner,
       options,
     );
-    const firstStarted = new Promise<void>((resolve) => started.push(resolve));
-    const first = firstProvider.run(request());
-    await firstStarted;
-    const secondStarted = new Promise<void>((resolve) => started.push(resolve));
-    const second = secondProvider.run(request());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(active).toBe(1);
-    expect(highestActive).toBe(1);
+    try {
+      const firstStarted = new Promise<void>((resolve) =>
+        started.push(resolve),
+      );
+      const first = firstProvider.run(request());
+      pending.push(first);
+      await firstStarted;
+      const secondStarted = new Promise<void>((resolve) =>
+        started.push(resolve),
+      );
+      const second = secondProvider.run(request());
+      pending.push(second);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(active).toBe(1);
+      expect(highestActive).toBe(1);
 
-    releases.shift()?.();
-    await secondStarted;
-    expect(active).toBe(1);
-    releases.shift()?.();
-    await Promise.all([first, second]);
-    expect(highestActive).toBe(1);
+      releases.shift()?.();
+      await secondStarted;
+      expect(active).toBe(1);
+      releases.shift()?.();
+      await Promise.all([first, second]);
+      expect(highestActive).toBe(1);
+    } finally {
+      cleaningUp = true;
+      releases.splice(0).forEach((release) => release());
+      await Promise.allSettled(pending);
+    }
   });
 
   it("times out a queued call without starting it and removes the waiter", async () => {
     const startedRequests: ProcessRequest[] = [];
     const releases: Array<() => void> = [];
+    let cleaningUp = false;
+    const pending: Promise<unknown>[] = [];
     const runner: ProcessRunner = {
       async run(processRequest) {
         startedRequests.push(processRequest);
-        await new Promise<void>((resolve) => releases.push(resolve));
+        if (!cleaningUp) {
+          await new Promise<void>((resolve) => releases.push(resolve));
+        }
         return {
           exitCode: 0,
           stdout: jsonl({
@@ -1392,32 +1414,40 @@ describe("Codex CLI structured provider", () => {
       runner,
       { temporaryRoot: tmpdir() },
     );
-    const first = firstProvider.run(request());
-    while (startedRequests.length === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 1));
-    }
+    try {
+      const first = firstProvider.run(request());
+      pending.push(first);
+      while (startedRequests.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
 
-    const queuedAt = Date.now();
-    const queued = shortDeadlineProvider.run(request());
-    await expect(queued).rejects.toMatchObject({
-      name: "CodexProviderError",
-      message: "Codex CLI request failed",
-      code: "timeout",
-    });
-    expect(Date.now() - queuedAt).toBeLessThan(500);
-    expect(startedRequests).toHaveLength(1);
+      const queuedAt = Date.now();
+      const queued = shortDeadlineProvider.run(request());
+      await expect(queued).rejects.toMatchObject({
+        name: "CodexProviderError",
+        message: "Codex CLI request failed",
+        code: "timeout",
+      });
+      expect(Date.now() - queuedAt).toBeLessThan(500);
+      expect(startedRequests).toHaveLength(1);
 
-    releases.shift()?.();
-    await first;
-    const later = shortDeadlineProvider.run(request());
-    while (startedRequests.length === 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      releases.shift()?.();
+      await first;
+      const later = shortDeadlineProvider.run(request());
+      pending.push(later);
+      while (startedRequests.length === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(startedRequests).toHaveLength(2);
+      expect(startedRequests[1]?.timeoutMs).toBeGreaterThan(0);
+      expect(startedRequests[1]?.timeoutMs).toBeLessThanOrEqual(40);
+      releases.shift()?.();
+      await later;
+    } finally {
+      cleaningUp = true;
+      releases.splice(0).forEach((release) => release());
+      await Promise.allSettled(pending);
     }
-    expect(startedRequests).toHaveLength(2);
-    expect(startedRequests[1]?.timeoutMs).toBeGreaterThan(0);
-    expect(startedRequests[1]?.timeoutMs).toBeLessThanOrEqual(40);
-    releases.shift()?.();
-    await later;
   });
 
   it("fails closed when process-wide concurrency limits conflict", () => {

@@ -9,6 +9,10 @@ import { resolveFolderRoles } from "@/lib/smtp-imap/imap-client";
 describe("folder discovery", () => {
   it("prefers special-use flags over folder names", () => {
     const roles = resolveFolderRoles([
+      // Conventional decoys come first: ignoring the flags must select a
+      // different path, so these assertions prove actual precedence.
+      { path: "Drafts", specialUse: undefined },
+      { path: "Sent", specialUse: undefined },
       { path: "Brouillons", specialUse: "\\Drafts" },
       { path: "Envoyes", specialUse: "\\Sent" },
       { path: "INBOX", specialUse: undefined },

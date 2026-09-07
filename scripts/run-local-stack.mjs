@@ -55,11 +55,25 @@ async function waitForExitWithin(child, durationMs, timers) {
   });
 }
 
-async function stopChild(child, signal, graceMs, timers, signalChild) {
-  if (!child || hasExited(child)) return;
+async function stopChild(
+  child,
+  signal,
+  graceMs,
+  timers,
+  signalChild,
+  cleanupGroup,
+) {
+  if (!child) return;
+  if (hasExited(child)) {
+    cleanupGroup(child);
+    return;
+  }
 
   signalChild(child, signal);
-  if (await waitForExitWithin(child, graceMs, timers)) return;
+  if (await waitForExitWithin(child, graceMs, timers)) {
+    cleanupGroup(child);
+    return;
+  }
 
   const exited = waitForExit(child);
   signalChild(child, "SIGKILL");
@@ -129,13 +143,17 @@ export function createLocalStackSupervisor(options) {
     stdio: "inherit",
   });
 
-  function signalChild(child, signal) {
-    const canSignalGroup =
+  function canSignalGroup(child) {
+    return (
       platform !== "win32" &&
       Number.isSafeInteger(child.pid) &&
       child.pid > 0 &&
-      child.pid !== process.pid;
-    if (!canSignalGroup) {
+      child.pid !== process.pid
+    );
+  }
+
+  function signalChild(child, signal) {
+    if (!canSignalGroup(child)) {
       child.kill(signal);
       return;
     }
@@ -146,6 +164,12 @@ export function createLocalStackSupervisor(options) {
       if (error instanceof Error && error.code === "ESRCH") return;
       throw error;
     }
+  }
+
+  function cleanupGroup(child) {
+    // A detached parent can finish before its descendants. Only this private
+    // POSIX group remains ours to reap; Windows has no equivalent group here.
+    if (canSignalGroup(child)) signalChild(child, "SIGKILL");
   }
 
   function monitor(child, label) {
@@ -165,6 +189,7 @@ export function createLocalStackSupervisor(options) {
   async function unexpectedExit(exitedChild) {
     if (shuttingDown) return;
     shuttingDown = true;
+    cleanupGroup(exitedChild);
 
     if (exitedChild === webChild) {
       await stopChild(
@@ -173,6 +198,7 @@ export function createLocalStackSupervisor(options) {
         config?.shutdownGraceMs ?? maintenanceTiming.workerShutdownGraceMs,
         timers,
         signalChild,
+        cleanupGroup,
       );
     } else {
       await stopChild(
@@ -181,6 +207,7 @@ export function createLocalStackSupervisor(options) {
         config?.nextShutdownGraceMs ?? maintenanceTiming.nextShutdownGraceMs,
         timers,
         signalChild,
+        cleanupGroup,
       );
     }
     resolveDone(1);
@@ -211,9 +238,15 @@ export function createLocalStackSupervisor(options) {
     };
 
     const nextCli = join(projectDir, "node_modules/next/dist/bin/next");
+    // APP_URL is an application origin, not a socket binding. Next otherwise
+    // exposes this local, single-operator stack to every network interface.
+    // Next's parser lets later explicit hostname options override this default.
+    // Do not scan args ourselves: option values can also begin with "-H".
+    const hostnameArgs =
+      config.provider === "local" ? ["--hostname", "127.0.0.1"] : [];
     webChild = spawnProcess(
       process.execPath,
-      [nextCli, mode, ...args],
+      [nextCli, mode, ...hostnameArgs, ...args],
       spawnOptions(),
     );
     monitor(webChild, "Next.js");
@@ -234,6 +267,7 @@ export function createLocalStackSupervisor(options) {
           config?.nextShutdownGraceMs ?? maintenanceTiming.nextShutdownGraceMs,
           timers,
           signalChild,
+          cleanupGroup,
         );
         throw error;
       }
@@ -255,6 +289,7 @@ export function createLocalStackSupervisor(options) {
         config?.shutdownGraceMs ?? maintenanceTiming.workerShutdownGraceMs,
         timers,
         signalChild,
+        cleanupGroup,
       );
       await stopChild(
         webChild,
@@ -262,6 +297,7 @@ export function createLocalStackSupervisor(options) {
         config?.nextShutdownGraceMs ?? maintenanceTiming.nextShutdownGraceMs,
         timers,
         signalChild,
+        cleanupGroup,
       );
       resolveDone(0);
     })();
@@ -276,6 +312,7 @@ export function createLocalStackSupervisor(options) {
     shuttingDown = true;
     for (const child of [workerChild, webChild]) {
       if (child && !hasExited(child)) signalChild(child, "SIGKILL");
+      else if (child) cleanupGroup(child);
     }
     resolveDone(130);
   }

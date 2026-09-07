@@ -114,10 +114,8 @@ export async function drainOperatorCommands(
     /**
      * The caller's deadline, honoured between commands.
      *
-     * The maintenance cycle bounds this stage by racing it against a timer,
-     * which ends the *cycle* and releases its lease while the pass keeps
-     * claiming. This is how the pass is told that the lease it was draining
-     * under is gone.
+     * The maintenance cycle aborts on timeout and retains its lease until the
+     * stage settles. Stop claiming new work once that deadline has passed.
      */
     signal?: AbortSignal;
   } = {},
@@ -167,6 +165,20 @@ export async function drainOperatorCommands(
       runId,
     });
     if (!claimed) break;
+
+    // A crashed last attempt has already spent its budget. Closing that row
+    // costs no execution, but still counts toward the bounded parking pass.
+    if (claimed.status === "abandoned") {
+      parked += 1;
+      drained.push({
+        id: claimed.id,
+        command: claimed.command,
+        status: claimed.status,
+        attempt: claimed.attempt,
+        ...(claimed.error ? { reason: claimed.error } : {}),
+      });
+      continue;
+    }
 
     // Nothing was tried yet, so a missing precondition is a wait rather than a
     // failed attempt — `finalizeCommand` gives the attempt back. A precondition
@@ -281,7 +293,11 @@ async function claimNextCommand(
     // cycles overlapping on an expired lease cannot both take the same work,
     // and neither waits on the other.
     const [candidate] = await tx
-      .select({ id: operatorCommands.id, status: operatorCommands.status })
+      .select({
+        id: operatorCommands.id,
+        attempt: operatorCommands.attempt,
+        maxAttempts: operatorCommands.maxAttempts,
+      })
       .from(operatorCommands)
       .where(
         or(
@@ -319,6 +335,22 @@ async function claimNextCommand(
       .limit(1)
       .for("update", { skipLocked: true });
     if (!candidate) return null;
+    if (candidate.attempt >= candidate.maxAttempts) {
+      const [abandoned] = await tx
+        .update(operatorCommands)
+        .set({
+          status: "abandoned",
+          waitingReason: null,
+          claimId: null,
+          claimedAt: null,
+          nextAttemptAt: null,
+          completedAt: context.at,
+          error: "Operator command exhausted its retry budget",
+        })
+        .where(eq(operatorCommands.id, candidate.id))
+        .returning();
+      return abandoned ?? null;
+    }
     const [claimed] = await tx
       .update(operatorCommands)
       .set({

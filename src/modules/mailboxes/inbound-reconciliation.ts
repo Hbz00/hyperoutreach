@@ -72,7 +72,9 @@ export async function reconcileInboundMailbox(
   target: { source: InboundMailSource; mailboxId: string },
   deps: InboundReconciliationDeps,
 ): Promise<{ processed: number; nextCursor: string; rebaselined: boolean }> {
+  throwIfAborted(deps.signal);
   const cursor = await deps.loadCursor(target.mailboxId);
+  throwIfAborted(deps.signal);
   let processed = 0;
   const fetched = await target.source.fetchSince(
     cursor,
@@ -95,6 +97,9 @@ export async function reconcileInboundMailbox(
     },
     ...(deps.signal ? [{ signal: deps.signal }] : []),
   );
+  // A cancelled empty walk or final ingestion has no next message at which
+  // to observe cancellation. Do not publish a successful cursor/health round.
+  throwIfAborted(deps.signal);
   await deps.saveCursor(
     target.mailboxId,
     fetched.nextCursor,
@@ -114,6 +119,16 @@ export type InboundHealthOptions = {
   workflowName: string;
   failureError: string;
   retryDelayMs?: number;
+  retry?: {
+    notBefore: (db: AppDatabase) => Promise<Date | null>;
+    deferredError: (deadline: Date) => Error;
+    recordFailure: (
+      db: AppDatabase,
+      error: unknown,
+      now: Date,
+      policyDelayMs: number,
+    ) => Promise<Date>;
+  };
 };
 
 /**
@@ -149,20 +164,37 @@ export function defaultInboundNaming(
  * Serializes inbound rounds for one mailbox and keeps a single health event
  * per mailbox up to date, so an operator (and the send gate) can see that
  * inbound reconciliation is failing without scanning history.
+ * The round must use its supplied database for I/O and nested action locks;
+ * all pool sessions may be reserved by concurrent mailbox rounds.
  */
 export async function withInboundReconciliationHealth<T>(
   db: AppDatabase,
   mailboxId: string,
   options: InboundHealthOptions,
-  run: () => Promise<T>,
+  run: (roundDb: AppDatabase) => Promise<T>,
 ): Promise<T> {
-  return withActionLocks(db, [options.lockKey], async () => {
+  return withActionLocks(db, [options.lockKey], async (roundDb) => {
     const startedAt = new Date();
     const key = options.healthKey;
     await withActionLocks(
-      db,
+      roundDb,
       [actionLockKey.mailbox(mailboxId)],
       async (lockedDb) => {
+        if (options.retry) {
+          const [health] = await lockedDb
+            .select()
+            .from(workflowEvents)
+            .where(eq(workflowEvents.idempotencyKey, key))
+            .limit(1);
+          const providerDeadline = await options.retry.notBefore(lockedDb);
+          const deadline = Math.max(
+            health?.scheduledAt?.getTime() ?? 0,
+            providerDeadline?.getTime() ?? 0,
+          );
+          if (deadline > startedAt.getTime()) {
+            throw options.retry.deferredError(new Date(deadline));
+          }
+        }
         await lockedDb
           .insert(workflowEvents)
           .values({
@@ -188,10 +220,10 @@ export async function withInboundReconciliationHealth<T>(
       },
     );
     try {
-      const result = await run();
+      const result = await run(roundDb);
       const completedAt = new Date();
       await withActionLocks(
-        db,
+        roundDb,
         [actionLockKey.mailbox(mailboxId)],
         (lockedDb) =>
           lockedDb
@@ -208,20 +240,28 @@ export async function withInboundReconciliationHealth<T>(
     } catch (error) {
       const failedAt = new Date();
       await withActionLocks(
-        db,
+        roundDb,
         [actionLockKey.mailbox(mailboxId)],
-        (lockedDb) =>
-          lockedDb
+        async (lockedDb) => {
+          const policyDelayMs = options.retryDelayMs ?? 60_000;
+          const scheduledAt = options.retry
+            ? await options.retry.recordFailure(
+                lockedDb,
+                error,
+                failedAt,
+                policyDelayMs,
+              )
+            : new Date(failedAt.getTime() + policyDelayMs);
+          await lockedDb
             .update(workflowEvents)
             .set({
               status: "failed",
-              scheduledAt: new Date(
-                failedAt.getTime() + (options.retryDelayMs ?? 60_000),
-              ),
+              scheduledAt,
               completedAt: failedAt,
               error: options.failureError,
             })
-            .where(eq(workflowEvents.idempotencyKey, key)),
+            .where(eq(workflowEvents.idempotencyKey, key));
+        },
       );
       throw error;
     }

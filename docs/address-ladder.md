@@ -109,6 +109,11 @@ the ordering and the choice of the next rung are scoped to the domain the dead
 message was sent at, so one employer's verdict never reorders another's addresses
 and a former employer's address is never offered as the next thing to try.
 
+The daily advance cap is counted per candidate mail domain over the preceding
+24 hours, despite the retained setting name
+`address_ladder_max_advances_per_account_per_day`; it does not follow a contact
+to their current account or combine that account's different mail domains.
+
 The verdict is **written down when it is reached, not recomputed on every read**.
 A live ratio falls: two deaths in four attempts demotes a convention, and four
 later attempts that reported nothing would put it back under the threshold and

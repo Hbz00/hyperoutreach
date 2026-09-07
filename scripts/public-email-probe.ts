@@ -38,6 +38,8 @@
  */
 import { config } from "dotenv";
 
+import { containsEmailToken, readPublicPage } from "./lib/public-page";
+
 import { getDatabase } from "@/lib/db/client-core";
 import { accounts, maintenanceState } from "@/lib/db/schema";
 import { createProductionAIProviderBundle } from "@/lib/ai/production-provider-bundle";
@@ -62,7 +64,7 @@ config({ path: ".env" });
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? undefined : process.argv[index + 1];
+  return index === -1 ? undefined : (process.argv[index + 1] ?? "");
 }
 
 /**
@@ -119,7 +121,8 @@ const VARIANTS = [
 
 type VariantKey = (typeof VARIANTS)[number]["key"];
 
-const requestedDomains = Number.parseInt(argument("domains") ?? "5", 10);
+const rawDomains = argument("domains") ?? "5";
+const requestedDomains = /^\d+$/.test(rawDomains) ? Number(rawDomains) : NaN;
 if (
   !Number.isInteger(requestedDomains) ||
   requestedDomains < 1 ||
@@ -205,48 +208,8 @@ async function pageContains(
   url: string,
   email: string,
 ): Promise<boolean | null> {
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      redirect: "follow",
-      headers: { "user-agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(45_000),
-    });
-  } catch {
-    return null;
-  }
-  if (!response.ok) return null;
-  const type = response.headers.get("content-type") ?? "";
-  let text: string;
-  if (type.includes("pdf") || url.toLowerCase().endsWith(".pdf")) {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const { writeFile, mkdtemp, rm } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const directory = await mkdtemp(join(tmpdir(), "probe-pdf-"));
-    const file = join(directory, "page.pdf");
-    try {
-      await writeFile(file, Buffer.from(await response.arrayBuffer()));
-      const { stdout } = await promisify(execFile)("pdftotext", [file, "-"], {
-        maxBuffer: 32 * 1024 * 1024,
-      });
-      text = stdout;
-    } catch {
-      return null;
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  } else {
-    try {
-      text = await response.text();
-    } catch {
-      // A body that dies mid-read is unreadable, not fabricated — and it must
-      // not take down a run whose live turns are already spent.
-      return null;
-    }
-  }
-  return text.toLowerCase().includes(email.toLowerCase());
+  const text = await readPublicPage(url);
+  return text === null ? null : containsEmailToken(text, email);
 }
 
 type DomainOutcome = {

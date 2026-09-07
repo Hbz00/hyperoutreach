@@ -95,20 +95,45 @@ describe("WorkflowEventsSendJournal", () => {
       await expect(journal.recordAttempt(messageKey)).resolves.toBe(true);
     });
 
-    it("leaves the attempt in place (releaseAttempt: false) so recordAttempt keeps refusing", async () => {
-      const journal = new WorkflowEventsSendJournal(db);
-      const messageKey = freshMessageKey();
+    it.each([
+      { kind: "single line", response: "550 5.1.1 No such user" },
+      {
+        kind: "multiline with final status beyond the diagnostic read limit",
+        // Each line fits SMTP's 512-octet limit, and every line repeats the
+        // same enhanced status (RFC 2034). Nodemailer preserves the prefixes.
+        response: [
+          ...Array.from({ length: 3 }, () => `550-5.1.1 ${"x".repeat(390)}`),
+          "550 5.1.1 No such user",
+        ].join("\n"),
+      },
+    ])(
+      "retains the attempt and hard-bounce status for a permanent $kind rejection",
+      async ({ response }) => {
+        const journal = new WorkflowEventsSendJournal(db);
+        const messageKey = freshMessageKey();
 
-      await expect(journal.recordAttempt(messageKey)).resolves.toBe(true);
-      await journal.recordRejection(messageKey, {
-        responseCode: 550,
-        response: "550 5.1.1 No such user",
-        releaseAttempt: false,
-      });
+        await expect(journal.recordAttempt(messageKey)).resolves.toBe(true);
+        await journal.recordRejection(messageKey, {
+          responseCode: 550,
+          response,
+          smtpErrorCode: "EENVELOPE",
+          releaseAttempt: false,
+        });
 
-      await expect(journal.hasAttempt(messageKey)).resolves.toBe(true);
-      await expect(journal.recordAttempt(messageKey)).resolves.toBe(false);
-    });
+        await expect(journal.hasAttempt(messageKey)).resolves.toBe(true);
+        await expect(journal.recordAttempt(messageKey)).resolves.toBe(false);
+        // Fresh journal reads must preserve the classification after a restart,
+        // without retaining server prose in the persisted diagnostic.
+        await expect(
+          new WorkflowEventsSendJournal(db).getPermanentRejection(messageKey),
+        ).resolves.toEqual({
+          responseCode: 550,
+          response: "SMTP 550 5.1.1",
+          smtpErrorCode: "EENVELOPE",
+          releaseAttempt: false,
+        });
+      },
+    );
 
     it("persists a permanent audit row for the rejection even when it releases the attempt", async () => {
       const journal = new WorkflowEventsSendJournal(db);
@@ -134,9 +159,13 @@ describe("WorkflowEventsSendJournal", () => {
       expect(match?.payload).toMatchObject({
         messageKey,
         responseCode: 451,
-        response: "451 4.7.1 Greylisted, try again later",
+        response: "SMTP 451 4.7.1",
         released: true,
       });
+      expect(match?.error).toBe("SMTP 451 4.7.1");
+      expect(JSON.stringify(match)).not.toContain(
+        "Greylisted, try again later",
+      );
       // Never a mutex: the partial unique index only applies to non-null
       // keys, so this row deliberately carries none.
       expect(match?.idempotencyKey).toBeNull();

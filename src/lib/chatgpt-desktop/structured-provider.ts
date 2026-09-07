@@ -151,11 +151,15 @@ function stripFence(answer: string): string {
  */
 function objectSlices(text: string): string[] {
   const slices: string[] = [];
+  let attemptedStarts = 0;
   for (
     let start = text.indexOf("{");
-    start !== -1 && slices.length < MAX_OBJECT_STARTS;
+    start !== -1 && attemptedStarts < MAX_OBJECT_STARTS;
     start = text.indexOf("{", start + 1)
   ) {
+    // Unclosed starts cost a full scan too. Counting only completed slices
+    // made a malformed answer containing many opening braces quadratic.
+    attemptedStarts += 1;
     let depth = 0;
     let inString = false;
     let escaped = false;

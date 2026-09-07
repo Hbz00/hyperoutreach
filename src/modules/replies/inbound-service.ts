@@ -773,14 +773,28 @@ export async function ingestInboundMessage(
           const remainingHolds = heldByInbound
             ? Math.max(0, current.inboundHoldCount - 1)
             : current.inboundHoldCount;
+          // Delayed delivery reports resume independently of the human-reply
+          // setting. Restore only this last hold, never a newer operator state.
           const restorePrevious =
             heldByInbound &&
             remainingHolds === 0 &&
             !outcome.terminal &&
-            !holdNonTerminal &&
+            outcome.state === null &&
+            (!holdNonTerminal || outcome.restoreSchedule === true) &&
             current.state === "manual_review" &&
             current.stopReason === null;
           const clearHold = heldByInbound && remainingHolds === 0;
+          const restoredProgression = {
+            state: current.inboundHoldPreviousState ?? ("waiting" as const),
+            nextActionAt: current.inboundHoldPreviousNextActionAt,
+            nextActionToken: current.inboundHoldPreviousNextActionToken,
+            ...(current.inboundHoldPreviousState === "completed"
+              ? {
+                  stopReason: "sequence_complete" as const,
+                  stoppedAt: current.lastMessageAt ?? now,
+                }
+              : {}),
+          };
           const update = isTerminalEnrollmentState(current.state)
             ? { lastReplyClassification: classification.category }
             : outcome.terminal
@@ -802,9 +816,7 @@ export async function ingestInboundMessage(
               : restorePrevious
                 ? {
                     lastReplyClassification: classification.category,
-                    state: current.inboundHoldPreviousState ?? "waiting",
-                    nextActionAt: current.inboundHoldPreviousNextActionAt,
-                    nextActionToken: current.inboundHoldPreviousNextActionToken,
+                    ...restoredProgression,
                     inboundHoldCount: 0,
                     inboundHoldAt: null,
                     inboundHoldPreviousState: null,
@@ -816,30 +828,6 @@ export async function ingestInboundMessage(
                     ...(outcome.state ? { state: outcome.state } : {}),
                     ...(outcome.clearSchedule
                       ? { nextActionAt: null, nextActionToken: null }
-                      : {}),
-                    /**
-                     * Put back what this message's own arrival took away.
-                     *
-                     * Every matched inbound holds its enrollment before it is
-                     * classified — state to `manual_review`, schedule
-                     * snapshotted and cleared — so an outcome meaning "this
-                     * changes nothing" has to say so out loud. Kept separate
-                     * from `restorePrevious` above, which answers a different
-                     * question (a non-terminal reply on a campaign that does
-                     * not hold them) and is gated on a setting that has no
-                     * business deciding what a delivery report means.
-                     *
-                     * Only when this hold is the last one: a second inbound
-                     * still pending owns the schedule until it is classified
-                     * too.
-                     */
-                    ...(outcome.restoreSchedule && remainingHolds === 0
-                      ? {
-                          state: current.inboundHoldPreviousState ?? "waiting",
-                          nextActionAt: current.inboundHoldPreviousNextActionAt,
-                          nextActionToken:
-                            current.inboundHoldPreviousNextActionToken,
-                        }
                       : {}),
                     ...(classification.category === "bounce" &&
                     input.bounceKind === "soft"
@@ -855,7 +843,16 @@ export async function ingestInboundMessage(
                                 inboundHoldPreviousNextActionAt: null,
                                 inboundHoldPreviousNextActionToken: null,
                               }
-                            : {}),
+                            : outcome.state === "manual_review"
+                              ? {
+                                  // Later pending reports must preserve this
+                                  // completed classification's required hold.
+                                  inboundHoldPreviousState:
+                                    "manual_review" as const,
+                                  inboundHoldPreviousNextActionAt: null,
+                                  inboundHoldPreviousNextActionToken: null,
+                                }
+                              : {}),
                         }
                       : {}),
                   };
@@ -1074,7 +1071,9 @@ export async function reconcilePendingInboundRecords(
           subject: metadata.subject,
           body: metadata.body,
           bounceKind:
-            metadata.bounceKind === "hard" || metadata.bounceKind === "soft"
+            metadata.bounceKind === "hard" ||
+            metadata.bounceKind === "soft" ||
+            metadata.bounceKind === "delayed"
               ? metadata.bounceKind
               : undefined,
           bouncedRecipient:

@@ -68,6 +68,13 @@ launches npm; a `PORT` value in `.env.local` is intentionally ignored for
 process binding. `LOCAL_MAINTENANCE_BASE_URL` can override the origin with an
 absolute HTTP(S) URL for a proxy or container topology.
 
+The local supervisor binds Next.js to `127.0.0.1` by default, including when
+`LOCAL_MAINTENANCE_ENABLED=false`. `APP_URL` does not control the listening
+interface. An explicit Next.js `--hostname`/`-H` option is preserved when a
+different binding is needed. The `dev:web`/`start:web` commands and the Trigger
+deployment path retain Next.js defaults; their deployment must set the intended
+interface and perimeter explicitly.
+
 While local maintenance is enabled, pass the Next port through `PORT=4100 npm
 run dev`, not `npm run dev -- --port 4100` or `-p`: the supervisor rejects
 Next.js CLI port flags so the server and worker cannot silently select different
@@ -119,15 +126,20 @@ from one that is dead. Both read the same resolver and the same sanitized
 failure text; neither exposes the lease owner token. The six states are:
 
 - **Not started** — no cycle has ever been recorded;
-- **Running** — a cycle owns the lease and its heartbeat is current;
-- **Stalled** — an owner remains but its heartbeat is stale;
+- **Running** — a cycle owns the lease, its heartbeat is current, and its age is
+  within the sum of the stage deadlines plus one maintenance interval;
+- **Stalled** — an owner remains but its heartbeat is stale or its cycle has
+  exceeded that age ceiling;
 - **Failed** — the latest failure is newer than the latest success;
 - **Overdue** — no cycle is active and the last success is outside the expected
   window;
 - **Healthy** — no cycle is active and the last success is recent.
 
 `Running` is distinct from `Overdue`: a normal long AI cycle remains running
-while its heartbeat is current. The no-owner overdue window is the greater of
+while its heartbeat is current and it remains within the cycle-age ceiling.
+A deadline requests cancellation; ownership and heartbeats remain until the
+underlying work settles. A stalled cycle can therefore still have work in flight.
+The no-owner overdue window is the greater of
 `AI_RESEARCH_TIMEOUT_MS + 60 seconds` and three maintenance intervals (eleven
 minutes with the default 600-second research deadline). Settings also shows the automation
 provider/mode, active-cycle timestamps when applicable, the last success, and a
@@ -135,9 +147,10 @@ sanitized historical failure without exposing the lease token or credentials.
 
 `config/maintenance.json` carries the cycle's timings. `intervalMs`,
 `heartbeatIntervalMs`, `staleLeaseMs`, `aggregateBudgetMs`, `transportMarginMs`
-and the two shutdown grace values are read at runtime. `stageMaximumsMs` is
-not: it records how `aggregateBudgetMs` was derived from the four stages, and
-changing it alone changes nothing.
+and the two shutdown grace values are read at runtime. `stageMaximumsMs` sets the
+four runtime stage deadlines and contributes to the stalled-cycle age ceiling.
+Keep these values coordinated with the aggregate budget, Trigger task duration,
+and worker shutdown grace when changing them.
 
 For Trigger.dev Cloud, create a project, set `WORKFLOW_PROVIDER=trigger`,
 `TRIGGER_PROJECT_REF`, and the server-only `TRIGGER_SECRET_KEY`, then run:

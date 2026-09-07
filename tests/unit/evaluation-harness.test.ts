@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -294,16 +294,20 @@ describe("deterministic evaluation harness", () => {
 
   it("loads a fixture file and exposes a failing exit contract", async () => {
     const directory = await mkdtemp(join(tmpdir(), "hyperoutreach-eval-"));
-    const fixture = passingFixture();
-    fixture.thresholds.emailAccuracy = 0.75;
-    const fixturePath = join(directory, "fixture.json");
-    await writeFile(fixturePath, JSON.stringify(fixture), "utf8");
+    try {
+      const fixture = passingFixture();
+      fixture.thresholds.emailAccuracy = 0.75;
+      const fixturePath = join(directory, "fixture.json");
+      await writeFile(fixturePath, JSON.stringify(fixture), "utf8");
 
-    const execution = await runEvaluationFile(fixturePath);
+      const execution = await runEvaluationFile(fixturePath);
 
-    expect(execution.exitCode).toBe(1);
-    expect(execution.output).toContain("emailAccuracy");
-    expect(execution.report.fixtureVersion).toBe("v1");
+      expect(execution.exitCode).toBe(1);
+      expect(execution.output).toContain("emailAccuracy");
+      expect(execution.report.fixtureVersion).toBe("v1");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("scores frozen structured reply output including hard-bounce outcomes", async () => {

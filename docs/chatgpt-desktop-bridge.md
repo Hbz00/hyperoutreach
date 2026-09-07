@@ -65,9 +65,26 @@ without the switch cannot be attached to; the bridge reports that rather than
 guessing. Override the port with `--port` or `CHATGPT_DESKTOP_CDP_PORT`.
 
 Because the bridge drives a real interface, a ChatGPT desktop update can rename
-a hook. Every one of them lives in `SELECTORS` in `chat-surface.ts`, and
+a hook or change how a control works. The supported hooks and selection logic
+live in `chat-surface.ts`, and
 `npm run chatgpt:doctor` checks them in order and names the first that no longer
 holds.
+
+The bridge supports the observed historical menu and the newer model list/Power
+slider. It checks visible, usable controls and verifies each explicitly requested model
+and effort. Hidden stale controls cannot certify these settings; ambiguity in a
+requested setting is refused before submission. Pointer actions scroll their target into view and refuse inactive, covered or
+unreachable controls. A text draft
+left in the composer after New chat is also refused before the bridge types its
+prompt. These checks protect against silent misconfiguration, but do not promise
+compatibility with an arbitrary future layout or cover every form of attachment.
+
+After an application update, run the doctor and a harmless temporary-chat request
+using each configured lane before resuming outreach. The local Chromium/CDP cases
+in `tests/integration/chatgpt-desktop-surface.test.ts` cover supported controls,
+stale/hidden elements, ambiguity and refusal/recovery. Real-app probes remain
+necessary to confirm a new application's actual layout; a passing DOM fixture
+alone does not certify that release.
 
 Two failures are deliberately loud rather than silent, because degrading
 quietly would break a guarantee the caller asked for:

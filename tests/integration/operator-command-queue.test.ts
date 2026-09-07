@@ -99,11 +99,10 @@ describe("operator command queue", () => {
    * The pass is bounded by its caller, and the boundary is between commands.
    *
    * The maintenance cycle races this stage against a deadline: when the timer
-   * wins, the cycle records a failure and hands its lease back while the pass
-   * keeps claiming. Without the signal the next cycle and the abandoned one
-   * drain the same queue side by side — no row runs twice, the claim sees to
-   * that, but the tick that reported failure is still spending the operator's
-   * ChatGPT window.
+   * wins, the cycle records a failure and retains its lease until the active
+   * work settles. The signal lets the pass finish its current command without
+   * claiming another one, so a tick that reported failure stops spending the
+   * operator's ChatGPT window and can release the lease promptly.
    */
   it("claims nothing once the caller's deadline has already passed", async () => {
     const queued = await queueResearch();
@@ -509,6 +508,99 @@ describe("operator command queue", () => {
       // forever.
       attempt: 2,
     });
+  });
+
+  it("abandons an expired claim at its attempt limit without running or incrementing it", async () => {
+    const queued = await queueResearch();
+    await db
+      .update(schema.operatorCommands)
+      .set({
+        status: "running",
+        claimId: "dead-final-attempt",
+        claimedAt: later(-60 * 60_000),
+        attempt: 2,
+        maxAttempts: 2,
+      })
+      .where(eq(schema.operatorCommands.id, queued.id));
+    const execute = vi.fn(async () => ({ ok: true }));
+    const drained = await drainOperatorCommands(db, execute, { now: NOW });
+    expect(execute).not.toHaveBeenCalled();
+    expect(drained).toMatchObject([
+      { id: queued.id, status: "abandoned", attempt: 2 },
+    ]);
+    expect(await readCommand(queued.id)).toMatchObject({
+      status: "abandoned",
+      attempt: 2,
+      claimId: null,
+      claimedAt: null,
+      nextAttemptAt: null,
+      completedAt: NOW,
+    });
+    expect(
+      await drainOperatorCommands(db, execute, {
+        now: later(24 * 60 * 60_000),
+      }),
+    ).toEqual([]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("continues healthy work behind an exhausted claim without concurrent drains reviving it", async () => {
+    const exhausted = await queueResearch();
+    await db
+      .update(schema.operatorCommands)
+      .set({
+        status: "running",
+        claimId: "dead-final-attempt",
+        claimedAt: later(-60 * 60_000),
+        createdAt: later(-120 * 60_000),
+        attempt: 4,
+        maxAttempts: 4,
+      })
+      .where(eq(schema.operatorCommands.id, exhausted.id));
+    const healthy = await queueResearch();
+    const execute = vi.fn(async () => ({ ok: true }));
+    const results = (
+      await Promise.all([
+        drainOperatorCommands(db, execute, { now: NOW, limit: 1 }),
+        drainOperatorCommands(db, execute, { now: NOW, limit: 1 }),
+      ])
+    ).flat();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(2);
+    expect(await readCommand(exhausted.id)).toMatchObject({
+      status: "abandoned",
+      attempt: 4,
+      claimId: null,
+    });
+    expect(await readCommand(healthy.id)).toMatchObject({
+      status: "succeeded",
+      attempt: 1,
+      claimId: null,
+    });
+  });
+
+  it("bounds cleanup of a backlog of exhausted claims by the existing parking budget", async () => {
+    const ids: string[] = [];
+    for (let index = 0; index < 5; index += 1)
+      ids.push((await queueResearch()).id);
+    await db.update(schema.operatorCommands).set({
+      status: "running",
+      claimId: "dead-final-attempt",
+      claimedAt: later(-60 * 60_000),
+      attempt: 1,
+      maxAttempts: 1,
+    });
+    const execute = vi.fn(async () => ({ ok: true }));
+    const drained = await drainOperatorCommands(db, execute, {
+      now: NOW,
+      limit: 1,
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(drained).toHaveLength(2);
+    const rows = await Promise.all(ids.map(readCommand));
+    expect(rows.filter((row) => row.status === "abandoned")).toHaveLength(2);
+    expect(rows.filter((row) => row.status === "running")).toHaveLength(3);
+    expect(rows.every((row) => row.attempt === 1)).toBe(true);
   });
 
   it("leaves a live claim alone", async () => {

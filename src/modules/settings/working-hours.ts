@@ -88,11 +88,11 @@ const SEARCH_HORIZON_MS = 8 * 24 * 60 * MINUTE_MS;
  *
  * The search jumps rather than steps: to the start of the window when today is
  * a working day that has not opened yet, otherwise to the next local midnight.
- * Each jump re-derives the local position from the resulting instant, so a
- * daylight saving shift is absorbed by the next iteration instead of skewing
- * the answer. The result is verified against the same predicate the send policy
- * uses before it is returned — a search that cannot prove its own answer
- * returns nothing rather than a plausible wrong instant.
+ * If a jump crosses a clock change, its actual local position differs from
+ * the expected one. Only that interval is scanned minute by minute: the jump
+ * could otherwise skip a short opening, including a repeated autumn hour.
+ * Ordinary days retain the fast jumps. Every result is verified against the
+ * same predicate the send policy uses.
  *
  * `null` is a real answer, not a failure: an operator whose calendar has no
  * working days has no next slot, and promising one would be a lie.
@@ -120,6 +120,26 @@ export function nextWorkingInstant(
       ? settings.workingStartMinute - position.minute
       : 24 * 60 - position.minute;
     const candidate = new Date(cursor.getTime() + jumpMinutes * MINUTE_MS);
+    const candidatePosition = localWorkingPosition(candidate, settings);
+    if (!candidatePosition) return null;
+    const expectedPosition =
+      (position.day * 1_440 + position.minute + jumpMinutes) % (7 * 1_440);
+    if (
+      candidatePosition.day * 1_440 + candidatePosition.minute !==
+      expectedPosition
+    ) {
+      // A jump is at most one day, so even a timezone transition is bounded.
+      // Check the elapsed interval in order before accepting its endpoint.
+      const scanEnd = Math.min(candidate.getTime(), horizon);
+      for (
+        let instant = cursor.getTime() + MINUTE_MS;
+        instant <= scanEnd;
+        instant += MINUTE_MS
+      ) {
+        const scanned = new Date(instant);
+        if (isWithinWorkingHours(scanned, settings)) return scanned;
+      }
+    }
     if (isWithinWorkingHours(candidate, settings)) {
       return candidate.getTime() > horizon ? null : candidate;
     }

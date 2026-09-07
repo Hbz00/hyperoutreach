@@ -30,6 +30,7 @@ import {
   workflowEvents,
 } from "@/lib/db/schema";
 import type { AppDatabase } from "@/lib/db/types";
+import { summarizeSmtpDiagnostic } from "@/lib/smtp-imap/diagnostic";
 import type {
   MailProvider,
   MailProviderKind,
@@ -128,10 +129,9 @@ function describeProviderError(error: unknown): string | undefined {
     responseCode?: unknown;
     response?: unknown;
   };
-  if (typeof withCode.responseCode !== "number") return undefined;
-  const detail =
-    typeof withCode.response === "string" ? withCode.response : error.message;
-  return `Mail provider failed after send attempt: SMTP ${withCode.responseCode} — ${detail}`;
+  const diagnostic = summarizeSmtpDiagnostic(withCode);
+  if (diagnostic.responseCode === null) return undefined;
+  return `Mail provider failed after send attempt: ${diagnostic.response}`;
 }
 
 /**
@@ -438,6 +438,26 @@ async function finalizeSent(
     const addressProvenDead = updated.addressDeadAt !== null;
     const preserveEnrollment =
       isTerminalEnrollmentState(enrollment.state) || addressProvenDead;
+    const progression = nextStep
+      ? {
+          state: "waiting" as const,
+          currentStep: nextStep.stepIndex,
+          nextActionAt: calculateNextActionAt(now, nextStep.delayMinutes),
+          nextActionToken: `followup_${randomUUID()}`,
+          stopReason: null,
+          stoppedAt: null,
+        }
+      : {
+          state: "completed" as const,
+          currentStep: updated.stepIndex ?? enrollment.currentStep,
+          nextActionAt: null,
+          nextActionToken: null,
+          stopReason: "sequence_complete" as const,
+          stoppedAt: now,
+        };
+    const inboundHeld = enrollment.inboundHoldCount > 0;
+    const preserveManualHold =
+      inboundHeld && enrollment.inboundHoldPreviousState === "manual_review";
     const enrollmentUpdate = preserveEnrollment
       ? {
           // Follow-up timing counts from the most recent attempt that was not
@@ -446,29 +466,33 @@ async function finalizeSent(
           workflowClaimId: null,
           workflowClaimedAt: null,
         }
-      : nextStep
-        ? {
-            state: "waiting" as const,
-            currentStep: nextStep.stepIndex,
-            nextActionAt: calculateNextActionAt(now, nextStep.delayMinutes),
-            nextActionToken: `followup_${randomUUID()}`,
-            lastMessageAt: now,
-            stopReason: null,
-            stoppedAt: null,
-            workflowClaimId: null,
-            workflowClaimedAt: null,
-          }
-        : {
-            state: "completed" as const,
-            currentStep: updated.stepIndex ?? enrollment.currentStep,
-            nextActionAt: null,
-            nextActionToken: null,
-            lastMessageAt: now,
-            stopReason: "sequence_complete" as const,
-            stoppedAt: now,
-            workflowClaimId: null,
-            workflowClaimedAt: null,
-          };
+      : {
+          ...progression,
+          lastMessageAt: now,
+          workflowClaimId: null,
+          workflowClaimedAt: null,
+          // Confirmation can arrive after an inbound capture committed but
+          // before classification finishes. Keep that hold active and replace
+          // its pre-send snapshot with the progression it should later resume,
+          // while preserving any already-required manual-review decision.
+          ...(inboundHeld
+            ? {
+                state: "manual_review" as const,
+                nextActionAt: null,
+                nextActionToken: null,
+                stopReason: null,
+                stoppedAt: null,
+                ...(preserveManualHold
+                  ? {}
+                  : {
+                      inboundHoldPreviousState: progression.state,
+                      inboundHoldPreviousNextActionAt: progression.nextActionAt,
+                      inboundHoldPreviousNextActionToken:
+                        progression.nextActionToken,
+                    }),
+              }
+            : {}),
+        };
     const [updatedEnrollment] = await tx
       .update(enrollments)
       .set(enrollmentUpdate)
@@ -500,23 +524,23 @@ async function finalizeSent(
             }
           : {},
       });
-      if (nextStep) {
-        await tx.insert(workflowEvents).values({
-          entityType: "enrollment",
-          entityId: enrollment.id,
-          event: "follow_up.scheduled",
-          workflowName: "follow_up_progression",
-          idempotencyKey: `followup:${enrollment.id}:${nextStep.stepIndex}:${updatedEnrollment.nextActionToken}`,
-          status: "scheduled",
-          scheduledAt: updatedEnrollment.nextActionAt,
-          payload: {
-            expectedStep: nextStep.stepIndex,
-            expectedVersionId: enrollment.campaignVersionId,
-            expectedDueAt: updatedEnrollment.nextActionAt?.toISOString(),
-            expectedToken: updatedEnrollment.nextActionToken,
-          },
-        });
-      }
+    }
+    if (!preserveEnrollment && !preserveManualHold && nextStep) {
+      await tx.insert(workflowEvents).values({
+        entityType: "enrollment",
+        entityId: enrollment.id,
+        event: "follow_up.scheduled",
+        workflowName: "follow_up_progression",
+        idempotencyKey: `followup:${enrollment.id}:${nextStep.stepIndex}:${progression.nextActionToken}`,
+        status: "scheduled",
+        scheduledAt: progression.nextActionAt,
+        payload: {
+          expectedStep: nextStep.stepIndex,
+          expectedVersionId: enrollment.campaignVersionId,
+          expectedDueAt: progression.nextActionAt?.toISOString(),
+          expectedToken: progression.nextActionToken,
+        },
+      });
     }
     if (current.sendAttemptToken) {
       await tx
@@ -648,7 +672,7 @@ async function markPermanentlyRejected(
       );
     }
   }
-  const reason = `SMTP ${rejection.responseCode}${rejection.response ? `: ${rejection.response}` : ""}`;
+  const reason = summarizeSmtpDiagnostic(rejection).response;
   await db.transaction(async (tx) => {
     await tx.execute(
       sql`select id from messages where id = ${messageId} for update`,
@@ -1553,18 +1577,15 @@ export async function sendApprovedMessage(
       }
 
       if (claimed.message.status === "delivery_uncertain") {
-        // A `"drafted"` reconciliation here is *positive proof*, not an
-        // absence of proof: for `smtp_imap` it means the local journal has
-        // no attempt/acceptance recorded for this outreach at all (the
-        // provider released it — see `SmtpRejectionDetails`); for
-        // `microsoft_graph` it means the server itself still shows the
-        // message sitting in Drafts. Either way the provider is telling us,
-        // right now, that nothing went out — unlike `null` (nothing found
-        // anywhere, could mean the provider just can't see it) or a thrown
-        // reconcile (unknown), which both stay uncertain untouched below.
-        // Release the claim so a fresh attempt can actually happen instead
-        // of being re-marked uncertain on every recovery tick forever.
-        if (reconciliation?.status === "drafted") {
+        // Graph may still expose isDraft:true after accepting POST /send:
+        // transport processing and the move to Sent happen asynchronously.
+        // Clearing its durable attempt here permits another POST while the
+        // first is already queued. Only the SMTP journal and deterministic
+        // mock can positively establish that a draft has no accepted attempt.
+        if (
+          reconciliation?.status === "drafted" &&
+          provider.kind !== "microsoft_graph"
+        ) {
           await db.transaction(async (tx) => {
             await tx.execute(
               sql`select id from messages where id = ${messageId} for update`,

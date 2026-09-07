@@ -42,10 +42,11 @@ config({ path: ".env" });
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? undefined : process.argv[index + 1];
+  return index === -1 ? undefined : (process.argv[index + 1] ?? "");
 }
 
-const requestedRuns = Number.parseInt(argument("runs") ?? "10", 10);
+const rawRuns = argument("runs") ?? "10";
+const requestedRuns = /^\d+$/.test(rawRuns) ? Number(rawRuns) : NaN;
 if (
   !Number.isInteger(requestedRuns) ||
   requestedRuns < 1 ||
@@ -157,3 +158,5 @@ process.stdout.write(
     "\nA contract rate below roughly nine in ten is the signal to move\n" +
     "personalization to the research lane and accept its latency.\n",
 );
+
+process.exitCode = provenanceFailures + otherFailures > 0 ? 1 : 0;

@@ -1593,13 +1593,14 @@ export async function advanceAddressLadder(
     minimumSends: settings.failureRateMinimumSends,
   });
   if (circuit.open) return refuse("circuit_open");
+  // Candidate domains retain the company an advance was made at. Joining the
+  // contact's current account would transfer spent allowance when they move.
   const [advancesToday] = await tx
     .select({ count: sql<number>`count(*)::int` })
     .from(emailCandidates)
-    .innerJoin(contacts, eq(contacts.id, emailCandidates.contactId))
     .where(
       and(
-        eq(contacts.accountId, contact.accountId),
+        eq(emailCandidates.domain, deadDomain),
         isNotNull(emailCandidates.advancedAt),
         gte(
           emailCandidates.advancedAt,
@@ -2023,18 +2024,17 @@ export async function readAddressLadderMetrics(
    */
   const advanceRows = await db
     .select({
-      accountId: contacts.accountId,
+      domain: emailCandidates.domain,
       advances: sql<number>`count(*)::int`,
     })
     .from(emailCandidates)
-    .innerJoin(contacts, eq(contacts.id, emailCandidates.contactId))
     .where(
       gte(
         emailCandidates.advancedAt,
         new Date(input.now.getTime() - 24 * 60 * 60_000),
       ),
     )
-    .groupBy(contacts.accountId);
+    .groupBy(emailCandidates.domain);
   /**
    * Addresses spent, per person per company, which is exactly what the ceiling
    * counts — an attempt that never reached the send transaction still proves

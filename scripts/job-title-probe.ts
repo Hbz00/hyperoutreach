@@ -93,6 +93,7 @@ const PLAN: Array<{ company: (typeof COMPANIES)[number]; arm: Arm }> = [
 ];
 
 const results: unknown[] = [];
+let failedRuns = 0;
 
 for (const [index, step] of PLAN.entries()) {
   if (index > 0) {
@@ -151,6 +152,7 @@ for (const [index, step] of PLAN.entries()) {
       );
     }
   } catch (error) {
+    failedRuns += 1;
     const message = error instanceof Error ? error.message : String(error);
     results.push({
       run: index + 1,
@@ -165,4 +167,4 @@ for (const [index, step] of PLAN.entries()) {
 }
 
 process.stdout.write(`\nwrote ${OUT}\n`);
-process.exit(0);
+process.exit(failedRuns > 0 ? 1 : 0);

@@ -863,6 +863,139 @@ describe("aggregate maintenance dispatch", () => {
     expect(order).toEqual(["inbound", "followups", "recovery"]);
   });
 
+  it.each([
+    ["inbound", "reconcile-inbound-mailboxes"],
+    ["followups", "reconcile-due-follow-ups"],
+    ["recovery", "recover-stale-work"],
+    ["commands", "drain-operator-commands"],
+  ] as const)(
+    "retains the lease after %s timeout until active work actually stops",
+    async (budget, stage) => {
+      const release = deferred();
+      const owner = `retained-${budget}`;
+      const blocked = stages({ [stage]: async () => release.promise });
+      const cycle = runMaintenanceCycle(
+        db,
+        blocked,
+        {},
+        {
+          createOwnerToken: () => owner,
+          heartbeatMs: 5,
+          stageBudgetsMs: { [budget]: 25 },
+        },
+      );
+      try {
+        await expect(cycle).rejects.toThrow("Maintenance cycle failed");
+        const failed = await projection();
+        expect(failed.ownerToken).toBe(owner);
+        expect(failed.lastFailedAt).not.toBeNull();
+        expect(failed.lastSucceededAt).toBeNull();
+        await expect(runMaintenanceCycle(db, stages(), {})).resolves.toEqual({
+          status: "busy",
+        });
+        await expect
+          .poll(async () => (await projection()).heartbeatAt!.getTime())
+          .toBeGreaterThan(failed.heartbeatAt!.getTime());
+      } finally {
+        if (budget === "recovery") release.reject(new Error("late failure"));
+        else release.resolve();
+        await cycle.catch(() => undefined);
+        await expect
+          .poll(async () => (await projection()).ownerToken)
+          .toBeNull();
+      }
+      const after = await projection();
+      expect(after.lastFailedAt).not.toBeNull();
+      expect(after.lastSucceededAt).toBeNull();
+      await expect(
+        runMaintenanceCycle(db, stages(), {}),
+      ).resolves.toMatchObject({
+        status: "succeeded",
+      });
+    },
+  );
+
+  it("fences late timed-out cleanup from a replacement owner's lease", async () => {
+    const releaseOld = deferred();
+    const releaseNew = deferred();
+    const newStarted = deferred();
+    const cleanupSettled = deferred();
+    const originalUpdate = db.update.bind(db);
+    const update = vi.spyOn(db, "update").mockImplementation((table) => {
+      const builder = originalUpdate(table);
+      const originalSet = builder.set.bind(builder);
+      builder.set = ((values: Record<string, unknown>) => {
+        const query = originalSet(values);
+        if (values.ownerToken === null && !("heartbeatAt" in values)) {
+          const originalThen = query.then.bind(query);
+          query.then = (onfulfilled, onrejected) =>
+            originalThen(
+              (value) => {
+                cleanupSettled.resolve();
+                return value;
+              },
+              (error) => {
+                cleanupSettled.reject(error);
+                throw error;
+              },
+            ).then(onfulfilled, onrejected);
+        }
+        return query;
+      }) as typeof builder.set;
+      return builder;
+    });
+    let replacement: ReturnType<typeof runMaintenanceCycle> | undefined;
+    try {
+      await expect(
+        runMaintenanceCycle(
+          db,
+          stages({
+            "reconcile-inbound-mailboxes": async () => releaseOld.promise,
+          }),
+          {},
+          {
+            createOwnerToken: () => "old-timeout-owner",
+            heartbeatMs: 60_000,
+            stageBudgetsMs: { inbound: 25 },
+          },
+        ),
+      ).rejects.toThrow("Maintenance cycle failed");
+      await db
+        .update(schema.maintenanceState)
+        .set({
+          heartbeatAt: new Date(0),
+        })
+        .where(eq(schema.maintenanceState.id, 1));
+      replacement = runMaintenanceCycle(
+        db,
+        stages({
+          "reconcile-inbound-mailboxes": async () => {
+            newStarted.resolve();
+            await releaseNew.promise;
+          },
+        }),
+        {},
+        {
+          createOwnerToken: () => "replacement-timeout-owner",
+          heartbeatMs: 60_000,
+        },
+      );
+      await newStarted.promise;
+      releaseOld.reject(new Error("late secret must not reach audit"));
+      await cleanupSettled.promise;
+      expect((await projection()).ownerToken).toBe("replacement-timeout-owner");
+      expect((await projection()).lastError).toBe(
+        "Maintenance inbound stage failed",
+      );
+    } finally {
+      releaseOld.resolve();
+      releaseNew.resolve();
+      await replacement;
+      update.mockRestore();
+    }
+    expect((await projection()).ownerToken).toBeNull();
+  });
+
   /**
    * A stage that never returns used to hold the lease forever.
    *
@@ -874,32 +1007,36 @@ describe("aggregate maintenance dispatch", () => {
    * so. `config/maintenance.json` had declared `stageMaximumsMs.inbound` since
    * the beginning; no code read it.
    */
-  it("ends a cycle whose stage outruns its budget instead of holding the lease", async () => {
+  it("reports an over-budget cycle immediately and releases ownership only after work stops", async () => {
+    const release = deferred();
     const hung = stages({
-      "reconcile-inbound-mailboxes": vi.fn(() => new Promise<never>(() => {})),
+      "reconcile-inbound-mailboxes": vi.fn(() => release.promise),
     });
 
-    await expect(
-      runMaintenanceCycle(
-        db,
-        hung,
-        { observedAt: "2026-08-14T10:42:00.000Z" },
-        {
-          clock: () => new Date("2026-08-14T10:42:00.000Z"),
-          createOwnerToken: () => "hung-owner",
-          heartbeatMs: 60_000,
-          leaseStaleMs: 120_000,
-          stageBudgetsMs: { inbound: 50 },
-        },
-      ),
-    ).rejects.toThrow("Maintenance cycle failed");
+    try {
+      await expect(
+        runMaintenanceCycle(
+          db,
+          hung,
+          { observedAt: "2026-08-14T10:42:00.000Z" },
+          {
+            clock: () => new Date("2026-08-14T10:42:00.000Z"),
+            createOwnerToken: () => "hung-owner",
+            heartbeatMs: 60_000,
+            leaseStaleMs: 120_000,
+            stageBudgetsMs: { inbound: 50 },
+          },
+        ),
+      ).rejects.toThrow("Maintenance cycle failed");
 
-    expect(hung["reconcile-due-follow-ups"]).not.toHaveBeenCalled();
-    const row = await projection();
-    // Released, so the very next tick can claim it rather than waiting on a
-    // heartbeat that will never stop.
-    expect(row.ownerToken).toBeNull();
-    expect(row.lastError).toBe("Maintenance inbound stage failed");
+      expect(hung["reconcile-due-follow-ups"]).not.toHaveBeenCalled();
+      const row = await projection();
+      expect(row.ownerToken).toBe("hung-owner");
+      expect(row.lastError).toBe("Maintenance inbound stage failed");
+    } finally {
+      release.resolve();
+      await expect.poll(async () => (await projection()).ownerToken).toBeNull();
+    }
   });
 
   /**
@@ -912,42 +1049,47 @@ describe("aggregate maintenance dispatch", () => {
    */
   it("aborts the signal it handed the stage when the budget expires", async () => {
     let aborted = false;
+    const release = deferred();
     const hung = stages({
       "reconcile-inbound-mailboxes": vi.fn(
         (_payload: unknown, options?: { signal: AbortSignal }) => {
           options?.signal.addEventListener("abort", () => {
             aborted = true;
           });
-          return new Promise<never>(() => {});
+          return release.promise;
         },
       ),
     });
 
-    await expect(
-      runMaintenanceCycle(
-        db,
-        hung,
-        { observedAt: "2026-08-14T10:42:00.000Z" },
-        {
-          clock: () => new Date("2026-08-14T10:42:00.000Z"),
-          createOwnerToken: () => "signalled-owner",
-          heartbeatMs: 60_000,
-          leaseStaleMs: 120_000,
-          stageBudgetsMs: { inbound: 50 },
-        },
-      ),
-    ).rejects.toThrow("Maintenance cycle failed");
-    expect(aborted).toBe(true);
+    try {
+      await expect(
+        runMaintenanceCycle(
+          db,
+          hung,
+          { observedAt: "2026-08-14T10:42:00.000Z" },
+          {
+            clock: () => new Date("2026-08-14T10:42:00.000Z"),
+            createOwnerToken: () => "signalled-owner",
+            heartbeatMs: 60_000,
+            leaseStaleMs: 120_000,
+            stageBudgetsMs: { inbound: 50 },
+          },
+        ),
+      ).rejects.toThrow("Maintenance cycle failed");
+      expect(aborted).toBe(true);
+    } finally {
+      release.resolve();
+      await expect.poll(async () => (await projection()).ownerToken).toBeNull();
+    }
   });
 
   /**
    * The follow-up stage stops between prospects, on the real stage.
    *
    * It is the stage most likely to reach its deadline honestly — up to fifty
-   * due enrollments, a provider round trip each — and the cycle hands its lease
-   * back the moment that deadline fires. An abandoned loop would go on sending
-   * under a lease the next tick already owns, and the audit row would already
-   * say the cycle failed.
+   * due enrollments, a provider round trip each. After timeout the cycle keeps
+   * its lease while the active invocation settles; the loop must then stop
+   * instead of starting more work after its deadline.
    */
   it("stops the follow-up stage before the next prospect once the budget expires", async () => {
     await createDueEnrollment("followups");
@@ -974,8 +1116,9 @@ describe("aggregate maintenance dispatch", () => {
    *
    * Every lane it runs either originates a delivery or spends an AI turn, and
    * its last one completes the follow-ups the stage before it did not reach —
-   * the same sends, taken again under a lease that has already been handed
-   * back. The two lookups and the single pending inbound record are left to
+   * the same sends, taken within this cycle's retained lease. Deadline checks
+   * prevent starting those sends after budget expiry. The two lookups and the
+   * single pending inbound record are left to
    * run: one row apiece, and skipping them would only make the returned shape
    * lie about which lanes ran.
    */

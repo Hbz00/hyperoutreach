@@ -60,10 +60,10 @@ function parseArguments(argv: string[]): Options | null {
     };
     const nextInteger = (): number => {
       const raw = next();
-      const value = Number.parseInt(raw, 10);
+      const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
       // Without this, a typo becomes NaN and surfaces later as a bewildering
       // immediate timeout or an unreachable port.
-      if (!Number.isInteger(value) || value <= 0) {
+      if (!Number.isSafeInteger(value) || value <= 0) {
         throw new Error(`${argument} expects a positive integer, got "${raw}"`);
       }
       return value;
@@ -83,6 +83,8 @@ function parseArguments(argv: string[]): Options | null {
         break;
       case "--port":
         options.port = nextInteger();
+        if (options.port > 65_535)
+          throw new Error("--port must be at most 65535");
         break;
       case "--keep-history":
         options.temporary = false;

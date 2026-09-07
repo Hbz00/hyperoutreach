@@ -244,6 +244,17 @@ export default async function CampaignDetailPage({
           />
           <div className="form-grid">
             <label>
+              Language
+              <input
+                name="language"
+                defaultValue={
+                  typeof config.language === "string" ? config.language : ""
+                }
+                minLength={2}
+                maxLength={35}
+              />
+            </label>
+            <label>
               Daily cap
               <input
                 name="campaignDailyCap"

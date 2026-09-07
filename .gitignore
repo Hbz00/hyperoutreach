@@ -17,5 +17,11 @@ next-env.d.ts
 .superpowers/
 .claude/worktrees/
 
+# Private implementation plans, design drafts, and dated audit reports.
+/PLAN.md
+/SPEC.md
+/docs/superpowers/
+/docs/production-readiness-*.md
+
 # Local PostgreSQL data is stored in a named Docker volume.
 .gstack/

@@ -1,9 +1,11 @@
 import { desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import {
   afterAll,
   afterEach,
+  beforeAll,
   beforeEach,
   describe,
   expect,
@@ -51,6 +53,7 @@ vi.mock("@/modules/workflows/dispatcher-factory", () => ({
 const { testUrl } = resolveDatabaseUrls(process.env);
 const client = postgres(testUrl, { max: 4 });
 const db = drizzle(client, { schema });
+const previousEnvironment = { ...process.env };
 
 // Set before the route is imported: `getDatabase()` reads `DATABASE_URL` when
 // it first opens a connection.
@@ -60,6 +63,7 @@ process.env.OPERATOR_PASSWORD = "at-least-twelve-characters";
 process.env.SESSION_SECRET = "k".repeat(32);
 
 const { POST } = await import("@/app/api/operator/commands/[command]/route");
+const { getSqlClient } = await import("@/lib/db/client-core");
 const { createOperatorSession, OPERATOR_SESSION_COOKIE } =
   await import("@/lib/operator-auth");
 
@@ -103,7 +107,15 @@ function requestedCycles(): string[] {
 let previousProvider: string | undefined;
 let previousMaintenance: string | undefined;
 
-beforeEach(() => {
+beforeAll(async () => {
+  await client.unsafe("drop schema if exists public cascade");
+  await client.unsafe("drop schema if exists drizzle cascade");
+  await client.unsafe("create schema public");
+  await migrate(db, { migrationsFolder: "drizzle" });
+});
+
+beforeEach(async () => {
+  await db.delete(schema.operatorCommands);
   previousProvider = process.env.WORKFLOW_PROVIDER;
   previousMaintenance = process.env.LOCAL_MAINTENANCE_ENABLED;
   delete process.env.WORKFLOW_PROVIDER;
@@ -121,7 +133,31 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  await client.end({ timeout: 5 });
+  const routeClient = getSqlClient();
+  try {
+    await client.end({ timeout: 5 });
+  } finally {
+    try {
+      await routeClient.end({ timeout: 5 });
+    } finally {
+      const shared = globalThis as unknown as {
+        hyperoutreachPostgres?: typeof routeClient;
+      };
+      if (shared.hyperoutreachPostgres === routeClient) {
+        delete shared.hyperoutreachPostgres;
+      }
+      for (const key of [
+        "DATABASE_URL",
+        "OPERATOR_EMAIL",
+        "OPERATOR_PASSWORD",
+        "SESSION_SECRET",
+      ]) {
+        const prior = previousEnvironment[key];
+        if (prior === undefined) delete process.env[key];
+        else process.env[key] = prior;
+      }
+    }
+  }
 });
 
 describe("queued operator work asks for a maintenance pass", () => {

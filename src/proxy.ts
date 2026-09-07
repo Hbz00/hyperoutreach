@@ -37,6 +37,9 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/image|_next/static|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    // These body-consuming routes enforce their own session/CSRF or webhook
+    // validation. Bypass Next's proxy body clone: it truncates large streams
+    // without rejecting them and buffers before the route's deadline starts.
+    "/((?!api/operator/session(?:/|$)|api/operator/commands(?:/|$)|api/webhooks/microsoft(?:/|$)|_next/image|_next/static|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

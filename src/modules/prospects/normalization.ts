@@ -90,9 +90,26 @@ export function normalizeEmail(value: string): string {
     throw new Error("Invalid email");
   }
 
-  try {
-    return `${localPart}@${normalizeDomain(trimmed.slice(separator + 1))}`;
-  } catch {
+  // A mailbox domain is an exact identity. Company URL normalization would
+  // discard www, paths, or ports and silently select another address.
+  const rawDomain = trimmed.slice(separator + 1);
+  if (/[\\/?#:@%\u0000-\u0020\u007f]/.test(rawDomain)) {
     throw new Error("Invalid email");
   }
+  const domain = domainToASCII(rawDomain.toLowerCase());
+  const labels = domain.split(".");
+  if (
+    labels.length < 2 ||
+    domain.length > 253 ||
+    labels.some(
+      (label) =>
+        label.length === 0 ||
+        label.length > 63 ||
+        !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+    ) ||
+    localPart.length + 1 + domain.length > 254
+  ) {
+    throw new Error("Invalid email");
+  }
+  return `${localPart}@${domain}`;
 }

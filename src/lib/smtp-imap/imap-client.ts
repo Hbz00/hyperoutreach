@@ -269,6 +269,7 @@ export interface ImapPort {
   fetchRange(
     range: string,
     signal?: AbortSignal,
+    expectedUidValidity?: number,
   ): AsyncGenerator<ImapFetchedMessage[]>;
   /** Lowest UID among messages whose IMAP INTERNALDATE (server arrival time,
    * not the sender-controlled `Date:` header) is on or after `since` — IMAP
@@ -788,6 +789,7 @@ export class ImapClient implements ImapPort {
   async *fetchRange(
     range: string,
     signal?: AbortSignal,
+    expectedUidValidity?: number,
   ): AsyncGenerator<ImapFetchedMessage[]> {
     throwIfAborted(signal);
     const client = this.createConnection();
@@ -798,6 +800,11 @@ export class ImapClient implements ImapPort {
     } catch (error) {
       client.close();
       signal?.removeEventListener("abort", onAbort);
+      if (classifyImapAuthFailure(error)) {
+        throw new ImapAuthenticationError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
       throw error;
     }
     try {
@@ -806,6 +813,16 @@ export class ImapClient implements ImapPort {
         readOnly: true,
       });
       try {
+        // STATUS ran on another connection. Refuse UIDs from a recreated
+        // inbox before they can be paired with that earlier cursor epoch.
+        if (
+          expectedUidValidity !== undefined &&
+          (!client.mailbox ||
+            client.mailbox.uidValidity === undefined ||
+            Number(client.mailbox.uidValidity) !== expectedUidValidity)
+        ) {
+          throw new Error("Inbox UIDVALIDITY changed before IMAP FETCH");
+        }
         let page: ImapFetchedMessage[] = [];
         // Each row below is yielded from inside imapflow's own FETCH
         // response loop (node_modules/imapflow/lib/imap-flow.js `fetch()`):

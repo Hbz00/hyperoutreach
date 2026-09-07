@@ -1576,7 +1576,7 @@ describe("address attempt ladder", () => {
 
   it("keeps a demoted address on a contact whose message has already been written", async () => {
     await setLadderSettings({ addressLadderMaxAdvancesPerAccountPerDay: 10 });
-    const fixture = await ladderFixture({ extraContacts: 1 });
+    const fixture = await ladderFixture({ extraContacts: 2 });
     const colleague = fixture.colleagues[0]!;
     const enrollment = await enrollContact(db, {
       campaignId: fixture.campaign.id,
@@ -1598,19 +1598,28 @@ describe("address attempt ladder", () => {
     });
     if (!proposal.ok) throw new Error(proposal.message);
 
-    // Force the demotion of `first.last` at this company by hand: two distinct
-    // people, both proven dead, which is the rule's own floor.
+    // One other person is already proven dead; the live bounce below adds the
+    // second distinct person and reaches the demotion rule's own floor.
     await db
       .update(schema.emailCandidates)
       .set({ deadAt: new Date("2026-08-18T09:00:00.000Z") })
       .where(
         and(
-          eq(schema.emailCandidates.contactId, fixture.contact.id),
+          eq(schema.emailCandidates.contactId, fixture.colleagues[1]!.id),
           eq(schema.emailCandidates.pattern, "first.last"),
         ),
       );
     await hardBounce(fixture);
 
+    expect(
+      (
+        await readConventionOutcomes(db, {
+          domain: fixture.domain,
+          minimumPeople: 2,
+          failureSharePercent: 50,
+        })
+      ).find((row) => row.pattern === "first.last"),
+    ).toMatchObject({ demoted: true, peopleProvenDead: 2 });
     const after = await candidates(colleague.id);
     expect(
       after.find((row) => row.status === "accepted")?.normalizedEmail,
@@ -2031,28 +2040,75 @@ describe("address attempt ladder", () => {
       );
     });
 
-    it("refuses a hand-accepted address the suppression list blocks mid-write", async () => {
+    it("waits for a concurrent suppression to commit before accepting an address", async () => {
       await setLadderSettings({});
       const fixture = await ladderFixture({ send: false });
-      // The row exists and is not dead, so only the write's own condition can
-      // refuse it — which is the shape of the race: the suppression is written
-      // by a transaction that takes none of this path's locks.
+      // Pause the real suppression service inside its INSERT, after it owns
+      // the recipient action. Manual acceptance must wait for that transaction.
       const rows = await candidates(fixture.contact.id);
       const target = rows.find(
         (row) => row.normalizedEmail === fixture.rungTwo,
       );
       if (!target) throw new Error("fixture has no second rung");
-      await db.insert(schema.suppressionEntries).values({
-        scope: "email",
-        normalizedValue: fixture.rungTwo,
-        reason: "hard_bounce",
-      });
-
-      const refused = await acceptManualEmail(db, {
-        contactId: fixture.contact.id,
-        email: fixture.rungTwo,
-        actor: "operator",
-      });
+      const holder = postgres(testUrl, { max: 1 });
+      let suppressing: ReturnType<typeof addSuppression> | undefined;
+      let accepting: ReturnType<typeof acceptManualEmail> | undefined;
+      const waitForBlockedPid = async (blockingPid: number) => {
+        const deadline = Date.now() + 3_000;
+        while (Date.now() < deadline) {
+          const [blocked] = await client<{ pid: number }[]>`
+            select pid from pg_stat_activity
+            where datname = current_database()
+              and ${blockingPid} = any(pg_blocking_pids(pid))`;
+          if (blocked) return blocked.pid;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        throw new Error("Expected operation did not reach its database lock");
+      };
+      try {
+        await client.unsafe(`
+          create function manual_suppression_test_gate() returns trigger
+          language plpgsql as $$ begin
+            perform pg_advisory_xact_lock(hashtextextended('manual-suppression-test-gate', 0));
+            return new;
+          end $$;
+          create trigger manual_suppression_test_gate before insert on suppression_entries
+          for each row execute function manual_suppression_test_gate();
+        `);
+        await holder`select pg_advisory_lock(hashtextextended('manual-suppression-test-gate', 0))`;
+        const [session] = await holder<
+          { pid: number }[]
+        >`select pg_backend_pid() as pid`;
+        if (!session) throw new Error("Missing lock holder session");
+        suppressing = addSuppression(db, {
+          scope: "email",
+          value: fixture.rungTwo,
+          reason: "hard_bounce",
+          actor: "operator",
+        });
+        const suppressionPid = await waitForBlockedPid(session.pid);
+        accepting = acceptManualEmail(db, {
+          contactId: fixture.contact.id,
+          email: fixture.rungTwo,
+          actor: "operator",
+        });
+        await waitForBlockedPid(suppressionPid);
+        expect(
+          (await candidates(fixture.contact.id)).find(
+            (row) => row.status === "accepted",
+          )?.normalizedEmail,
+        ).toBe(fixture.rungOne);
+      } finally {
+        await holder`select pg_advisory_unlock_all()`;
+        await holder.end({ timeout: 5 });
+        await Promise.allSettled([suppressing, accepting]);
+        await client.unsafe(`
+          drop trigger if exists manual_suppression_test_gate on suppression_entries;
+          drop function if exists manual_suppression_test_gate();
+        `);
+      }
+      expect(await suppressing).toMatchObject({ ok: true });
+      const refused = await accepting;
       expect(refused).toMatchObject({ ok: false, code: "ADDRESS_SUPPRESSED" });
       const after = await candidates(fixture.contact.id);
       // Accepted-and-suppressed reads as resolved on the prospect list while
@@ -2060,6 +2116,9 @@ describe("address attempt ladder", () => {
       expect(after.find((row) => row.id === target.id)?.status).not.toBe(
         "accepted",
       );
+      expect(
+        after.find((row) => row.status === "accepted")?.normalizedEmail,
+      ).toBe(fixture.rungOne);
     });
 
     it("restores a convention an operator says the record misread, and only on their terms", async () => {

@@ -4,10 +4,9 @@ import maintenanceConfig from "../../../config/maintenance.json";
  * How long a cycle may legitimately be in flight.
  *
  * The sum of every stage's own deadline, plus one interval of slack for the
- * bookkeeping between them. Past this a cycle cannot still be working, because
- * each stage is bounded — so a fresh heartbeat past this point proves the
- * process is alive and the work is not, which are the two things a single
- * "running" state used to conflate.
+ * bookkeeping between them. Past this the cycle is stalled even if its process
+ * still heartbeats. Cancellation is cooperative: late work can remain in flight
+ * while the owner retains its lease, so heartbeat alone cannot prove progress.
  */
 export function getMaintenanceCycleCeilingMs(intervalMs: number): number {
   const stages = maintenanceConfig.stageMaximumsMs;

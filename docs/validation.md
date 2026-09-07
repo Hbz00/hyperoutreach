@@ -2,7 +2,21 @@
 
 [← Back to the README](../README.md)
 
-With PostgreSQL running and migrated:
+Start the local PostgreSQL and GreenMail dependencies with `npm run db:up`
+(Docker must already be running), then migrate the application database as
+described in [the database workflow](database.md). Integration tests rebuild the
+separate disposable `hyperoutreach_test` database by default; the database URL
+guards reject the application database and names without the `_test` suffix.
+The SMTP/IMAP suites require GreenMail on loopback ports 3993 and 3587; the
+controlled-recovery suite fails if it is absent, rather than skipping tests.
+
+The controlled-recovery fixture selects mock AI/mail/workflow providers and
+generates a temporary encryption keyring itself, including in its child
+processes. No provider or token-key exports from `.env.local` are required. Its
+database remains restricted to `localhost:55432`, and its real SMTP/IMAP
+connections are restricted to GreenMail and synthetic `.test` mailboxes.
+
+With those dependencies available:
 
 ```bash
 npm run format:check
