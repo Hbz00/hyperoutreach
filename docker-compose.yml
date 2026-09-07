@@ -34,7 +34,14 @@ services:
   # "starttls" -- is what `tests/integration/smtp-imap-round-trip.test.ts` must
   # configure.
   greenmail:
-    image: greenmail/standalone:2.1.6
+    # 2.1.7 fixes the IMAP busy-loop after a failed TLS read (upstream #891).
+    image: greenmail/standalone:2.1.7
+    profiles: ["test"]
+    cpus: 0.5
+    mem_limit: 512m
+    memswap_limit: 512m
+    environment:
+      JAVA_OPTS: "-Djava.net.preferIPv4Stack=true -Xms32m -Xmx256m"
     ports:
       - "127.0.0.1:3993:3993"
       - "127.0.0.1:3587:3465"
@@ -52,7 +59,7 @@ services:
           "-c",
           "exec 3<>/dev/tcp/127.0.0.1/3025; printf 'QUIT\\r\\n' >&3; exec 3>&-; exec 3<&-",
         ]
-      interval: 2s
+      interval: 10s
       timeout: 3s
       retries: 20
 

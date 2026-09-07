@@ -130,7 +130,9 @@ desktop app to drive.
 ```bash
 npm run format:check && npm run lint && npm run typecheck
 npm run test              # unit
+npm run test:mail:up       # start the local test mail server on demand
 npm run test:integration  # real PostgreSQL + TLS IMAP/SMTP round trip
+npm run test:mail:down     # stop it after testing, including failed test runs
 npm run test:e2e          # Playwright, production build, mock providers
 npm run eval              # versioned quality fixture with per-metric thresholds
 npm run build

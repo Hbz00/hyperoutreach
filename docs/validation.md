@@ -2,13 +2,23 @@
 
 [← Back to the README](../README.md)
 
-Start the local PostgreSQL and GreenMail dependencies with `npm run db:up`
+Start local PostgreSQL with `npm run db:up`
 (Docker must already be running), then migrate the application database as
 described in [the database workflow](database.md). Integration tests rebuild the
 separate disposable `hyperoutreach_test` database by default; the database URL
 guards reject the application database and names without the `_test` suffix.
-The SMTP/IMAP suites require GreenMail on loopback ports 3993 and 3587; the
+Start GreenMail with `npm run test:mail:up` before running integration tests.
+The SMTP/IMAP suites require it on loopback ports 3993 and 3587; the
 controlled-recovery suite fails if it is absent, rather than skipping tests.
+
+GreenMail belongs to the Compose `test` profile, so neither `db:up` nor a default
+`docker-compose up` starts it. Stop it after testing, including after a failed
+run, with `npm run test:mail:down`. This leaves PostgreSQL running. The fixture is
+limited to half a CPU and 512 MiB of memory, with no swap, to bound resource use.
+Version 2.1.7 fixes an IMAP error loop triggered by an interrupted TLS connection
+([upstream issue #891](https://github.com/greenmail-mail-test/greenmail/issues/891)).
+Readiness probes must still complete and close their protocol sessions; a bare
+TCP connect/disconnect on an implicit TLS port is not a health check.
 
 The controlled-recovery fixture selects mock AI/mail/workflow providers and
 generates a temporary encryption keyring itself, including in its child
@@ -24,6 +34,7 @@ npm run lint
 npm run typecheck
 npm run test
 npm run test:integration
+npm run test:mail:down
 npm run eval
 npm run build
 ```

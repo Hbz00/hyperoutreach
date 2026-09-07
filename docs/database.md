@@ -21,8 +21,13 @@ cannot succeed until the installed driver and application build are repaired.
 - `npm run db:generate` generates a migration after a schema change.
 - `npm run db:migrate` applies the repository-visible migration history.
 - `npm run db:check` validates migration-history consistency.
-- `npm run db:up` starts PostgreSQL and GreenMail and idempotently provisions the disposable
+- `npm run db:up` starts PostgreSQL and idempotently provisions the disposable
   `hyperoutreach_test` database, including when the Docker volume already exists.
+- `npm run test:mail:up` starts GreenMail for the SMTP/IMAP integration tests.
+  Stop it afterwards with `npm run test:mail:down`; normal application use does
+  not need this test server.
+- `npm run db:down` stops and removes both dependency containers, including
+  GreenMail if started; it preserves the PostgreSQL data volume.
 - `npm run db:seed:mock` idempotently creates the explicit local-demo mock
   mailbox; `db:seed` is only a compatibility alias.
 - `npm run test:integration` rebuilds the test database's `public` schema,

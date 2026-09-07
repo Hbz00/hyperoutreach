@@ -104,6 +104,7 @@ can produce a replacement message for approval; address death alone need not end
 the person's enrollment. Exhausted ladders and other terminal outcomes stop it.
 Ambiguous socket failures remain quarantined to prevent duplicate sends.
 
-For local verification, `npm run db:up` starts loopback-only GreenMail and
+For local verification, `npm run test:mail:up` starts loopback-only GreenMail and
 `npm run test:integration` executes the real TLS IMAP/SMTP round trip. The suite
-never uses production mailbox credentials.
+never uses production mailbox credentials. Stop the test server afterwards with
+`npm run test:mail:down`.
